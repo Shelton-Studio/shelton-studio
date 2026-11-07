@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🤖 Shelton - Orquestador Multi-Agente de Contenido</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="navbar-brand">
+            <div class="brand-logo">🤖</div>
+            <div class="brand-text">
+                <h1>Shelton</h1>
+                <p>Orquestador Multi-Agente</p>
+            </div>
+        </div>
+        <div class="navbar-status">
+            <span class="status-indicator online"></span>
+            <span class="status-text">Sistema activo</span>
+        </div>
+    </nav>
+
+    <!-- Main Grid Layout -->
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-section">
+                <h3 class="sidebar-title">NAVEGACIÓN</h3>
+                <nav class="sidebar-nav">
+                    <a href="#" class="nav-link active" onclick="showTab('create')">
+                        <span class="icon">✨</span>
+                        <span>Crear Contenido</span>
+                    </a>
+                    <a href="#" class="nav-link" onclick="showTab('dashboard')">
+                        <span class="icon">📊</span>
+                        <span>Dashboard</span>
+                    </a>
+                    <a href="#" class="nav-link" onclick="showTab('history')">
+                        <span class="icon">📚</span>
+                        <span>Historial</span>
+                    </a>
+                    <a href="#" class="nav-link" onclick="showTab('agents')">
+                        <span class="icon">🤖</span>
+                        <span>Agentes</span>
+                    </a>
+                </nav>
+            </div>
+
+            <div class="sidebar-section">
+                <h3 class="sidebar-title">AGENTES ACTIVOS</h3>
+                <div class="agents-list">
+                    <div class="agent-item">
+                        <span class="agent-icon">📝</span>
+                        <span class="agent-name">Copywriter</span>
+                        <span class="agent-status online">●</span>
+                    </div>
+                    <div class="agent-item">
+                        <span class="agent-icon">📊</span>
+                        <span class="agent-name">Strategist</span>
+                        <span class="agent-status online">●</span>
+                    </div>
+                    <div class="agent-item">
+                        <span class="agent-icon">🎨</span>
+                        <span class="agent-name">Generator</span>
+                        <span class="agent-status online">●</span>
+                    </div>
+                    <div class="agent-item">
+                        <span class="agent-icon">✏️</span>
+                        <span class="agent-name">Editor</span>
+                        <span class="agent-status online">●</span>
+                    </div>
+                    <div class="agent-item">
+                        <span class="agent-icon">✅</span>
+                        <span class="agent-name">QA Judge</span>
+                        <span class="agent-status online">●</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3 class="sidebar-title">ESTADÍSTICAS</h3>
+                <div class="stats-box">
+                    <div class="stat-row">
+                        <span>Contenido generado:</span>
+                        <strong id="statGenerated">0</strong>
+                    </div>
+                    <div class="stat-row">
+                        <span>Aprobados:</span>
+                        <strong id="statApproved">0</strong>
+                    </div>
+                    <div class="stat-row">
+                        <span>En proceso:</span>
+                        <strong id="statProcessing">0</strong>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- TAB: Create Content -->
+            <section class="tab-content active" id="tab-create">
+                <div class="content-header">
+                    <h1>Crear Contenido</h1>
+                    <p>Shelton orquestará múltiples agentes para generar contenido perfecto</p>
+                </div>
+
+                <div class="grid-2col">
+                    <!-- Input Panel -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h2>📝 Tu Visión</h2>
+                            <p>Describe qué quieres crear</p>
+                        </div>
+
+                        <form class="form-container" id="generateForm">
+                            <div class="form-group">
+                                <label for="prompt" class="form-label">
+                                    Descripción del contenido
+                                </label>
+                                <textarea
+                                    id="prompt"
+                                    class="form-input textarea-lg"
+                                    placeholder="Ej: Mujer joven cocinando pasta casera en cocina luminosa, luz natural de ventana, expresión concentrada pero relajada, estilo fotográfico lifestyle profesional"
+                                    rows="6"
+                                ></textarea>
+                                <p class="form-help">Cuanto más detallado, mejor será el resultado. Incluye: personas, actividades, iluminación, estilo.</p>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="location" class="form-label">Procesamiento</label>
+                                    <select id="location" class="form-input">
+                                        <option value="local">🏠 Local (Rápido)</option>
+                                        <option value="cloud">☁️ Cloud (Más potente)</option>
+                                    </select>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="quality" class="form-label">Calidad</label>
+                                    <select id="quality" class="form-input">
+                                        <option value="fast">⚡ Rápido (20s)</option>
+                                        <option value="balanced" selected>⚖️ Balanceado (40s)</option>
+                                        <option value="quality">🎨 Máxima (60s+)</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <button type="button" id="generateBtn" class="btn-primary btn-xl">
+                                <span class="btn-icon">✨</span>
+                                Generar con Shelton
+                            </button>
+                        </form>
+                    </div>
+
+                    <!-- Processing/Results Panel -->
+                    <div class="panel">
+                        <!-- Processing State -->
+                        <div id="processingState" style="display: none;">
+                            <div class="panel-header">
+                                <h2>⚙️ Orquestación en Progreso</h2>
+                            </div>
+
+                            <div class="processing-timeline">
+                                <div class="timeline-item" id="timeline-copywriter">
+                                    <div class="timeline-marker">📝</div>
+                                    <div class="timeline-content">
+                                        <div class="timeline-title">Copywriter Agent</div>
+                                        <div class="timeline-desc">Enriqueciendo tu descripción...</div>
+                                    </div>
+                                </div>
+
+                                <div class="timeline-item" id="timeline-strategist">
+                                    <div class="timeline-marker">📊</div>
+                                    <div class="timeline-content">
+                                        <div class="timeline-title">Strategist Agent</div>
+                                        <div class="timeline-desc">Definiendo estrategia...</div>
+                                    </div>
+                                </div>
+
+                                <div class="timeline-item" id="timeline-generator">
+                                    <div class="timeline-marker">🎨</div>
+                                    <div class="timeline-content">
+                                        <div class="timeline-title">Generator Agent</div>
+                                        <div class="timeline-desc">Creando imagen con Z-Image Turbo...</div>
+                                    </div>
+                                </div>
+
+                                <div class="timeline-item" id="timeline-editor">
+                                    <div class="timeline-marker">✏️</div>
+                                    <div class="timeline-content">
+                                        <div class="timeline-title">Editor Agent</div>
+                                        <div class="timeline-desc">Refinando con Qwen-Image-Edit...</div>
+                                    </div>
+                                </div>
+
+                                <div class="timeline-item" id="timeline-qa">
+                                    <div class="timeline-marker">✅</div>
+                                    <div class="timeline-content">
+                                        <div class="timeline-title">QA Judge Agent</div>
+                                        <div class="timeline-desc">Validando calidad...</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="progress-section">
+                                <div class="progress-bar-container">
+                                    <div class="progress-bar" id="progressBar"></div>
+                                </div>
+                                <p class="progress-text" id="statusText">Inicializando...</p>
+                            </div>
+                        </div>
+
+                        <!-- Results State -->
+                        <div id="resultsState" style="display: none;">
+                            <div class="panel-header">
+                                <h2>✨ Contenido Listo</h2>
+                            </div>
+
+                            <div class="results-image">
+                                <img id="generatedImage" src="" alt="Contenido generado" class="result-image">
+                            </div>
+
+                            <div class="approval-section">
+                                <h3>👤 Aprobación Humana</h3>
+                                <p>¿Apruebas este contenido?</p>
+                                <div class="approval-buttons">
+                                    <button class="btn-success" id="approveBtn">
+                                        <span>✓</span> Aprobar
+                                    </button>
+                                    <button class="btn-secondary" id="rejectBtn">
+                                        <span>↻</span> Regenerar
+                                    </button>
+                                </div>
+                                <p id="approvalMessage" class="approval-msg" style="display: none;"></p>
+                            </div>
+                        </div>
+
+                        <!-- Empty State -->
+                        <div id="emptyState" class="empty-state">
+                            <div class="empty-icon">🎬</div>
+                            <p>Describe tu contenido y pulsa "Generar"</p>
+                            <p class="empty-subtext">Shelton coordinará a todos los agentes</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Details Panel -->
+                <div id="detailsPanel" class="panel-full" style="display: none;">
+                    <div class="panel-header">
+                        <h2>📋 Detalles de Orquestación</h2>
+                    </div>
+
+                    <div class="details-grid">
+                        <div class="detail-card">
+                            <h3>📝 Prompt Original</h3>
+                            <p id="originalPrompt"></p>
+                        </div>
+
+                        <div class="detail-card">
+                            <h3>✍️ Prompt Enriquecido</h3>
+                            <p id="enrichedPrompt"></p>
+                        </div>
+
+                        <div class="detail-card">
+                            <h3>📊 Estrategia</h3>
+                            <div id="metadata"></div>
+                        </div>
+
+                        <div class="detail-card">
+                            <h3>✅ Control de Calidad</h3>
+                            <div id="qaResult"></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB: Dashboard -->
+            <section class="tab-content" id="tab-dashboard">
+                <div class="content-header">
+                    <h1>Dashboard</h1>
+                    <p>Estado del sistema y estadísticas</p>
+                </div>
+
+                <div class="grid-3col">
+                    <div class="stat-card">
+                        <div class="stat-value" id="dashTotal">0</div>
+                        <div class="stat-label">Total Generado</div>
+                        <div class="stat-icon">🎨</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="dashApproved">0</div>
+                        <div class="stat-label">Aprobados</div>
+                        <div class="stat-icon">✅</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="dashPending">0</div>
+                        <div class="stat-label">Pendientes</div>
+                        <div class="stat-icon">⏳</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB: History -->
+            <section class="tab-content" id="tab-history">
+                <div class="content-header">
+                    <h1>Historial de Contenido</h1>
+                    <p>Todo el contenido generado por Shelton</p>
+                </div>
+
+                <div id="historyGrid" class="history-grid"></div>
+                <div id="emptyHistory" class="empty-state">
+                    <div class="empty-icon">📚</div>
+                    <p>No hay contenido aún</p>
+                </div>
+            </section>
+
+            <!-- TAB: Agents Info -->
+            <section class="tab-content" id="tab-agents">
+                <div class="content-header">
+                    <h1>Sistema Multi-Agente</h1>
+                    <p>Shelton orquesta 5 agentes especializados</p>
+                </div>
+
+                <div class="agents-grid">
+                    <div class="agent-card">
+                        <div class="agent-header">📝 Copywriter</div>
+                        <p>Enriquece tu descripción con detalles técnicos de fotografía</p>
+                        <ul class="agent-features">
+                            <li>Detalla iluminación</li>
+                            <li>Especifica estilo fotográfico</li>
+                            <li>Añade texturas</li>
+                        </ul>
+                    </div>
+
+                    <div class="agent-card">
+                        <div class="agent-header">📊 Strategist</div>
+                        <p>Define la estrategia visual y plataforma</p>
+                        <ul class="agent-features">
+                            <li>Determina estilo</li>
+                            <li>Selecciona plataforma</li>
+                            <li>Aspect ratio óptimo</li>
+                        </ul>
+                    </div>
+
+                    <div class="agent-card">
+                        <div class="agent-header">🎨 Generator</div>
+                        <p>Crea la imagen con Z-Image Turbo</p>
+                        <ul class="agent-features">
+                            <li>Generación realista</li>
+                            <li>8 pasos optimizados</li>
+                            <li>Máxima calidad</li>
+                        </ul>
+                    </div>
+
+                    <div class="agent-card">
+                        <div class="agent-header">✏️ Editor</div>
+                        <p>Refina la imagen con Qwen-Image-Edit</p>
+                        <ul class="agent-features">
+                            <li>Ajusta iluminación</li>
+                            <li>Mejora detalles</li>
+                            <li>Mantiene coherencia</li>
+                        </ul>
+                    </div>
+
+                    <div class="agent-card">
+                        <div class="agent-header">✅ QA Judge</div>
+                        <p>Valida la calidad del resultado</p>
+                        <ul class="agent-features">
+                            <li>Detecta artefactos</li>
+                            <li>Verifica coherencia</li>
+                            <li>Asegura calidad</li>
+                        </ul>
+                    </div>
+
+                    <div class="agent-card">
+                        <div class="agent-header">🤖 Shelton</div>
+                        <p>Orquestador central del flujo</p>
+                        <ul class="agent-features">
+                            <li>Coordina agentes</li>
+                            <li>Gestiona base de datos</li>
+                            <li>Supervisa todo</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast" class="toast"></div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
