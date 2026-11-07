@@ -1,7 +1,6 @@
 """Formatos de cada red social: tamaño final de publicación y tamaño de generación."""
 from dataclasses import dataclass
 
-from app.config import settings
 
 
 @dataclass(frozen=True)
@@ -52,9 +51,8 @@ def get_platform(key: str | None) -> Platform:
 
 
 def generation_size(aspect: str) -> tuple[int, int]:
-    w, h = _GEN_SIZES.get(aspect, _GEN_SIZES["1:1"])
-    s = settings.GEN_SCALE
-    return int(w * s) // 16 * 16, int(h * s) // 16 * 16
+    """Tamaño nativo; cada motor lo escala según su GPU (gen_scale)."""
+    return _GEN_SIZES.get(aspect, _GEN_SIZES["1:1"])
 
 
 def platform_list() -> list[dict]:

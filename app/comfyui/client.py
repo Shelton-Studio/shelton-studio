@@ -23,11 +23,22 @@ class ComfyUIError(RuntimeError):
 def load_workflow(name: str) -> dict:
     p = Path(name)
     if not p.is_absolute():
-        p = WORKFLOW_DIR / name
+        # Primero los que subiste desde la web (data/workflows), luego los incluidos.
+        p = user_workflow_dir() / name if (user_workflow_dir() / name).exists() else WORKFLOW_DIR / name
     if not p.exists():
         raise ComfyUIError(f"No existe la plantilla de workflow: {p}")
     data = json.loads(p.read_text(encoding="utf-8"))
     return {k: v for k, v in data.items() if not k.startswith("_")}  # quita comentarios "_doc"
+
+
+def user_workflow_dir() -> Path:
+    d = settings.DATA_DIR / "workflows"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def placeholders(workflow: dict) -> set[str]:
+    return set(_PLACEHOLDER.findall(json.dumps(workflow)))
 
 
 def fill_workflow(workflow: dict, values: dict[str, Any]) -> dict:

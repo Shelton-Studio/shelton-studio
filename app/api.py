@@ -1,0 +1,493 @@
+"""API del panel: métricas, agentes, tareas, aprobaciones, conexiones, flujos, motores, scout y marca blanca."""
+import json
+import re
+import uuid
+from datetime import timedelta
+from pathlib import Path
+
+from fastapi import APIRouter, File, HTTPException, UploadFile
+from pydantic import BaseModel
+from sqlalchemy import func
+
+from app import events, pipeline, publishers
+from app.agents import registry
+from app.comfyui.client import WORKFLOW_DIR, placeholders, user_workflow_dir
+from app.config import settings
+from app.connections import ENGINE_ROLES, TYPES, merge_config, public
+from app.db import AgentRun, Approval, Connection, Finding, Job, Post, get_or_create_brand, now, session
+from app.engines import PRESET_INFO, VIDEO_INFO, engine_choices, reset_cache
+from app.media import save_bytes, url_for
+
+router = APIRouter(prefix="/api")
+
+# Precio por millón de tokens (entrada, salida) para estimar costos.
+PRICES = {"claude-opus-5-5": (4, 20), "claude-sonnet-5-5": (2, 10), "claude-haiku-5-5": (0.1, 0.5),
+          "claude-fable-5-1": (10, 50), "claude-opus-5": (5, 25), "claude-opus-4-8": (5, 25)}
+
+
+def _cost(model: str, tin: int, tout: int) -> float:
+    pin, pout = PRICES.get(model, (4, 20))
+    return (tin * pin + tout * pout) / 1_000_000
+
+
+# ------------------------------------------------------------------ Métricas
+@router.get("/metrics")
+async def metrics(days: int = 7):
+    days = max(1, min(days, 365))
+    end = now()
+    start = end.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days - 1)
+    prev = start - timedelta(days=days)
+    with session() as s:
+        def run_stats(a, b):
+            q = s.query(AgentRun).filter(AgentRun.created_at >= a, AgentRun.created_at < b)
+            ok = q.filter(AgentRun.ok.is_(True)).count()
+            failed = q.filter(AgentRun.ok.is_(False)).count()
+            tokens = cost = 0
+            for model, tin, tout in q.with_entities(AgentRun.model, func.sum(AgentRun.input_tokens),
+                                                    func.sum(AgentRun.output_tokens)).group_by(AgentRun.model):
+                tokens += (tin or 0) + (tout or 0)
+                cost += _cost(model, tin or 0, tout or 0)
+            return ok, failed, tokens, cost
+
+        ok, failed, tokens, cost = run_stats(start, end)
+        pok, pfailed, ptokens, pcost = run_stats(prev, start)
+
+        posts_q = s.query(Post).filter(Post.created_at >= start)
+        made = posts_q.filter(Post.status.in_(["ready", "approved", "published"])).count()
+        pmade = s.query(Post).filter(Post.created_at >= prev, Post.created_at < start,
+                                     Post.status.in_(["ready", "approved", "published"])).count()
+        by_status = dict(posts_q.with_entities(Post.status, func.count()).group_by(Post.status).all())
+        by_media = dict(posts_q.with_entities(Post.media_type, func.count()).group_by(Post.media_type).all())
+        by_platform = dict(posts_q.with_entities(Post.platform, func.count()).group_by(Post.platform).all())
+        avg_qa = posts_q.filter(Post.qa_score > 0).with_entities(func.avg(Post.qa_score)).scalar() or 0
+        qa_pass = posts_q.filter(Post.qa_score > 0, Post.qa_passed.is_(True)).count()
+        qa_total = posts_q.filter(Post.qa_score > 0).count()
+        approved = posts_q.filter(Post.status.in_(["approved", "published"])).count()
+        reviewed = posts_q.filter(Post.status.in_(["approved", "published", "rejected"])).count()
+
+        # Serie diaria
+        series = []
+        today = end.replace(hour=0, minute=0, second=0, microsecond=0)
+        for i in range(days):
+            a = today - timedelta(days=days - 1 - i)
+            b = a + timedelta(days=1)
+            rq = s.query(AgentRun).filter(AgentRun.created_at >= a, AgentRun.created_at < b)
+            series.append({
+                "day": a.strftime("%Y-%m-%d"),
+                "runs": rq.filter(AgentRun.ok.is_(True)).count(),
+                "failed": rq.filter(AgentRun.ok.is_(False)).count(),
+                "tokens": int(rq.with_entities(func.sum(AgentRun.input_tokens + AgentRun.output_tokens)).scalar() or 0),
+                "posts": s.query(Post).filter(Post.created_at >= a, Post.created_at < b,
+                                              Post.status.in_(["ready", "approved", "published"])).count(),
+            })
+
+        # Por agente
+        agents = []
+        for key in registry.AGENTS:
+            q = s.query(AgentRun).filter(AgentRun.agent == key, AgentRun.created_at >= start)
+            tin = q.with_entities(func.sum(AgentRun.input_tokens)).scalar() or 0
+            tout = q.with_entities(func.sum(AgentRun.output_tokens)).scalar() or 0
+            last = s.query(func.max(AgentRun.created_at)).filter(AgentRun.agent == key).scalar()
+            agents.append({"key": key, "runs": q.count(), "failed": q.filter(AgentRun.ok.is_(False)).count(),
+                           "tokens": tin + tout, "cost": round(_cost(registry.model(key), tin, tout), 4),
+                           "avg_ms": int(q.with_entities(func.avg(AgentRun.duration_ms)).scalar() or 0),
+                           "last": last.isoformat() + "Z" if last else None})
+
+        # Tiempo medio de producción por post
+        done_jobs = s.query(Job).filter(Job.status == "done", Job.created_at >= start, Job.kind == "create").all()
+        avg_job = (sum((j.updated_at - j.created_at).total_seconds() for j in done_jobs) / len(done_jobs)) if done_jobs else 0
+
+        pending_approvals = s.query(Approval).filter(Approval.status == "pending").count()
+        to_review = s.query(Post).filter(Post.status == "ready").count()
+        new_findings = s.query(Finding).filter(Finding.status == "new").count()
+
+    return {
+        "days": days,
+        "kpis": {"runs": ok, "runs_prev": pok, "failed": failed, "failed_prev": pfailed, "tokens": tokens,
+                 "tokens_prev": ptokens, "cost": round(cost, 2), "cost_prev": round(pcost, 2), "posts": made,
+                 "posts_prev": pmade, "pending_approvals": pending_approvals, "to_review": to_review,
+                 "avg_qa": round(avg_qa, 1), "qa_pass_rate": round(100 * qa_pass / qa_total) if qa_total else 0,
+                 "approval_rate": round(100 * approved / reviewed) if reviewed else 0,
+                 "avg_seconds_per_post": round(avg_job), "new_findings": new_findings,
+                 "per_day": round(made / days, 1)},
+        "series": series, "agents": agents, "by_status": by_status, "by_media": by_media, "by_platform": by_platform,
+        "queue": pipeline.queue_stats(),
+    }
+
+
+# ------------------------------------------------------------------ Agentes
+@router.get("/agents")
+async def agents():
+    with session() as s:
+        out = []
+        for key in registry.AGENTS:
+            total = s.query(AgentRun).filter(AgentRun.agent == key).count()
+            last = s.query(func.max(AgentRun.created_at)).filter(AgentRun.agent == key).scalar()
+            out.append({**registry.info(key), "runs": total, "last": last.isoformat() + "Z" if last else None})
+    return out
+
+
+class AgentIn(BaseModel):
+    prompt: str | None = None
+    model: str | None = None
+    effort: str | None = None
+    enabled: bool | None = None
+
+
+@router.put("/agents/{key}")
+async def save_agent(key: str, body: AgentIn):
+    try:
+        registry.save(key, **body.model_dump())
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return registry.info(key)
+
+
+@router.post("/agents/{key}/reset")
+async def reset_agent(key: str):
+    registry.save(key, prompt="")
+    return registry.info(key)
+
+
+@router.get("/runs")
+async def runs(agent: str | None = None, limit: int = 100, failed: bool = False):
+    with session() as s:
+        q = s.query(AgentRun).order_by(AgentRun.created_at.desc())
+        if agent:
+            q = q.filter(AgentRun.agent == agent)
+        if failed:
+            q = q.filter(AgentRun.ok.is_(False))
+        return [{"id": r.id, "agent": r.agent, "agent_name": registry.AGENTS.get(r.agent, {}).get("name", r.agent),
+                 "ok": r.ok, "tokens": r.input_tokens + r.output_tokens, "cost": round(_cost(r.model, r.input_tokens, r.output_tokens), 5),
+                 "ms": r.duration_ms, "model": r.model, "summary": r.summary, "error": r.error,
+                 "created_at": r.created_at.isoformat() + "Z"} for r in q.limit(min(limit, 500))]
+
+
+# ------------------------------------------------------------------ Tareas (tablero)
+KIND_AGENT = {"create": "art_director", "edit": "edit_director", "subject": "subject_designer",
+              "video": "video_producer", "reel": "video_producer"}
+KIND_LABEL = {"create": "Crear post", "edit": "Editar", "subject": "Banco de modelos", "video": "Video", "reel": "Reel"}
+
+
+@router.get("/tasks")
+async def tasks(limit: int = 60):
+    cols = {"queued": [], "running": [], "waiting": [], "done": [], "failed": []}
+    with session() as s:
+        for j in s.query(Job).order_by(Job.created_at.desc()).limit(600):
+            p = s.get(Post, j.post_id) if j.kind != "subject" else None
+            title = (p.idea if p else (j.payload or {}).get("request") or "Modelo del banco")[:140]
+            card = {"id": j.id, "kind": j.kind, "label": KIND_LABEL.get(j.kind, j.kind),
+                    "agent": KIND_AGENT.get(j.kind, "shelton"),
+                    "agent_name": registry.AGENTS[KIND_AGENT.get(j.kind, "shelton")]["name"],
+                    "title": title, "post_id": p.id if p else None, "image_url": url_for(p.image_path) if p else "",
+                    "error": j.error, "at": (j.updated_at or j.created_at).isoformat() + "Z"}
+            if j.status == "pending":
+                col = "queued"
+            elif j.status == "running":
+                col = "running"
+            elif j.status == "failed":
+                col = "failed"
+            elif p and p.status == "ready":
+                col = "waiting"
+            else:
+                col = "done"
+            if len(cols[col]) < limit:
+                cols[col].append(card)
+        for a in s.query(Approval).filter(Approval.status == "pending").order_by(Approval.created_at.desc()):
+            cols["waiting"].insert(0, {"id": a.id, "kind": "approval", "label": "Aprobación", "agent": a.agent,
+                                       "agent_name": registry.AGENTS.get(a.agent, {}).get("name", a.agent),
+                                       "title": a.title, "post_id": a.payload.get("post_id"),
+                                       "image_url": a.payload.get("image_url", ""), "at": a.created_at.isoformat() + "Z"})
+    counts = {k: len(v) for k, v in cols.items()}
+    return {"columns": cols, "counts": counts}
+
+
+@router.post("/tasks/{job_id}/retry")
+async def retry_task(job_id: str):
+    with session() as s:
+        j = s.get(Job, job_id)
+        if not j or j.status != "failed":
+            raise HTTPException(400, "Solo se pueden reintentar tareas fallidas")
+        kind, target, payload = j.kind, j.post_id, dict(j.payload or {})
+        if kind != "subject" and (p := s.get(Post, target)):
+            p.status, p.error = "queued", ""
+    return {"id": pipeline.enqueue(kind, target, payload)}
+
+
+# ------------------------------------------------------------------ Aprobaciones
+@router.get("/approvals")
+async def approvals(status: str = "pending"):
+    with session() as s:
+        return [publishers.approval_dict(a) for a in
+                s.query(Approval).filter(Approval.status.in_(status.split(","))).order_by(Approval.created_at.desc()).limit(200)]
+
+
+class DecisionIn(BaseModel):
+    approve: bool
+
+
+@router.post("/approvals/{aid}")
+async def decide(aid: str, body: DecisionIn):
+    try:
+        return await publishers.decide(aid, body.approve)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class PublishRequest(BaseModel):
+    target: str
+
+
+@router.get("/targets")
+async def targets():
+    return publishers.targets()
+
+
+# ------------------------------------------------------------------ Conexiones
+@router.get("/connection-types")
+async def connection_types():
+    return {"types": TYPES, "engine_roles": ENGINE_ROLES}
+
+
+@router.get("/connections")
+async def connections():
+    with session() as s:
+        return [public(c) for c in s.query(Connection).order_by(Connection.created_at)]
+
+
+class ConnectionIn(BaseModel):
+    type: str
+    name: str = ""
+    config: dict = {}
+    roles: list[str] = []
+    enabled: bool = True
+
+
+def _after_change():
+    reset_cache()
+    events.invalidate_hooks()
+
+
+@router.post("/connections")
+async def create_connection(body: ConnectionIn):
+    if body.type not in TYPES:
+        raise HTTPException(400, "Tipo de conexión desconocido")
+    with session() as s:
+        c = Connection(type=body.type, name=body.name or TYPES[body.type]["name"], config=body.config,
+                       roles=[r for r in body.roles if r in ENGINE_ROLES], enabled=body.enabled)
+        s.add(c)
+        s.flush()
+        out = public(c)
+    _after_change()
+    return out
+
+
+@router.put("/connections/{cid}")
+async def update_connection(cid: str, body: ConnectionIn):
+    with session() as s:
+        c = s.get(Connection, cid) or _404()
+        c.name, c.enabled = body.name or c.name, body.enabled
+        c.config = merge_config(c.config, body.config)
+        c.roles = [r for r in body.roles if r in ENGINE_ROLES]
+        s.flush()
+        out = public(c)
+    _after_change()
+    return out
+
+
+@router.delete("/connections/{cid}")
+async def delete_connection(cid: str):
+    with session() as s:
+        if c := s.get(Connection, cid):
+            s.delete(c)
+    _after_change()
+    return {"ok": True}
+
+
+@router.post("/connections/{cid}/test")
+async def test_connection(cid: str):
+    from app.conn_tests import test_connection as run_test
+    with session() as s:
+        c = s.get(Connection, cid) or _404()
+        type_, cfg = c.type, dict(c.config or {})
+    result = await run_test(type_, cfg)
+    result["at"] = now().isoformat() + "Z"
+    with session() as s:
+        s.get(Connection, cid).last_test = result
+    return result
+
+
+# ------------------------------------------------------------------ Motores
+@router.get("/engines")
+async def engines():
+    return {"image": engine_choices(), "video": [{"id": k, "label": v[0], "description": v[1]} for k, v in VIDEO_INFO.items()],
+            "default_image": settings.GEN_PRESET, "default_video": settings.VIDEO_PRESET,
+            "presets": {k: {"label": v[0], "description": v[1]} for k, v in PRESET_INFO.items()}}
+
+
+# ------------------------------------------------------------------ Flujos (workflows de ComfyUI)
+def _wf_info(path: Path, builtin: bool) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        nodes = {k: v for k, v in data.items() if not k.startswith("_")}
+        return {"name": path.name, "builtin": builtin, "doc": data.get("_doc", ""), "nodes": len(nodes),
+                "classes": sorted({n.get("class_type", "?") for n in nodes.values()}),
+                "placeholders": sorted(placeholders(nodes))}
+    except Exception as e:
+        return {"name": path.name, "builtin": builtin, "error": str(e)}
+
+
+@router.get("/workflows")
+async def workflows():
+    user = sorted(user_workflow_dir().glob("*.json"))
+    builtin = [p for p in sorted(WORKFLOW_DIR.glob("*.json")) if not (user_workflow_dir() / p.name).exists()]
+    return [_wf_info(p, False) for p in user] + [_wf_info(p, True) for p in builtin]
+
+
+@router.post("/workflows")
+async def upload_workflow(file: UploadFile = File(...)):
+    name = re.sub(r"[^\w.\-]", "_", Path(file.filename or "workflow.json").name)
+    if not name.endswith(".json"):
+        name += ".json"
+    try:
+        data = json.loads((await file.read()).decode("utf-8"))
+    except Exception:
+        raise HTTPException(400, "No es un JSON válido")
+    nodes = {k: v for k, v in data.items() if not k.startswith("_")} if isinstance(data, dict) else {}
+    if not nodes or not all(isinstance(v, dict) and "class_type" in v for v in nodes.values()):
+        raise HTTPException(400, "Exporta el workflow en ComfyUI con 'Save (API Format)': este archivo no tiene ese formato")
+    (user_workflow_dir() / name).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    reset_cache()
+    return _wf_info(user_workflow_dir() / name, False)
+
+
+@router.get("/workflows/{name}")
+async def get_workflow(name: str):
+    p = user_workflow_dir() / Path(name).name
+    if not p.exists():
+        p = WORKFLOW_DIR / Path(name).name
+    if not p.exists():
+        _404()
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+@router.delete("/workflows/{name}")
+async def delete_workflow(name: str):
+    p = user_workflow_dir() / Path(name).name
+    if p.exists():
+        p.unlink()
+    reset_cache()
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------ Scout y hallazgos
+def _finding(f: Finding) -> dict:
+    return {"id": f.id, "kind": f.kind, "title": f.title, "summary": f.summary, "url": f.url, "why": f.why,
+            "how": f.how, "ideas": f.ideas or [], "platforms": f.platforms or [], "status": f.status,
+            "created_at": f.created_at.isoformat() + "Z"}
+
+
+@router.get("/findings")
+async def findings(status: str = "new", kind: str | None = None):
+    with session() as s:
+        q = s.query(Finding).filter(Finding.status.in_(status.split(","))).order_by(Finding.created_at.desc())
+        if kind:
+            q = q.filter(Finding.kind == kind)
+        return [_finding(f) for f in q.limit(200)]
+
+
+@router.post("/scout/run")
+async def scout_run():
+    import asyncio
+    asyncio.create_task(pipeline.run_scout())
+    return {"ok": True, "message": "El scout está investigando; los hallazgos aparecerán en unos minutos."}
+
+
+class UseFindingIn(BaseModel):
+    ideas: list[str] = []
+    platform: str = "instagram_feed"
+    subjects: list[str] = []
+    format: str = "image"
+
+
+@router.post("/findings/{fid}/use")
+async def use_finding(fid: str, body: UseFindingIn):
+    """Una persona decide replicar una tendencia: se crean los posts con las ideas elegidas."""
+    with session() as s:
+        f = s.get(Finding, fid) or _404()
+        ideas = body.ideas or f.ideas
+        f.status = "used"
+    sids, missing = pipeline.find_subjects(body.subjects)
+    ids = [pipeline.new_post(i, body.platform, subject_ids=sids, media=body.format) for i in ideas[:12]]
+    return {"ids": ids, "subjects_not_found": missing}
+
+
+@router.post("/findings/{fid}/dismiss")
+async def dismiss_finding(fid: str):
+    with session() as s:
+        if f := s.get(Finding, fid):
+            f.status = "dismissed"
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------ Marca blanca
+WL_DEFAULTS = {"product_name": "Shelton Studio", "chief_name": "Shelton", "tagline": "Estudio de contenido multiagente",
+               "accent": "#8b5cf6", "accent2": "#22d3ee", "logo_url": "", "support_url": ""}
+
+
+def _wl_path() -> Path:
+    return settings.DATA_DIR / "whitelabel.json"
+
+
+def whitelabel_data() -> dict:
+    try:
+        return {**WL_DEFAULTS, **json.loads(_wl_path().read_text(encoding="utf-8"))}
+    except Exception:
+        return dict(WL_DEFAULTS)
+
+
+@router.get("/whitelabel")
+async def get_whitelabel():
+    return whitelabel_data()
+
+
+@router.put("/whitelabel")
+async def put_whitelabel(body: dict):
+    data = {**whitelabel_data(), **{k: v for k, v in body.items() if k in WL_DEFAULTS}}
+    _wl_path().write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return data
+
+
+@router.post("/whitelabel/logo")
+async def upload_logo(file: UploadFile = File(...)):
+    data = await file.read()
+    ext = (Path(file.filename or "").suffix or ".png").lower()
+    if ext not in (".png", ".jpg", ".jpeg", ".svg", ".webp"):
+        raise HTTPException(400, "Formato de logo no soportado")
+    path = save_bytes(data, f"logo_{uuid.uuid4().hex[:6]}{ext}")
+    wl = {**whitelabel_data(), "logo_url": url_for(path)}
+    _wl_path().write_text(json.dumps(wl, ensure_ascii=False, indent=2), encoding="utf-8")
+    return wl
+
+
+# ------------------------------------------------------------------ Búsqueda global (⌘K)
+@router.get("/search")
+async def search(q: str):
+    q = q.strip()
+    if len(q) < 2:
+        return []
+    like = f"%{q}%"
+    from app.db import Conversation, Subject
+    out = []
+    with session() as s:
+        for p in s.query(Post).filter(Post.idea.ilike(like) | Post.caption.ilike(like)).order_by(Post.created_at.desc()).limit(8):
+            out.append({"type": "post", "id": p.id, "title": p.idea[:90], "image_url": url_for(p.image_path)})
+        for x in s.query(Subject).filter(Subject.name.ilike(like)).limit(5):
+            out.append({"type": "subject", "id": x.id, "title": x.name, "image_url": url_for((x.references or [""])[0])})
+        for c in s.query(Conversation).filter(Conversation.title.ilike(like)).order_by(Conversation.updated_at.desc()).limit(5):
+            out.append({"type": "conversation", "id": c.id, "title": c.title})
+    return out
+
+
+def _404():
+    raise HTTPException(404, "No encontrado")

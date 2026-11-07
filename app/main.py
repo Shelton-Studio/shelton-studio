@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from app import events, pipeline, publishers
 from app.agents import shelton
+from app.api import router as panel_router
 from app.config import ROOT, settings
 from app.db import Brand, Campaign, Conversation, Post, Subject, get_or_create_brand, init_db, session
 from app.engines import get_engine
@@ -29,16 +30,22 @@ async def lifespan(_: FastAPI):
     init_db()
     await pipeline.start_workers()
     autopilot = asyncio.create_task(pipeline.autopilot_loop())
-    health = await get_engine().health()
+    scout = asyncio.create_task(pipeline.scout_loop())
+    try:
+        health = await get_engine().health()
+    except Exception as e:
+        health = {"ok": False, "error": str(e)}
     log.info("Motor de imagen: %s", json.dumps(health, ensure_ascii=False))
     if not settings.ANTHROPIC_API_KEY:
         log.warning("Falta ANTHROPIC_API_KEY en .env: Shelton no podrá pensar")
     yield
     autopilot.cancel()
+    scout.cancel()
     await pipeline.stop_workers()
 
 
 app = FastAPI(title="Shelton", lifespan=lifespan)
+app.include_router(panel_router)
 app.mount("/static", StaticFiles(directory=ROOT / "web"), name="static")
 app.mount("/media", StaticFiles(directory=settings.media_dir), name="media")
 
@@ -55,8 +62,22 @@ async def index():
 # ------------------------------------------------------------------ Estado
 @app.get("/api/health")
 async def health():
-    return {"claude": bool(settings.ANTHROPIC_API_KEY), "model": settings.CLAUDE_MODEL,
-            "engine": await get_engine().health(), "queue": pipeline.queue_stats()}
+    from app.connections import list_enabled
+    from app.llm import api_key
+    engines = []
+    try:
+        engines.append({"name": "Motor por defecto", **(await get_engine().health())})
+    except Exception as e:
+        engines.append({"name": "Motor por defecto", "ok": False, "error": str(e)})
+    for c in list_enabled("engine"):
+        if c.type == "comfyui":
+            try:
+                engines.append({"name": c.name, **(await get_engine(choice=f"conn:{c.id}").health())})
+            except Exception as e:
+                engines.append({"name": c.name, "ok": False, "error": str(e)})
+    from app import video as vid
+    return {"claude": bool(api_key()), "model": settings.CLAUDE_MODEL, "engine": engines[0], "engines": engines,
+            "ffmpeg": bool(vid.FFMPEG), "queue": pipeline.queue_stats(), "local_first": settings.IMAGE_ENGINE != "mock"}
 
 
 @app.get("/api/platforms")
@@ -91,28 +112,36 @@ class ChatIn(BaseModel):
     message: str = Field(min_length=1)
     conversation_id: str | None = None
     upload_ids: list[str] = []
+    agent: str = "shelton"
+    engine: str | None = None
 
 
 @app.post("/api/chat")
 async def chat(body: ChatIn):
     async def gen():
-        async for ev in shelton.chat(body.conversation_id, body.message, body.upload_ids):
+        async for ev in shelton.chat(body.conversation_id, body.message, body.upload_ids, body.agent, body.engine):
             yield sse(ev)
     return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/conversations")
-async def conversations():
+async def conversations(agent: str | None = None, q: str | None = None):
     with session() as s:
-        return [{"id": c.id, "title": c.title, "updated_at": c.updated_at}
-                for c in s.query(Conversation).order_by(Conversation.updated_at.desc()).limit(50)]
+        query = s.query(Conversation).order_by(Conversation.updated_at.desc())
+        if agent:
+            query = query.filter(Conversation.agent == agent)
+        if q:
+            query = query.filter(Conversation.title.ilike(f"%{q}%"))
+        return [{"id": c.id, "title": c.title, "agent": c.agent or "shelton", "updated_at": c.updated_at.isoformat() + "Z"}
+                for c in query.limit(100)]
 
 
 @app.get("/api/conversations/{cid}")
 async def conversation(cid: str):
     with session() as s:
         c = s.get(Conversation, cid) or _404("Conversación")
-        return {"id": c.id, "title": c.title, "messages": c.display}
+        return {"id": c.id, "title": c.title, "agent": c.agent or "shelton", "engine": c.engine or "",
+                "messages": c.display}
 
 
 @app.delete("/api/conversations/{cid}")
@@ -129,6 +158,8 @@ class PostIn(BaseModel):
     platform: str = "instagram_feed"
     subjects: list[str] = []
     count: int = Field(1, ge=1, le=12)
+    format: str = "image"
+    engine: str | None = None
 
 
 @app.get("/api/posts")
@@ -169,7 +200,8 @@ async def versions(pid: str):
 async def create_posts(body: PostIn):
     """Generación directa sin chat (botón rápido de la web y CLI)."""
     sids, missing = pipeline.find_subjects(body.subjects)
-    ids = [pipeline.new_post(body.idea, body.platform, subject_ids=sids) for _ in range(body.count)]
+    ids = [pipeline.new_post(body.idea, body.platform, subject_ids=sids, media=body.format, engine=body.engine)
+           for _ in range(body.count)]
     return {"ids": ids, "subjects_not_found": missing}
 
 
@@ -186,12 +218,42 @@ async def edit_post(pid: str, body: EditIn):
         raise HTTPException(400, str(e))
 
 
+class VideoIn(BaseModel):
+    motion: str = ""
+    engine: str | None = None
+
+
+@app.post("/api/posts/{pid}/video")
+async def make_video(pid: str, body: VideoIn):
+    try:
+        return {"id": pipeline.new_video(pid, body.motion, engine=body.engine)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class ReelIn(BaseModel):
+    post_ids: list[str]
+    idea: str = ""
+    platform: str = "tiktok"
+
+
+@app.post("/api/reels")
+async def make_reel(body: ReelIn):
+    if len(body.post_ids) < 1:
+        raise HTTPException(400, "Elige al menos un post")
+    try:
+        return {"id": pipeline.new_reel(body.post_ids, body.idea, platform=body.platform)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.post("/api/posts/{pid}/regenerate")
 async def regenerate(pid: str):
     with session() as s:
         p = s.get(Post, pid) or _404("Post")
-        idea, platform, subjects, camp = p.idea, p.platform, p.subject_ids, p.campaign_id
-    return {"id": pipeline.new_post(idea, platform, subject_ids=subjects, campaign_id=camp)}
+        idea, platform, subjects, camp, media = p.idea, p.platform, p.subject_ids, p.campaign_id, p.media_type
+    return {"id": pipeline.new_post(idea, platform, subject_ids=subjects, campaign_id=camp,
+                                    media="video" if media == "video" else "image")}
 
 
 class AltIn(BaseModel):
@@ -235,7 +297,7 @@ async def delete_post(pid: str):
 
 
 class PublishIn(BaseModel):
-    target: str = "telegram"
+    target: str = "telegram"   # id de la conexión de publicación (o "telegram" de .env)
 
 
 @app.post("/api/posts/{pid}/publish")

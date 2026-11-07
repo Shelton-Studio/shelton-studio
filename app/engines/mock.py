@@ -62,5 +62,21 @@ class MockEngine:
         img.save(buf, "PNG")
         return buf.getvalue()
 
+    async def video(self, image, prompt, negative, width, height, seed, preset=None, on_progress: Progress = None):
+        """Zoom lento sobre la imagen como clip de prueba (WebP animado, 16 fps, 2 s)."""
+        async with GPU_LOCK:
+            await asyncio.sleep(0.3)
+            img = Image.open(io.BytesIO(image)).convert("RGB")
+            img.thumbnail((360, 640))
+            frames = []
+            for i in range(32):
+                z = 1 + i * 0.006
+                w, h = img.size
+                cw, ch = int(w / z), int(h / z)
+                frames.append(img.crop(((w - cw) // 2, (h - ch) // 2, (w + cw) // 2, (h + ch) // 2)).resize((w, h)))
+            buf = io.BytesIO()
+            frames[0].save(buf, "WEBP", save_all=True, append_images=frames[1:], duration=62, loop=0, quality=80)
+            return buf.getvalue(), 16
+
     async def health(self) -> dict:
         return {"ok": True, "engine": self.name, "note": "Modo prueba: no usa GPU ni modelos reales."}

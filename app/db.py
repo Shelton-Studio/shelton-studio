@@ -36,6 +36,8 @@ class Brand(Base):
     autopilot_daily: Mapped[int] = mapped_column(Integer, default=0)  # posts automáticos por día
     autopilot_hour: Mapped[int] = mapped_column(Integer, default=6)   # hora local del lote diario
     autopilot_last: Mapped[str] = mapped_column(String, default="")   # fecha del último lote
+    scout_every_hours: Mapped[int] = mapped_column(Integer, default=12)  # 0 = scout apagado
+    scout_last: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
@@ -62,6 +64,9 @@ class Post(Base):
     conversation_id: Mapped[str | None] = mapped_column(String, nullable=True)
     parent_id: Mapped[str | None] = mapped_column(String, nullable=True)  # si es una edición
     subject_ids: Mapped[list] = mapped_column(JSON, default=list)         # modelos del banco que aparecen
+    media_type: Mapped[str] = mapped_column(String, default="image")      # image | video | reel
+    video_path: Mapped[str] = mapped_column(String, default="")           # MP4 final (video/reel)
+    duration: Mapped[float] = mapped_column(Float, default=0)
     idea: Mapped[str] = mapped_column(Text, default="")
     platform: Mapped[str] = mapped_column(String, default="instagram_feed")
     prompt: Mapped[str] = mapped_column(Text, default="")
@@ -120,6 +125,8 @@ class Conversation(Base):
     __tablename__ = "conversations"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_id)
     title: Mapped[str] = mapped_column(String, default="Nueva conversación")
+    agent: Mapped[str] = mapped_column(String, default="shelton")
+    engine: Mapped[str] = mapped_column(String, default="")      # motor de imagen elegido en el chat
     api_messages: Mapped[list] = mapped_column(JSON, default=list)
     display: Mapped[list] = mapped_column(JSON, default=list)   # lo que ve el usuario
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
@@ -136,9 +143,24 @@ SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 def init_db() -> None:
     Base.metadata.create_all(engine)
+    _add_missing_columns()
     if settings.DATABASE_URL.startswith("sqlite"):
         with engine.connect() as c:
             c.exec_driver_sql("PRAGMA journal_mode=WAL")
+
+
+def _add_missing_columns() -> None:
+    """Migración simple: si actualizas Shelton, agrega las columnas nuevas sin perder datos."""
+    from sqlalchemy import inspect
+    insp = inspect(engine)
+    with engine.begin() as c:
+        for table in Base.metadata.sorted_tables:
+            if not insp.has_table(table.name):
+                continue
+            have = {col["name"] for col in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name not in have:
+                    c.exec_driver_sql(f'ALTER TABLE {table.name} ADD COLUMN "{col.name}" {col.type.compile(engine.dialect)}')
 
 
 @contextmanager
@@ -161,3 +183,73 @@ def get_or_create_brand(s) -> Brand:
         s.add(brand)
         s.flush()
     return brand
+
+
+class AgentProfile(Base):
+    """Ficha editable de cada agente (prompt, modelo, esfuerzo). Cada guardado sube la versión."""
+    __tablename__ = "agent_profiles"
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    prompt: Mapped[str] = mapped_column(Text, default="")      # vacío = prompt por defecto
+    model: Mapped[str] = mapped_column(String, default="")     # vacío = CLAUDE_MODEL
+    effort: Mapped[str] = mapped_column(String, default="")    # vacío = el del agente
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+
+
+class AgentRun(Base):
+    """Cada llamada de un agente: para métricas, actividad y costos."""
+    __tablename__ = "agent_runs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    agent: Mapped[str] = mapped_column(String, index=True)
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    model: Mapped[str] = mapped_column(String, default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
+
+
+class Approval(Base):
+    """Acción hacia afuera (publicar, enviar...) que espera el visto bueno de una persona."""
+    __tablename__ = "approvals"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_id)
+    kind: Mapped[str] = mapped_column(String, default="publish")
+    title: Mapped[str] = mapped_column(Text, default="")
+    agent: Mapped[str] = mapped_column(String, default="shelton")
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String, default="pending", index=True)  # pending/approved/rejected/failed
+    result: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class Connection(Base):
+    """Conexión a un servicio externo: motores de imagen, publicadores, webhooks, claves de API."""
+    __tablename__ = "connections"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_id)
+    type: Mapped[str] = mapped_column(String, index=True)       # ver app/connections.py
+    name: Mapped[str] = mapped_column(String, default="")
+    config: Mapped[dict] = mapped_column(JSON, default=dict)    # se guarda solo en tu máquina
+    roles: Mapped[list] = mapped_column(JSON, default=list)     # generate/edit/subject (motores)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_test: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class Finding(Base):
+    """Hallazgo del Scout (tendencia, herramienta o modelo nuevo). Una persona decide si se usa."""
+    __tablename__ = "findings"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_id)
+    kind: Mapped[str] = mapped_column(String, index=True)          # trend | tool
+    title: Mapped[str] = mapped_column(Text, default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    url: Mapped[str] = mapped_column(Text, default="")
+    why: Mapped[str] = mapped_column(Text, default="")             # por qué nos sirve
+    how: Mapped[str] = mapped_column(Text, default="")             # cómo replicarlo / integrarlo
+    ideas: Mapped[list] = mapped_column(JSON, default=list)        # ideas de posts listas para lanzar
+    platforms: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String, default="new", index=True)  # new / used / dismissed
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)

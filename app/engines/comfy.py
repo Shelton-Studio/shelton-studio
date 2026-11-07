@@ -1,103 +1,160 @@
-"""Motor real: Z-Image Turbo (generar) y Qwen-Image-Edit (editar) en ComfyUI."""
+"""Motor local: ComfyUI con Z-Image Turbo / Qwen-Image (generar) y Qwen-Image-Edit (editar y referencias).
+
+Se configura desde .env o desde una conexión "ComfyUI" en la web (puedes tener varias: 3050, 3090...).
+"""
 import uuid
 
-from app.comfyui.client import ComfyUIClient, ComfyUIError, fill_workflow, load_workflow
+from app.comfyui.client import ComfyUIClient, ComfyUIError, fill_workflow, load_workflow, placeholders
 from app.config import settings
-from app.engines import GPU_LOCK, Progress
+from app.engines import Progress, gpu_slot
 
-# Nodos que necesita cada workflow por defecto y el archivo de modelo esperado en cada cargador.
-REQUIRED_MODELS = {
-    "UNETLoader": ("unet_name", [settings.GEN_UNET, settings.EDIT_UNET]),
-    "CLIPLoader": ("clip_name", [settings.GEN_CLIP, settings.EDIT_CLIP]),
-    "VAELoader": ("vae_name", [settings.GEN_VAE, settings.EDIT_VAE]),
-    "LoraLoaderModelOnly": ("lora_name", [settings.EDIT_LORA]),
+LOADER_FIELDS = {"UNETLoader": "unet_name", "CLIPLoader": "clip_name", "VAELoader": "vae_name",
+                 "LoraLoaderModelOnly": "lora_name", "UnetLoaderGGUF": "unet_name"}
+
+# Perfiles de generación listos: el workflow y sus modelos.
+PRESETS = {
+    "fast": {"workflow_generate": "z_image_turbo.json", "gen_unet": settings.GEN_UNET, "gen_clip": settings.GEN_CLIP,
+             "gen_vae": settings.GEN_VAE, "gen_steps": settings.GEN_STEPS},
+    "quality": {"workflow_generate": "qwen_image.json", "gen_unet": settings.QWEN_IMAGE_UNET, "gen_clip": settings.EDIT_CLIP,
+                "gen_vae": settings.EDIT_VAE, "gen_lora": settings.QWEN_IMAGE_LORA, "gen_steps": settings.QWEN_IMAGE_STEPS},
+    "lite": {"workflow_generate": "z_image_turbo_gguf.json", "gen_unet": "z_image_turbo-Q4_K_M.gguf",
+             "gen_clip": settings.GEN_CLIP, "gen_vae": settings.GEN_VAE, "gen_steps": settings.GEN_STEPS},
+}
+
+
+VIDEO_PRESETS = {
+    "cinema": {"workflow": "wan22_i2v_14b.json", "fps": 16, "size": (720, 1280),
+               "values": {"unet_high": settings.VIDEO_HIGH_UNET, "unet_low": settings.VIDEO_LOW_UNET,
+                          "lora_high": settings.VIDEO_HIGH_LORA, "lora_low": settings.VIDEO_LOW_LORA,
+                          "clip": settings.VIDEO_CLIP, "vae": settings.VIDEO_VAE, "steps": 4}},
+    "fast": {"workflow": "wan22_ti2v_5b.json", "fps": 24, "size": (704, 1280),
+             "values": {"unet": settings.VIDEO_FAST_UNET, "clip": settings.VIDEO_CLIP, "vae": settings.VIDEO_FAST_VAE,
+                        "steps": 20}},
 }
 
 
 class ComfyEngine:
     name = "comfyui"
 
-    def __init__(self):
-        self.client = ComfyUIClient()
+    def __init__(self, cfg: dict | None = None):
+        cfg = {k: v for k, v in (cfg or {}).items() if v not in (None, "")}
+        preset = PRESETS.get(cfg.get("preset") or settings.GEN_PRESET, {})
+        if not cfg.get("preset") and settings.GEN_PRESET == "custom":
+            preset = {}
+        cfg = {**preset, **cfg}
+        self.url = cfg.get("url", settings.COMFYUI_URL)
+        self.client = ComfyUIClient(self.url, cfg.get("token"))
+        self.workflows = {
+            "generate": cfg.get("workflow_generate", settings.WORKFLOW_GENERATE),
+            "edit": cfg.get("workflow_edit", settings.WORKFLOW_EDIT),
+            "subject": cfg.get("workflow_subject", settings.WORKFLOW_SUBJECT),
+        }
+        self.scale = float(cfg.get("gen_scale", settings.GEN_SCALE))
+        self.video_preset = cfg.get("video_preset", settings.VIDEO_PRESET)
+        self.values = {
+            "generate": {"unet": cfg.get("gen_unet", settings.GEN_UNET), "clip": cfg.get("gen_clip", settings.GEN_CLIP),
+                         "vae": cfg.get("gen_vae", settings.GEN_VAE), "steps": int(cfg.get("gen_steps", settings.GEN_STEPS)),
+                         "lora": cfg.get("gen_lora", settings.QWEN_IMAGE_LORA)},
+            "edit": {"unet": settings.EDIT_UNET, "clip": settings.EDIT_CLIP, "vae": settings.EDIT_VAE,
+                     "lora": settings.EDIT_LORA, "steps": settings.EDIT_STEPS},
+        }
+        self.values["subject"] = self.values["edit"]
+
+    def _wf(self, role: str, extra: dict) -> dict:
+        wf = load_workflow(self.workflows[role])
+        values = {**self.values[role], **extra}
+        return fill_workflow(wf, {k: v for k, v in values.items() if k in placeholders(wf)})
+
+    def _size(self, width: int, height: int) -> tuple[int, int]:
+        return max(256, int(width * self.scale) // 16 * 16), max(256, int(height * self.scale) // 16 * 16)
 
     async def generate(self, prompt, width, height, seed, on_progress: Progress = None) -> bytes:
-        wf = fill_workflow(load_workflow(settings.WORKFLOW_GENERATE), {
-            "prompt": prompt, "width": width, "height": height, "seed": seed, "steps": settings.GEN_STEPS,
-            "unet": settings.GEN_UNET, "clip": settings.GEN_CLIP, "vae": settings.GEN_VAE,
-        })
-        async with GPU_LOCK:
-            images = await self.client.run(wf, on_progress)
-        return images[0]
+        w, h = self._size(width, height)
+        wf = self._wf("generate", {"prompt": prompt, "width": w, "height": h, "seed": seed})
+        async with gpu_slot(self.url):
+            return (await self.client.run(wf, on_progress))[0]
 
     async def edit(self, image, instruction, seed, on_progress: Progress = None) -> bytes:
-        async with GPU_LOCK:
+        async with gpu_slot(self.url):
             name = await self.client.upload_image(image, f"shelton_{uuid.uuid4().hex[:10]}.png")
-            wf = fill_workflow(load_workflow(settings.WORKFLOW_EDIT), {
-                "image": name, "instruction": instruction, "seed": seed, "steps": settings.EDIT_STEPS,
-                "unet": settings.EDIT_UNET, "clip": settings.EDIT_CLIP, "vae": settings.EDIT_VAE,
-                "lora": settings.EDIT_LORA,
-            })
-            images = await self.client.run(wf, on_progress)
-        return images[0]
+            wf = self._wf("edit", {"image": name, "instruction": instruction, "prompt": instruction, "seed": seed})
+            return (await self.client.run(wf, on_progress))[0]
 
     async def generate_with_refs(self, refs, prompt, width, height, seed, on_progress: Progress = None) -> bytes:
-        """Escena nueva manteniendo la identidad de hasta 3 referencias (personaje, auto, lugar...)."""
-        async with GPU_LOCK:
+        """Escena nueva manteniendo la identidad de hasta 3 referencias (personaje, auto, lugar, estilo...)."""
+        w, h = self._size(width, height)
+        async with gpu_slot(self.url):
             names = [await self.client.upload_image(r, f"shelton_ref_{uuid.uuid4().hex[:10]}.png") for r in refs[:3]]
-            wf = fill_workflow(load_workflow(settings.WORKFLOW_SUBJECT), {
-                "image": names[0], "prompt": prompt, "width": width, "height": height, "seed": seed,
-                "steps": settings.EDIT_STEPS, "unet": settings.EDIT_UNET, "clip": settings.EDIT_CLIP,
-                "vae": settings.EDIT_VAE, "lora": settings.EDIT_LORA,
-            })
+            wf = self._wf("subject", {"image": names[0], "prompt": prompt, "instruction": prompt,
+                                      "width": w, "height": h, "seed": seed})
             _attach_extra_refs(wf, names[1:])
-            images = await self.client.run(wf, on_progress)
-        return images[0]
+            return (await self.client.run(wf, on_progress))[0]
+
+    async def video(self, image, prompt, negative, width, height, seed, preset: str | None = None,
+                    on_progress: Progress = None) -> tuple[bytes, float]:
+        """Imagen -> clip. Devuelve (WebP animado, fps)."""
+        preset = preset if preset in VIDEO_PRESETS else self.video_preset
+        vp = VIDEO_PRESETS.get(preset, VIDEO_PRESETS["cinema"])
+        fps = vp["fps"]
+        length = int(settings.VIDEO_SECONDS * fps) // 4 * 4 + 1  # Wan pide 4n+1 cuadros
+        w, h = vp["size"] if height > width else vp["size"][::-1]
+        async with gpu_slot(self.url):
+            name = await self.client.upload_image(image, f"shelton_vid_{uuid.uuid4().hex[:10]}.png")
+            wf = load_workflow(vp["workflow"])
+            values = {**vp["values"], "image": name, "prompt": prompt, "negative": negative, "width": w, "height": h,
+                      "length": length, "seed": seed, "fps": fps}
+            wf = fill_workflow(wf, {k: v for k, v in values.items() if k in placeholders(wf)})
+            return (await self.client.run(wf, on_progress))[0], fps
 
     async def health(self) -> dict:
-        """Comprueba conexión, GPU y que los modelos configurados estén descargados."""
+        """Comprueba conexión, GPU, modelos descargados y que los workflows encajen con los nodos instalados."""
         try:
             stats = await self.client.system_stats()
         except Exception as e:
-            return {"ok": False, "engine": self.name, "error": f"No conecta con ComfyUI en {settings.COMFYUI_URL}: {e}"}
+            return {"ok": False, "engine": self.name, "url": self.url, "error": f"No conecta con ComfyUI en {self.url}: {e}"}
         devices = [{"name": d.get("name"), "vram_gb": round(d.get("vram_total", 0) / 1024**3, 1)}
                    for d in stats.get("devices", [])]
-        missing = []
-        try:
-            for node, (field, wanted) in REQUIRED_MODELS.items():
-                info = (await self.client.object_info(node)).get(node, {})
-                options = info.get("input", {}).get("required", {}).get(field, [[]])[0]
-                if isinstance(options, str):  # formato nuevo: ["COMBO", {"options": [...]}]
-                    options = info["input"]["required"][field][1].get("options", [])
-                missing += [w for w in wanted if w and w not in options]
-        except (ComfyUIError, Exception) as e:
-            missing.append(f"(no se pudo revisar modelos: {e})")
-        workflow_problems = await self.check_workflows()
-        return {"ok": not missing and not workflow_problems, "engine": self.name, "url": settings.COMFYUI_URL,
-                "devices": devices, "missing_models": sorted(set(missing)), "workflow_problems": workflow_problems}
-
-    async def check_workflows(self) -> list[str]:
-        """Compara cada plantilla con los nodos instalados en este ComfyUI (nombres y entradas obligatorias)."""
         try:
             info = await self.client.object_info()
         except Exception as e:
-            return [f"No se pudo leer /object_info: {e}"]
-        problems = []
-        for wf_name in (settings.WORKFLOW_GENERATE, settings.WORKFLOW_EDIT, settings.WORKFLOW_SUBJECT):
+            return {"ok": False, "engine": self.name, "url": self.url, "devices": devices, "error": f"/object_info: {e}"}
+        missing, problems = set(), []
+        checks = []
+        for role in ("generate", "edit", "subject"):
             try:
-                wf = load_workflow(wf_name)
+                checks.append((self.workflows[role], self._wf(role, {"prompt": "x", "instruction": "x", "image": "x.png",
+                                                                    "width": 1024, "height": 1024, "seed": 1})))
             except ComfyUIError as e:
-                problems.append(str(e))
-                continue
+                problems.append(f"{self.workflows[role]}: {e}")
+        vp = VIDEO_PRESETS.get(settings.VIDEO_PRESET, VIDEO_PRESETS["cinema"])
+        try:
+            vwf = load_workflow(vp["workflow"])
+            checks.append((vp["workflow"], fill_workflow(vwf, {k: v for k, v in {**vp["values"], "image": "x.png", "prompt": "x",
+                           "negative": "", "width": 720, "height": 1280, "length": 81, "seed": 1, "fps": 16}.items()
+                           if k in placeholders(vwf)})))
+        except ComfyUIError as e:
+            problems.append(f"video: {e}")
+        for wf_name, wf in checks:
+            role = wf_name
             for node_id, node in wf.items():
                 cls = node.get("class_type")
                 if cls not in info:
-                    problems.append(f"{wf_name}: falta el nodo '{cls}' (actualiza ComfyUI o instala el nodo)")
+                    problems.append(f"{role}: falta el nodo '{cls}' (actualiza ComfyUI o instala el nodo)")
                     continue
                 required = info[cls].get("input", {}).get("required", {})
                 for field in required:
                     if field not in node.get("inputs", {}):
-                        problems.append(f"{wf_name}: al nodo {node_id} ({cls}) le falta la entrada '{field}'")
-        return problems
+                        problems.append(f"{role}: al nodo {node_id} ({cls}) le falta la entrada '{field}'")
+                field = LOADER_FIELDS.get(cls)
+                if field and field in required:
+                    options = required[field][0]
+                    if isinstance(options, str):  # formato nuevo: ["COMBO", {"options": [...]}]
+                        options = (required[field][1] or {}).get("options", [])
+                    wanted = node["inputs"].get(field)
+                    if wanted and wanted not in options:
+                        missing.add(wanted)
+        return {"ok": not missing and not problems, "engine": self.name, "url": self.url, "devices": devices,
+                "missing_models": sorted(missing), "workflow_problems": problems, "workflows": self.workflows}
 
 
 def _attach_extra_refs(wf: dict, names: list[str]) -> None:
@@ -110,7 +167,8 @@ def _attach_extra_refs(wf: dict, names: list[str]) -> None:
         load_id, scale_id = f"ref{i}_load", f"ref{i}_scale"
         wf[load_id] = {"class_type": "LoadImage", "inputs": {"image": name}}
         wf[scale_id] = {"class_type": "ImageScaleToTotalPixels",
-                        "inputs": {**(wf[scale]["inputs"] if scale else {"upscale_method": "lanczos", "megapixels": 1.0}),
+                        "inputs": {**(wf[scale]["inputs"] if scale else {"upscale_method": "lanczos", "megapixels": 1.0,
+                                                                         "resolution_steps": 1}),
                                    "image": [load_id, 0]}}
         for enc in encoders:
             wf[enc]["inputs"][f"image{i}"] = [scale_id, 0]

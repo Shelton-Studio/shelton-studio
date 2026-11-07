@@ -21,14 +21,20 @@ from app.db import Post, Subject, init_db, session  # noqa: E402
 
 
 
-async def fake_json_call(system, content, schema, effort="low", max_tokens=8000):
+async def fake_json_call(system, content, schema, effort="low", max_tokens=8000, **kw):
     keys = set(schema["properties"])
+    if "motion_prompt" in keys:
+        return {"motion_prompt": "slow push-in, hair moving in the wind", "negative": "blur"}
+    if "findings" in keys:
+        return {"findings": [{"title": "Trend: retratos con flash", "summary": "s", "url": "https://example.com/t",
+                              "why": "encaja", "how": "replicar", "ideas": ["Idea trend 1", "Idea trend 2"],
+                              "platforms": ["tiktok"]}]}
     if "prompt" in keys:
         fixed = "FIXED " if "Problems found in previous attempts" in content else ""
         return {"prompt": fixed + "A photorealistic scene, golden hour, 35mm", "concept": "escena"}
     if "score" in keys:
         # El juez reprueba siempre el primer intento (para probar reintentos y alternativas guardadas).
-        retried = "FIXED" in str(content) or "Avoid:" in str(content) or "Edit requested" in str(content)
+        retried = any(k in str(content) for k in ("FIXED", "Avoid:", "Edit requested", "frames", "push-in"))
         return {"score": 90 if retried else 55, "issues": ["mano deformada"], "fix_hint": "manos fuera de plano", "summary": "ok"}
     if "caption" in keys:
         return {"caption": "Texto de prueba", "hashtags": ["prueba", "#shelton"], "alt_text": "alt"}
@@ -47,7 +53,26 @@ async def fake_json_call(system, content, schema, effort="low", max_tokens=8000)
     raise AssertionError(keys)
 
 
-specialists.json_call = fake_json_call
+_real_json_call = specialists.json_call
+
+
+async def _logged_fake(system, content, schema, effort="low", max_tokens=8000, **kw):
+    """Igual que el falso, pero registra la ejecución como si fuera real (para métricas y actividad)."""
+    import time
+    from app import llm
+    out = await fake_json_call(system, content, schema, effort, max_tokens, **kw)
+    usage = SimpleNamespace(input_tokens=1200, output_tokens=300, cache_read_input_tokens=0, cache_creation_input_tokens=0)
+    llm._log_run(kw.get("agent", "shelton"), True, time.monotonic() - 1.5, "claude-opus-5-5",
+                 SimpleNamespace(usage=usage), summary=kw.get("summary", ""))
+    return out
+
+
+specialists.json_call = _logged_fake
+
+
+async def fake_create(**kw):
+    """Simula la llamada de los scouts con búsqueda web."""
+    return SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(type="text", text="Informe con tendencias")])
 
 
 def block(**kw):
@@ -57,11 +82,31 @@ def block(**kw):
 
 
 class FakeChief:
-    """Simula a Shelton: pide crear la modelo Valentina, luego 2 posts con ella, luego responde."""
+    """Simula a Shelton. Por defecto: crea a Valentina y 2 posts con ella.
+    Si el mensaje del usuario empieza con 'TOOL nombre {json}', llama exactamente esa herramienta y termina
+    (sirve para probar cada herramienta desde el chat)."""
     def __init__(self):
         self.calls = 0
+        self.scripted = False
 
     async def __call__(self, **kw):
+        import json as _json
+        last = kw["messages"][-1]
+        content = last["content"] if isinstance(last["content"], list) else []
+        if self.scripted and content and content[0].get("type") == "tool_result":
+            self.scripted = False
+            res = content[0]
+            body = res["content"] if isinstance(res["content"], str) else res["content"][0].get("text", "")
+            return SimpleNamespace(stop_reason="end_turn", content=[block(type="text",
+                                   text=("ERROR: " if res.get("is_error") else "OK: ") + body[:2000])])
+        txt = next((b["text"] for b in reversed(content) if b.get("type") == "text"), "")
+        if txt.startswith("TOOL "):
+            self.scripted = True
+            name, _, args = txt[5:].partition(" ")
+            return SimpleNamespace(stop_reason="tool_use", content=[block(type="tool_use", id=f"s{id(txt)}",
+                                   name=name, input=_json.loads(args or "{}"))])
+        if txt and not txt.startswith("crea a Valentina"):
+            return SimpleNamespace(stop_reason="end_turn", content=[block(type="text", text="Hola, soy Shelton.")])
         self.calls += 1
         if self.calls == 1:
             return SimpleNamespace(stop_reason="tool_use", content=[

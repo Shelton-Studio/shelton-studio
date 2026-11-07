@@ -29,6 +29,14 @@ class Settings:
     WORKFLOW_EDIT = os.getenv("WORKFLOW_EDIT", "qwen_image_edit.json")
     WORKFLOW_SUBJECT = os.getenv("WORKFLOW_SUBJECT", "qwen_subject.json")  # posts con modelos del banco
 
+    # Perfil de generación: fast (Z-Image Turbo) | quality (Qwen-Image 20B) | lite (Z-Image GGUF, 6-8 GB) | custom
+    GEN_PRESET = os.getenv("GEN_PRESET", "fast").lower()
+
+    # Qwen-Image (calidad máxima, mejor texto dentro de la imagen). Comparte text encoder y VAE con el editor.
+    QWEN_IMAGE_UNET = os.getenv("QWEN_IMAGE_UNET", "qwen_image_fp8_e4m3fn.safetensors")
+    QWEN_IMAGE_LORA = os.getenv("QWEN_IMAGE_LORA", "Qwen-Image-Lightning-8steps-V1.0.safetensors")
+    QWEN_IMAGE_STEPS = int(os.getenv("QWEN_IMAGE_STEPS", "8"))
+
     # Modelos de Z-Image Turbo (generación)
     GEN_UNET = os.getenv("GEN_UNET", "z_image_turbo_bf16.safetensors")
     GEN_CLIP = os.getenv("GEN_CLIP", "qwen_3_4b.safetensors")
@@ -43,6 +51,20 @@ class Settings:
     EDIT_VAE = os.getenv("EDIT_VAE", "qwen_image_vae.safetensors")
     EDIT_LORA = os.getenv("EDIT_LORA", "Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors")
     EDIT_STEPS = int(os.getenv("EDIT_STEPS", "4"))
+
+    # --- Video (Wan 2.2) ---
+    # cinema = I2V 14B 720p + interpolación a 30 fps (lo mejor en local) | fast = TI2V 5B 720p 24 fps
+    VIDEO_PRESET = os.getenv("VIDEO_PRESET", "cinema").lower()
+    VIDEO_CLIP = os.getenv("VIDEO_CLIP", "umt5_xxl_fp8_e4m3fn_scaled.safetensors")
+    VIDEO_FAST_UNET = os.getenv("VIDEO_FAST_UNET", "wan2.2_ti2v_5B_fp16.safetensors")
+    VIDEO_FAST_VAE = os.getenv("VIDEO_FAST_VAE", "wan2.2_vae.safetensors")
+    VIDEO_HIGH_UNET = os.getenv("VIDEO_HIGH_UNET", "wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors")
+    VIDEO_LOW_UNET = os.getenv("VIDEO_LOW_UNET", "wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors")
+    VIDEO_HIGH_LORA = os.getenv("VIDEO_HIGH_LORA", "wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors")
+    VIDEO_LOW_LORA = os.getenv("VIDEO_LOW_LORA", "wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors")
+    VIDEO_VAE = os.getenv("VIDEO_VAE", "wan_2.1_vae.safetensors")
+    VIDEO_SECONDS = float(os.getenv("VIDEO_SECONDS", "5"))
+    VIDEO_OUTPUT_FPS = int(os.getenv("VIDEO_OUTPUT_FPS", "30"))
 
     # --- Cadena de producción ---
     QA_MIN_SCORE = int(os.getenv("QA_MIN_SCORE", "70"))      # por debajo se regenera

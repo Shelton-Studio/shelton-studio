@@ -9,6 +9,7 @@ def post_dict(p: Post) -> dict:
         "id": p.id, "status": p.status, "idea": p.idea, "platform": p.platform,
         "platform_name": get_platform(p.platform).name, "prompt": p.prompt,
         "image_url": url_for(p.image_path), "raw_url": url_for(p.raw_path),
+        "media_type": p.media_type or "image", "video_url": url_for(p.video_path), "duration": p.duration or 0,
         "width": p.width, "height": p.height, "caption": p.caption, "hashtags": p.hashtags or [],
         "alt_text": p.alt_text, "qa_score": p.qa_score, "qa_notes": p.qa_notes, "attempts": p.attempts,
         "qa_passed": p.qa_passed,

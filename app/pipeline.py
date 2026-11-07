@@ -95,7 +95,8 @@ async def _run_job(job_id: str) -> None:
         job.status = "running"
         kind, target, payload = job.kind, job.post_id, dict(job.payload or {})
 
-    handler = {"create": _create_post, "edit": _edit_post, "subject": _create_subject}[kind]
+    handler = {"create": _create_post, "edit": _edit_post, "subject": _create_subject,
+               "video": _video_post, "reel": _reel_post}[kind]
     try:
         await handler(target, payload)
         status, error = "done", ""
@@ -143,8 +144,9 @@ async def _create_post(post_id: str, payload: dict) -> None:
     post, brand, subjects = _load(post_id)
     platform = get_platform(post.platform)
     width, height = generation_size(platform.aspect)
-    engine = get_engine()
+    choice = payload.get("engine") or None
     refs = [Path(s.references[0]).read_bytes() for s in subjects if s.references]
+    engine = get_engine("subject" if refs else "generate", choice)
 
     feedback: list[str] = []
     tries: list[dict] = []   # todos los intentos se conservan
@@ -184,7 +186,147 @@ async def _create_post(post_id: str, payload: dict) -> None:
     _update_post(post_id, prompt=best["prompt"], seed=best["seed"], raw_path=best["raw"], image_path=best["final"],
                  width=platform.width, height=platform.height, caption=copy["caption"], hashtags=hashtags,
                  alt_text=copy.get("alt_text", ""), qa_score=best["score"], qa_passed=passed,
-                 qa_notes=_qa_text(best, passed), alternatives=[t for t in tries if t is not best], status="ready")
+                 qa_notes=_qa_text(best, passed), alternatives=[t for t in tries if t is not best],
+                 status="generating" if payload.get("media") == "video" else "ready")
+    if payload.get("media") == "video":
+        await _animate_into(post_id, best["final"], payload.get("motion", ""), payload.get("video_engine") or None,
+                            rewrite_caption=True)
+
+
+# ============================================================ Video y reels
+async def _animate_into(post_id: str, source_image: str, motion: str, choice: str | None, rewrite_caption: bool) -> None:
+    """Productor de video -> Wan 2.2 -> MP4 vertical interpolado -> juez revisa 3 cuadros -> (copywriter)."""
+    from app import video as vid
+    post, brand, subjects = _load(post_id)
+    platform = get_platform(post.platform)
+    _update_post(post_id, status="generating", media_type="video")
+    events.publish({"type": "progress", "id": post_id, "text": "Productor de video dirigiendo el movimiento"})
+    vp = await sp.direct_video(source_image, post.idea, motion)
+    engine = get_engine("video", choice)
+    step = _progress(post_id, "Animando con el motor de video")
+    clip, fps = await engine.video(Path(source_image).read_bytes(), vp["motion_prompt"], vp.get("negative", ""),
+                                   platform.width, platform.height, random.randint(1, 2**31 - 1), None, step)
+    raw = save_bytes(clip, f"{post_id}_clip.{'webp' if vid.is_webp(clip) else 'mp4'}")
+    events.publish({"type": "progress", "id": post_id, "text": "Post-producción: 30 fps y formato vertical"})
+    mp4 = str(settings.media_dir / f"{post_id}.mp4")
+    await asyncio.to_thread(vid.clip_to_mp4, clip, fps, mp4, platform.width, platform.height,
+                            settings.VIDEO_OUTPUT_FPS, True)
+    poster = await asyncio.to_thread(vid.frame_at, mp4, str(settings.media_dir / f"{post_id}_poster.jpg"))
+    sheet = await asyncio.to_thread(vid.contact_sheet, mp4, str(settings.media_dir / f"{post_id}_sheet.jpg"))
+    seconds = await asyncio.to_thread(vid.duration, mp4)
+    events.publish({"type": "progress", "id": post_id, "text": "Juez revisando el video"})
+    qa = await sp.judge(sheet, f"{post.idea} (these are 3 frames — start, middle, end — of a short video clip: also "
+                               "check temporal consistency, warping, identity drift and flicker)", vp["motion_prompt"],
+                        brand, subjects)
+    score = int(qa.get("score", 0))
+    fields = dict(video_path=mp4, raw_path=raw, image_path=poster, duration=seconds, width=platform.width,
+                  height=platform.height, qa_score=score, qa_passed=score >= settings.QA_MIN_SCORE,
+                  qa_notes=_qa_text(qa, score >= settings.QA_MIN_SCORE),
+                  prompt=f"{post.prompt}\n[VIDEO] {vp['motion_prompt']}".strip())
+    if rewrite_caption:
+        events.publish({"type": "progress", "id": post_id, "text": "Copywriter escribiendo el texto del reel"})
+        copy = await sp.write_post(poster, post.idea, platform, brand, "Es un video corto (Reel/TikTok): usa un gancho "
+                                   "que invite a verlo entero.")
+        fields.update(caption=copy["caption"], alt_text=copy.get("alt_text", ""),
+                      hashtags=_merge_hashtags(copy.get("hashtags", []), brand.base_hashtags if brand else []))
+    _update_post(post_id, status="ready", **fields)
+
+
+async def _video_post(post_id: str, payload: dict) -> None:
+    """Animar un post existente (crea un post nuevo de video; el original se conserva)."""
+    with session() as s:
+        parent = s.get(Post, s.get(Post, post_id).parent_id)
+        src = parent.raw_path if parent.raw_path and not parent.raw_path.endswith((".webp", ".mp4")) else parent.image_path
+        _update_post(post_id, caption=parent.caption, hashtags=parent.hashtags, alt_text=parent.alt_text,
+                     prompt=parent.prompt)
+    await _animate_into(post_id, src, payload.get("motion", ""), payload.get("engine") or None, rewrite_caption=True)
+
+
+async def _reel_post(post_id: str, payload: dict) -> None:
+    """Une los clips (en orden) en un reel y le escribe el texto."""
+    from app import video as vid
+    post, brand, _ = _load(post_id)
+    platform = get_platform(post.platform)
+    with session() as s:
+        clips = [p.video_path for p in (s.get(Post, i) for i in payload["clip_ids"]) if p and p.video_path]
+    if not clips:
+        raise RuntimeError("Ninguna escena terminó con video; revisa el motor de video en Estado")
+    _update_post(post_id, status="generating", media_type="reel")
+    events.publish({"type": "progress", "id": post_id, "text": f"Montando el reel ({len(clips)} escenas)"})
+    mp4 = str(settings.media_dir / f"{post_id}.mp4")
+    await asyncio.to_thread(vid.concat, clips, mp4, platform.width, platform.height, settings.VIDEO_OUTPUT_FPS)
+    poster = await asyncio.to_thread(vid.frame_at, mp4, str(settings.media_dir / f"{post_id}_poster.jpg"), "0.5")
+    seconds = await asyncio.to_thread(vid.duration, mp4)
+    copy = await sp.write_post(poster, post.idea, platform, brand,
+                               f"Es un reel de {len(clips)} escenas y {seconds:.0f} s: gancho fuerte en la primera línea.")
+    with session() as s:
+        scores = [p.qa_score for p in (s.get(Post, i) for i in payload["clip_ids"]) if p and p.qa_score]
+    avg = round(sum(scores) / len(scores)) if scores else 0
+    _update_post(post_id, status="ready", video_path=mp4, image_path=poster, duration=seconds, width=platform.width,
+                 height=platform.height, caption=copy["caption"], alt_text=copy.get("alt_text", ""),
+                 hashtags=_merge_hashtags(copy.get("hashtags", []), brand.base_hashtags if brand else []),
+                 qa_score=avg, qa_passed=avg >= settings.QA_MIN_SCORE,
+                 qa_notes=f"Nota media de las escenas según el juez: {avg}/100. Revisa cada escena en su post.")
+
+
+def new_video(parent_id: str, motion: str = "", conversation_id=None, engine: str | None = None) -> str:
+    with session() as s:
+        parent = s.get(Post, parent_id)
+        if not parent or not parent.image_path:
+            raise ValueError(f"El post {parent_id} no existe o no tiene imagen todavía")
+        p = Post(idea=parent.idea, platform=parent.platform, brand_id=parent.brand_id, parent_id=parent.id,
+                 campaign_id=parent.campaign_id, conversation_id=conversation_id or parent.conversation_id,
+                 subject_ids=parent.subject_ids, media_type="video", status="queued")
+        s.add(p)
+        s.flush()
+        pid, data = p.id, post_dict(p)
+    events.publish({"type": "post", "post": data})
+    enqueue("video", pid, {"motion": motion, "engine": engine or ""})
+    return pid
+
+
+def new_reel(source_ids: list[str], idea: str = "", conversation_id=None, platform: str = "tiktok",
+             engine: str | None = None) -> str:
+    """Reel a partir de posts: los que son imagen se animan primero; luego se unen en orden."""
+    with session() as s:
+        sources = [s.get(Post, i) for i in source_ids]
+        if not all(sources):
+            raise ValueError("Algún post no existe")
+        brand_id = sources[0].brand_id
+        reel = Post(idea=idea or " / ".join(p.idea for p in sources)[:500], platform=get_platform(platform).key,
+                    brand_id=brand_id, conversation_id=conversation_id, media_type="reel", status="queued",
+                    subject_ids=sorted({x for p in sources for x in (p.subject_ids or [])}))
+        s.add(reel)
+        s.flush()
+        rid, data = reel.id, post_dict(reel)
+        needs = [(p.id, p.media_type, bool(p.video_path)) for p in sources]
+    events.publish({"type": "post", "post": data})
+    _done.setdefault(rid, asyncio.Event())
+
+    async def orchestrate():
+        try:
+            clip_ids = []
+            for pid, media, has_video in needs:
+                if media in ("video", "reel") or has_video:
+                    clip_ids.append(pid)
+                else:
+                    clip_ids.append(new_video(pid, "", conversation_id, engine))
+            _update_post(rid, status="generating")
+            await wait_for(clip_ids, timeout=7200)
+            enqueue("reel", rid, {"clip_ids": clip_ids})
+        except Exception as e:
+            _update_post(rid, status="failed", error=str(e))
+            _done[rid].set()
+    asyncio.create_task(orchestrate())
+    return rid
+
+
+def new_reel_from_scenes(scenes: list[str], idea: str, platform: str = "tiktok", subject_ids=None,
+                         conversation_id=None, engine: str | None = None, video_engine: str | None = None) -> str:
+    """Una sola orden: cada escena pasa por imagen -> juez -> video -> juez, y al final se monta el reel."""
+    scene_ids = [new_post(sc, platform, conversation_id=conversation_id, subject_ids=subject_ids, engine=engine,
+                          media="video", video_engine=video_engine) for sc in scenes]
+    return new_reel(scene_ids, idea, conversation_id, platform, video_engine)
 
 
 def use_alternative(post_id: str, index: int) -> dict:
@@ -246,7 +388,7 @@ async def _edit_post(post_id: str, payload: dict) -> None:
     else:
         step = _progress(post_id, "Editando con Qwen-Image-Edit")
         src = Path(parent.raw_path or parent.image_path).read_bytes()
-        out = await get_engine().edit(src, ei["instruction"], random.randint(1, 2**31 - 1), step)
+        out = await get_engine("edit", payload.get("engine") or None).edit(src, ei["instruction"], random.randint(1, 2**31 - 1), step)
         raw = save_bytes(out, f"{post_id}_raw.png")
         final = fit_to_platform(raw, platform.width, platform.height, f"{post_id}.jpg")
         prompt = f"{parent.prompt}\n[EDIT] {ei['instruction']}"
@@ -277,12 +419,12 @@ async def _create_subject(subject_id: str, payload: dict) -> None:
         sub = s.get(Subject, subject_id)
         sub.description, sub.notes = design["description"], design["notes"]
 
-    width, height = generation_size("4:5" if kind == "person" else "1:1")
+    width, height = generation_size("4:5" if kind in ("person", "creature") else "1:1")
     feedback, tries = [], []
     for attempt in range(1, 2 + settings.QA_MAX_RETRIES):
         prompt = design["reference_prompt"] + (" Avoid: " + "; ".join(feedback) if feedback else "")
         events.publish({"type": "subject_progress", "id": subject_id, "text": f"Creando foto de referencia ({attempt})"})
-        raw = await get_engine().generate(prompt, width, height, random.randint(1, 2**31 - 1))
+        raw = await get_engine("generate", payload.get("engine") or None).generate(prompt, width, height, random.randint(1, 2**31 - 1))
         path = save_bytes(raw, f"subject_{subject_id}_{attempt}.png")
         qa = await sp.judge(path, f"Reference picture of {name}: {design['description']}", prompt, brand)
         tries.append((path, int(qa.get("score", 0))))
@@ -332,20 +474,24 @@ async def add_subject_reference(subject_id: str, image_path: str, describe: bool
 
 # ============================================================ Crear posts y campañas
 def new_post(idea: str, platform: str, *, brand_id=None, campaign_id=None, conversation_id=None,
-             subject_ids=None, caption_notes: str = "") -> str:
+             subject_ids=None, caption_notes: str = "", engine: str | None = None, media: str = "image",
+             motion: str = "", video_engine: str | None = None) -> str:
     with session() as s:
         brand_id = brand_id or get_or_create_brand(s).id
         p = Post(idea=idea, platform=get_platform(platform).key, brand_id=brand_id, campaign_id=campaign_id,
-                 conversation_id=conversation_id, subject_ids=subject_ids or [], status="queued")
+                 conversation_id=conversation_id, subject_ids=subject_ids or [], status="queued",
+                 media_type="video" if media == "video" else "image")
         s.add(p)
         s.flush()
         pid, data = p.id, post_dict(p)
     events.publish({"type": "post", "post": data})
-    enqueue("create", pid, {"caption_notes": caption_notes})
+    enqueue("create", pid, {"caption_notes": caption_notes, "engine": engine or "", "media": media,
+                            "motion": motion, "video_engine": video_engine or ""})
     return pid
 
 
-def new_edit(parent_id: str, instruction: str, rewrite_caption: bool = False, conversation_id=None) -> str:
+def new_edit(parent_id: str, instruction: str, rewrite_caption: bool = False, conversation_id=None,
+             engine: str | None = None) -> str:
     with session() as s:
         parent = s.get(Post, parent_id)
         if not parent or not parent.image_path:
@@ -357,11 +503,11 @@ def new_edit(parent_id: str, instruction: str, rewrite_caption: bool = False, co
         s.flush()
         pid, data = p.id, post_dict(p)
     events.publish({"type": "post", "post": data})
-    enqueue("edit", pid, {"instruction": instruction, "rewrite_caption": rewrite_caption})
+    enqueue("edit", pid, {"instruction": instruction, "rewrite_caption": rewrite_caption, "engine": engine or ""})
     return pid
 
 
-def new_subject(name: str, kind: str, request: str, generate: bool = True) -> str:
+def new_subject(name: str, kind: str, request: str, generate: bool = True, engine: str | None = None) -> str:
     with session() as s:
         sub = Subject(name=name.strip(), kind=kind or "person", notes=request if not generate else "")
         s.add(sub)
@@ -369,7 +515,7 @@ def new_subject(name: str, kind: str, request: str, generate: bool = True) -> st
         sid, data = sub.id, subject_dict(sub)
     events.publish({"type": "subject", "subject": data})
     if generate:
-        enqueue("subject", sid, {"request": request})
+        enqueue("subject", sid, {"request": request, "engine": engine or ""})
     return sid
 
 
@@ -385,7 +531,7 @@ def find_subjects(names: list[str]) -> tuple[list[str], list[str]]:
     return found, missing
 
 
-async def run_campaign(campaign_id: str, subject_ids: list[str] | None = None) -> None:
+async def run_campaign(campaign_id: str, subject_ids: list[str] | None = None, engine: str | None = None) -> None:
     """Planifica N ideas (en tandas de 25 para variedad) y las pone todas en la cola."""
     with session() as s:
         c = s.get(Campaign, campaign_id)
@@ -405,7 +551,8 @@ async def run_campaign(campaign_id: str, subject_ids: list[str] | None = None) -
             for it in ideas:
                 planned.append(it["idea"])
                 sids = [by_name[n] for n in it.get("subjects", []) if n in by_name] or (subject_ids if len(subjects) == 1 else [])
-                new_post(it["idea"], it["platform"], brand_id=brand_id, campaign_id=campaign_id, subject_ids=sids)
+                new_post(it["idea"], it["platform"], brand_id=brand_id, campaign_id=campaign_id, subject_ids=sids,
+                         engine=engine)
         status, error = "running", ""
     except Exception as e:
         log.exception("campaña %s", campaign_id)
@@ -416,7 +563,8 @@ async def run_campaign(campaign_id: str, subject_ids: list[str] | None = None) -
     events.publish({"type": "campaign", "id": campaign_id, "text": "En cola" if not error else f"Error: {error}"})
 
 
-def new_campaign(brief: str, count: int, platforms: list[str] | None = None, subject_ids=None) -> str:
+def new_campaign(brief: str, count: int, platforms: list[str] | None = None, subject_ids=None,
+                 engine: str | None = None) -> str:
     with session() as s:
         brand = get_or_create_brand(s)
         plats = [get_platform(p).key for p in (platforms or brand.platforms or ["instagram_feed"])]
@@ -424,7 +572,7 @@ def new_campaign(brief: str, count: int, platforms: list[str] | None = None, sub
         s.add(c)
         s.flush()
         cid = c.id
-    asyncio.create_task(run_campaign(cid, subject_ids))
+    asyncio.create_task(run_campaign(cid, subject_ids, engine))
     return cid
 
 
@@ -448,3 +596,47 @@ async def autopilot_loop() -> None:
         except Exception:
             log.exception("autopilot")
         await asyncio.sleep(300)
+
+
+# ============================================================ Scout 24/7
+async def run_scout(kinds: tuple[str, ...] = ("trend", "tool")) -> int:
+    """Investiga y guarda hallazgos. No ejecuta nada: una persona decide qué se usa."""
+    from app.db import Finding
+    with session() as s:
+        brand = get_or_create_brand(s)
+        subjects = s.query(Subject).all()
+        known = [f.title for f in s.query(Finding).order_by(Finding.created_at.desc()).limit(80)]
+    total = 0
+    for kind in kinds:
+        events.publish({"type": "scout", "text": f"Scout buscando {'tendencias' if kind == 'trend' else 'herramientas'}…"})
+        try:
+            found = await sp.scout(kind, brand, subjects, known)
+        except Exception as e:
+            log.warning("scout %s falló: %s", kind, e)
+            events.publish({"type": "scout", "text": f"Scout ({kind}) falló: {e}"})
+            continue
+        with session() as s:
+            for f in found:
+                if f["title"] in known:
+                    continue
+                s.add(Finding(kind=kind, title=f["title"], summary=f["summary"], url=f["url"], why=f["why"],
+                              how=f["how"], ideas=f["ideas"], platforms=f["platforms"]))
+                total += 1
+    events.publish({"type": "findings", "new": total})
+    return total
+
+
+async def scout_loop() -> None:
+    while True:
+        try:
+            with session() as s:
+                b = get_or_create_brand(s)
+                every, last = b.scout_every_hours or 0, b.scout_last
+                due = every > 0 and (last is None or (now() - last).total_seconds() >= every * 3600)
+                if due:
+                    b.scout_last = now()
+            if due:
+                await run_scout()
+        except Exception:
+            log.exception("scout loop")
+        await asyncio.sleep(600)
