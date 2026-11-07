@@ -1,0 +1,163 @@
+"""Base de datos (SQLite por defecto). Cada tarea usa su propia sesión."""
+import uuid
+from contextlib import contextmanager
+from datetime import datetime, timezone
+
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, Text, create_engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+
+from app.config import settings
+
+
+def _id() -> str:
+    return uuid.uuid4().hex[:12]
+
+
+def now() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Brand(Base):
+    """Perfil de marca: lo que Shelton sabe de tu cuenta para mantener coherencia."""
+    __tablename__ = "brands"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_id)
+    name: Mapped[str] = mapped_column(String, default="Mi marca")
+    description: Mapped[str] = mapped_column(Text, default="")      # nicho, producto, propuesta
+    audience: Mapped[str] = mapped_column(Text, default="")
+    tone: Mapped[str] = mapped_column(Text, default="cercano y profesional")
+    visual_style: Mapped[str] = mapped_column(Text, default="fotografía realista, luz natural, colores cálidos")
+    pillars: Mapped[list] = mapped_column(JSON, default=list)        # temas recurrentes
+    base_hashtags: Mapped[list] = mapped_column(JSON, default=list)
+    platforms: Mapped[list] = mapped_column(JSON, default=lambda: ["instagram_feed"])
+    autopilot_daily: Mapped[int] = mapped_column(Integer, default=0)  # posts automáticos por día
+    autopilot_hour: Mapped[int] = mapped_column(Integer, default=6)   # hora local del lote diario
+    autopilot_last: Mapped[str] = mapped_column(String, default="")   # fecha del último lote
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class Subject(Base):
+    """Banco de modelos: personaje, auto, lugar o producto recurrente, con sus fotos de referencia."""
+    __tablename__ = "subjects"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_id)
+    name: Mapped[str] = mapped_column(String, index=True)
+    kind: Mapped[str] = mapped_column(String, default="person")   # person/car/place/product/pet/other
+    description: Mapped[str] = mapped_column(Text, default="")    # descripción visual detallada (para prompts)
+    notes: Mapped[str] = mapped_column(Text, default="")          # personalidad, historia, uso
+    references: Mapped[list] = mapped_column(JSON, default=list)  # rutas de imágenes; la primera es la principal
+    alternatives: Mapped[list] = mapped_column(JSON, default=list)  # intentos de referencia no elegidos
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class Post(Base):
+    """Una pieza de contenido: imagen final + texto listo para publicar."""
+    __tablename__ = "posts"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_id)
+    brand_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    campaign_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    conversation_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    parent_id: Mapped[str | None] = mapped_column(String, nullable=True)  # si es una edición
+    subject_ids: Mapped[list] = mapped_column(JSON, default=list)         # modelos del banco que aparecen
+    idea: Mapped[str] = mapped_column(Text, default="")
+    platform: Mapped[str] = mapped_column(String, default="instagram_feed")
+    prompt: Mapped[str] = mapped_column(Text, default="")
+    seed: Mapped[int] = mapped_column(Integer, default=0)
+    raw_path: Mapped[str] = mapped_column(String, default="")     # salida del modelo
+    image_path: Mapped[str] = mapped_column(String, default="")   # recortada al formato final
+    width: Mapped[int] = mapped_column(Integer, default=0)
+    height: Mapped[int] = mapped_column(Integer, default=0)
+    caption: Mapped[str] = mapped_column(Text, default="")
+    hashtags: Mapped[list] = mapped_column(JSON, default=list)
+    alt_text: Mapped[str] = mapped_column(Text, default="")
+    qa_score: Mapped[float] = mapped_column(Float, default=0)
+    qa_notes: Mapped[str] = mapped_column(Text, default="")
+    qa_passed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Intentos que el juez puntuó más bajo. Nunca se borran: el humano puede elegir uno.
+    alternatives: Mapped[list] = mapped_column(JSON, default=list)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    # queued -> generating -> ready (revisión humana) -> approved -> published  (o failed / rejected)
+    # Solo una persona aprueba o rechaza. El juez opina; nunca borra ni descarta.
+    status: Mapped[str] = mapped_column(String, default="queued", index=True)
+    error: Mapped[str] = mapped_column(Text, default="")
+    publish_log: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+
+
+class Job(Base):
+    """Trabajo en cola: generar un post o editar uno existente."""
+    __tablename__ = "jobs"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_id)
+    kind: Mapped[str] = mapped_column(String)                     # "create" | "edit"
+    post_id: Mapped[str] = mapped_column(String, index=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String, default="pending", index=True)  # pending/running/done/failed
+    progress: Mapped[str] = mapped_column(String, default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+
+
+class Campaign(Base):
+    """Lote de posts planificados de una vez (p. ej. 50 diarios)."""
+    __tablename__ = "campaigns"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_id)
+    brand_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    brief: Mapped[str] = mapped_column(Text, default="")
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    platforms: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String, default="planning")  # planning/running/done/failed
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class Conversation(Base):
+    """Chat con Shelton. `api_messages` es el historial exacto para Claude (solo se añade)."""
+    __tablename__ = "conversations"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_id)
+    title: Mapped[str] = mapped_column(String, default="Nueva conversación")
+    api_messages: Mapped[list] = mapped_column(JSON, default=list)
+    display: Mapped[list] = mapped_column(JSON, default=list)   # lo que ve el usuario
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+
+
+settings.DATA_DIR.mkdir(parents=True, exist_ok=True)
+engine = create_engine(
+    settings.DATABASE_URL,
+    connect_args={"check_same_thread": False, "timeout": 30} if settings.DATABASE_URL.startswith("sqlite") else {},
+)
+SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+
+
+def init_db() -> None:
+    Base.metadata.create_all(engine)
+    if settings.DATABASE_URL.startswith("sqlite"):
+        with engine.connect() as c:
+            c.exec_driver_sql("PRAGMA journal_mode=WAL")
+
+
+@contextmanager
+def session():
+    s = SessionLocal()
+    try:
+        yield s
+        s.commit()
+    except Exception:
+        s.rollback()
+        raise
+    finally:
+        s.close()
+
+
+def get_or_create_brand(s) -> Brand:
+    brand = s.query(Brand).filter(Brand.active.is_(True)).first()
+    if not brand:
+        brand = Brand()
+        s.add(brand)
+        s.flush()
+    return brand

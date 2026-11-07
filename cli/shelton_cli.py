@@ -1,227 +1,87 @@
 #!/usr/bin/env python3
-"""Shelton CLI - Command-line interface for content generation"""
+"""CLI de Shelton. Habla con el servidor (python -m app.main debe estar corriendo).
 
-import typer
-import asyncio
-import httpx
+  python cli/shelton_cli.py chat                      # conversación con Shelton en la terminal
+  python cli/shelton_cli.py generate "idea" -p tiktok -n 3
+  python cli/shelton_cli.py campaign "brief" -n 50
+  python cli/shelton_cli.py status
+  python cli/shelton_cli.py export --status approved -o posts.zip
+"""
 import json
-from typing import Optional
-import time
+import os
 
-app = typer.Typer(help="Shelton - Multi-Agent Content Generation Platform")
+import httpx
+import typer
 
-BASE_URL = "http://localhost:8000/api"
+app = typer.Typer(help="Shelton — estudio de contenido multiagente")
+BASE = os.getenv("SHELTON_URL", "http://127.0.0.1:8000")
 
-@app.command()
-def generate(
-    prompt: str = typer.Argument(..., help="Content generation prompt"),
-    location: str = typer.Option("local", "--location", "-l", help="ComfyUI location: local or cloud"),
-    wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for completion")
-):
-    """Generate content from a prompt"""
 
-    typer.echo(f"🤖 Shelton - Generating content...\n")
-    typer.echo(f"📝 Prompt: {prompt}")
-    typer.echo(f"📍 Location: {location}\n")
+def _chat_once(message: str, conv: str | None) -> str | None:
+    with httpx.stream("POST", f"{BASE}/api/chat", json={"message": message, "conversation_id": conv},
+                      timeout=None) as r:
+        r.raise_for_status()
+        for line in r.iter_lines():
+            if not line.startswith("data: "):
+                continue
+            ev = json.loads(line[6:])
+            t = ev["type"]
+            if t == "conversation":
+                conv = ev["id"]
+            elif t == "status":
+                typer.secho(f"  · {ev['text']}", fg="bright_black")
+            elif t == "message":
+                typer.secho(f"\nShelton: {ev['text']}", fg="cyan")
+                for pid in ev.get("post_ids", []):
+                    typer.echo(f"  post {pid}: {BASE}/api/posts/{pid}")
+            elif t == "error":
+                typer.secho(f"Error: {ev['text']}", fg="red")
+    return conv
 
-    try:
-        # Send generation request
-        with httpx.Client() as client:
-            response = client.post(
-                f"{BASE_URL}/generate",
-                json={"prompt": prompt, "comfyui_location": location}
-            )
-            response.raise_for_status()
-            data = response.json()
-            job_id = data["job_id"]
-
-        typer.echo(f"✓ Job created: {job_id}")
-
-        if not wait:
-            typer.echo(f"✓ Processing started. Check status with: shelton status {job_id}")
-            return
-
-        # Poll for completion
-        typer.echo("\n⏳ Processing...\n")
-        _poll_job(job_id)
-
-    except Exception as e:
-        typer.echo(f"❌ Error: {e}", err=True)
-        raise typer.Exit(code=1)
 
 @app.command()
-def status(job_id: str = typer.Argument(..., help="Job ID")):
-    """Check job status"""
+def chat():
+    """Conversación interactiva con Shelton."""
+    conv = None
+    typer.secho("Shelton listo. Escribe 'salir' para terminar.", fg="green")
+    while True:
+        msg = typer.prompt("\nTú")
+        if msg.strip().lower() in ("salir", "exit", "quit"):
+            break
+        conv = _chat_once(msg, conv)
 
-    try:
-        with httpx.Client() as client:
-            response = client.get(f"{BASE_URL}/status/{job_id}")
-            response.raise_for_status()
-            job = response.json()
-
-        typer.echo(f"\n📊 Job Status: {job_id}\n")
-        typer.echo(f"Status: {job['status']}")
-
-        if job.get("error"):
-            typer.echo(f"❌ Error: {job['error']}")
-
-        if job.get("image_path"):
-            typer.echo(f"✓ Image: {job['image_path']}")
-            if job.get("qa_passed"):
-                typer.echo("✓ QA Passed")
-            else:
-                typer.echo("⚠ QA Issues")
-
-    except Exception as e:
-        typer.echo(f"❌ Error: {e}", err=True)
-        raise typer.Exit(code=1)
 
 @app.command()
-def content(content_id: str = typer.Argument(..., help="Content ID")):
-    """View content details"""
+def generate(idea: str, platform: str = typer.Option("instagram_feed", "-p"), count: int = typer.Option(1, "-n"),
+             subject: list[str] = typer.Option([], "-s", help="Modelos del banco por nombre")):
+    """Encola posts directamente (sin chat)."""
+    r = httpx.post(f"{BASE}/api/posts", json={"idea": idea, "platform": platform, "count": count, "subjects": subject})
+    r.raise_for_status()
+    typer.echo(json.dumps(r.json(), indent=2, ensure_ascii=False))
 
-    try:
-        with httpx.Client() as client:
-            response = client.get(f"{BASE_URL}/content/{content_id}")
-            response.raise_for_status()
-            content = response.json()
-
-        typer.echo(f"\n📋 Content: {content_id}\n")
-        typer.echo(f"Original Prompt: {content['original_prompt']}")
-        typer.echo(f"\nEnriched Prompt: {content['enriched_prompt']}")
-        typer.echo(f"\nImage: {content.get('image_path', 'N/A')}")
-
-        if content.get("metadata"):
-            typer.echo(f"\nMetadata:")
-            for key, value in content["metadata"].items():
-                typer.echo(f"  {key}: {value}")
-
-        typer.echo(f"\nQA Passed: {'✓' if content['qa_passed'] else '✗'}")
-        typer.echo(f"Human Approved: {'✓' if content['human_approved'] else '✗'}")
-
-    except Exception as e:
-        typer.echo(f"❌ Error: {e}", err=True)
-        raise typer.Exit(code=1)
 
 @app.command()
-def history(limit: int = typer.Option(10, "--limit", "-n", help="Number of items to show")):
-    """View content history"""
+def campaign(brief: str, count: int = typer.Option(50, "-n"), platform: list[str] = typer.Option([], "-p")):
+    """Planifica y encola un lote grande."""
+    r = httpx.post(f"{BASE}/api/campaigns", json={"brief": brief, "count": count, "platforms": platform})
+    r.raise_for_status()
+    typer.echo(f"Campaña {r.json()['id']} lanzada con {count} posts.")
 
-    try:
-        with httpx.Client() as client:
-            response = client.get(f"{BASE_URL}/history?limit={limit}")
-            response.raise_for_status()
-            items = response.json()
-
-        if not items:
-            typer.echo("No content history")
-            return
-
-        typer.echo(f"\n📚 Content History (last {limit})\n")
-
-        for i, item in enumerate(items, 1):
-            status_icon = "✓" if item.get("human_approved") else "⏳"
-            typer.echo(f"{i}. {status_icon} {item['original_prompt'][:60]}...")
-            typer.echo(f"   ID: {item['id']}")
-            typer.echo()
-
-    except Exception as e:
-        typer.echo(f"❌ Error: {e}", err=True)
-        raise typer.Exit(code=1)
 
 @app.command()
-def approve(
-    content_id: str = typer.Argument(..., help="Content ID"),
-    reject: bool = typer.Option(False, "--reject", help="Reject instead of approve")
-):
-    """Approve or reject content"""
+def status():
+    """Estado de Claude, motor de imagen y cola."""
+    typer.echo(json.dumps(httpx.get(f"{BASE}/api/health", timeout=30).json(), indent=2, ensure_ascii=False))
 
-    try:
-        approved = not reject
-        action = "reject" if reject else "approve"
-
-        with httpx.Client() as client:
-            response = client.post(
-                f"{BASE_URL}/approve",
-                json={
-                    "content_id": content_id,
-                    "approved": approved,
-                    "notes": f"Decision made via CLI"
-                }
-            )
-            response.raise_for_status()
-            result = response.json()
-
-        icon = "✓" if approved else "✗"
-        typer.echo(f"\n{icon} Content {action}ed: {content_id}")
-        typer.echo(result.get("message", "Done"))
-
-    except Exception as e:
-        typer.echo(f"❌ Error: {e}", err=True)
-        raise typer.Exit(code=1)
 
 @app.command()
-def health():
-    """Check API health"""
+def export(status: str = "approved", out: str = typer.Option("shelton_posts.zip", "-o")):
+    """Descarga un ZIP con imágenes + textos + CSV."""
+    r = httpx.get(f"{BASE}/api/export", params={"status": status}, timeout=120)
+    r.raise_for_status()
+    open(out, "wb").write(r.content)
+    typer.echo(f"Guardado en {out}")
 
-    try:
-        with httpx.Client() as client:
-            response = client.get(f"{BASE_URL}/health")
-            response.raise_for_status()
-            data = response.json()
-
-        typer.echo(f"\n✓ {data['app']} is healthy")
-
-    except Exception as e:
-        typer.echo(f"❌ API is down: {e}", err=True)
-        raise typer.Exit(code=1)
-
-def _poll_job(job_id: str, timeout: int = 300):
-    """Poll job status until completion"""
-
-    steps = [
-        "Copywriter enriching prompt...",
-        "Strategist analyzing content...",
-        "Generator creating image...",
-        "Editor refining image...",
-        "QA validating content...",
-        "Ready for human review!"
-    ]
-
-    start_time = time.time()
-    step = 0
-
-    with httpx.Client() as client:
-        while time.time() - start_time < timeout:
-            try:
-                response = client.get(f"{BASE_URL}/status/{job_id}")
-                response.raise_for_status()
-                job = response.json()
-
-                if job["status"] == "completed":
-                    typer.echo("✓ Processing complete!")
-                    typer.echo(f"Content ID: {job['content_id']}")
-                    typer.echo(f"Image: {job.get('image_path', 'N/A')}")
-                    return
-
-                elif job["status"] == "failed":
-                    typer.echo(f"\n❌ Processing failed: {job.get('error')}")
-                    raise typer.Exit(code=1)
-
-                else:
-                    # Show progress
-                    step = min(step + 1, len(steps) - 1)
-                    typer.echo(steps[step % len(steps)], nl=False)
-                    typer.echo("\r" + steps[step % len(steps)], nl=False)
-
-                time.sleep(1)
-
-            except httpx.HTTPError as e:
-                typer.echo(f"❌ API error: {e}", err=True)
-                raise typer.Exit(code=1)
-
-    typer.echo(f"\n❌ Job timeout after {timeout}s")
-    raise typer.Exit(code=1)
 
 if __name__ == "__main__":
     app()

@@ -1,246 +1,101 @@
-# 🤖 Shelton - Multi-Agent Content Generation Platform
+# Shelton — estudio de contenido multiagente para redes
 
-A complete ecosystem for generating high-quality social media content using AI. Shelton coordinates multiple specialized agents to transform your ideas into polished, ready-to-publish images.
+Le dices a Shelton lo que quieres ("hazme 50 posts de esta semana para Instagram y TikTok", "crea a Valentina y ponla en la playa") y su equipo de agentes lo deja **listo para publicar**: imagen en el formato exacto de cada red, caption, hashtags y texto alternativo. Corre en local con tu GPU.
 
-## ✨ Features
+## Cómo funciona
 
-- **Multi-Agent Architecture**: Copywriter, Strategist, Generator, Editor, QA Judge
-- **Sequential Processing**: Each agent builds on the previous one's output
-- **Z-Image Turbo**: Fast, realistic image generation
-- **Qwen-Image-Edit**: Intelligent image refinement
-- **Dual Interface**: Web dashboard + CLI
-- **ComfyUI Integration**: Works with both local and cloud instances
-- **Human Review**: Final approval before publishing
-- **Content History**: Track and manage all generated content
+**Shelton es el jefe.** Conversa contigo y dirige a sus subagentes con herramientas:
 
-## 🚀 Quick Start
+| Subagente | Qué hace |
+|---|---|
+| Director creativo | Convierte tu idea en el prompt ideal para el modelo de imagen |
+| Motor de imagen | **Z-Image Turbo** (fotorrealista, ~8 pasos) y **Qwen-Image-Edit 2509** (ediciones y escenas con modelos del banco), vía ComfyUI |
+| Juez de calidad | *Mira* cada imagen (visión), la puntúa y pide reintento si tiene defectos |
+| Redactor | Caption, hashtags y alt text según la red y el tono de tu marca |
+| Planificador | Diseña lotes grandes de ideas distintas (campañas de 10, 50, 200) |
+| Diseñador del banco | Crea personajes, autos, lugares o productos recurrentes con foto de referencia |
 
-### 1. Install Dependencies
+```
+pedido → Shelton → director creativo → motor de imagen → juez (reintenta si < nota) → recorte al formato → redactor → "Para revisar"
+```
+
+**Decide una persona.** El juez solo opina: nunca borra ni aprueba nada. Los intentos que reprueba quedan guardados y en el detalle del post puedes elegir cualquiera ("Usar esta"). Todo termina en *Para revisar* hasta que tú lo apruebes.
+
+**Banco de modelos.** Crea un personaje, auto o lugar con nombre propio, o sube tus fotos. Cuando lo nombres en un pedido, Shelton lo busca y usa su foto como referencia en Qwen-Image-Edit para mantener la misma cara o el mismo auto en escenas nuevas.
+
+**Volumen.** Las campañas se planifican en tandas y se procesan en cola: la GPU genera de a una imagen mientras Claude escribe y juzga en paralelo. Con el **piloto automático** (sección *Marca*) se lanza un lote diario de N posts a la hora que elijas.
+
+## Instalación
+
+### 1. ComfyUI + modelos (en la máquina con GPU)
+
+Instala [ComfyUI](https://github.com/comfyanonymous/ComfyUI) actualizado y descarga los modelos en `ComfyUI/models/`:
+
+| Archivo | Carpeta | Fuente (Hugging Face) |
+|---|---|---|
+| `z_image_turbo_bf16.safetensors` | `diffusion_models/` | `Comfy-Org/z_image_turbo` → `split_files/diffusion_models/` |
+| `qwen_3_4b.safetensors` | `text_encoders/` | `Comfy-Org/z_image_turbo` → `split_files/text_encoders/` |
+| `ae.safetensors` | `vae/` | `Comfy-Org/z_image_turbo` → `split_files/vae/` |
+| `qwen_image_edit_2509_fp8_e4m3fn.safetensors` | `diffusion_models/` | `Comfy-Org/Qwen-Image-Edit_ComfyUI` |
+| `qwen_2.5_vl_7b_fp8_scaled.safetensors` | `text_encoders/` | `Comfy-Org/Qwen-Image_ComfyUI` |
+| `qwen_image_vae.safetensors` | `vae/` | `Comfy-Org/Qwen-Image_ComfyUI` |
+| `Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors` | `loras/` | `lightx2v/Qwen-Image-Lightning` |
+
+Los nombres se pueden cambiar en `.env`. La pantalla **Estado** de Shelton te dice exactamente qué modelo o nodo falta en tu ComfyUI.
+
+**RTX 3090 (24 GB):** todo funciona con los valores por defecto.
+**GPU de 6-8 GB (p. ej. 3050):** usa Z-Image en GGUF (nodo [ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF)) con `WORKFLOW_GENERATE=z_image_turbo_gguf.json`, `GEN_UNET=z_image_turbo-Q4_K_M.gguf` y `GEN_SCALE=0.75`. Qwen-Image-Edit (20B) será muy lento ahí, o directamente no correrá: para la edición y el banco de modelos usa la 3090.
+**Sin GPU:** `IMAGE_ENGINE=mock` genera imágenes de prueba para trabajar la interfaz.
+
+### 2. Shelton
 
 ```bash
-pip install -r requirements.txt
+cp .env.example .env      # pon tu ANTHROPIC_API_KEY
+./start.sh                # Windows: doble clic en start.bat
 ```
 
-### 2. Configure Environment
+Abre http://127.0.0.1:8000
+
+## Uso
+
+- **Chat con Shelton:** pide lo que quieras en lenguaje natural. Puedes adjuntar fotos para editarlas o guardarlas en el banco.
+- **Galería:** todo lo generado, con filtros por estado. Selecciona varios para aprobarlos o descargarlos en un ZIP (imágenes + textos + `posts.csv` para Metricool, Buffer, Meta Business Suite…).
+- **Detalle del post:** edita el texto, pide cambios a la imagen (se crea una versión nueva; la original se conserva), revisa los intentos que el juez reprobó, aprueba o publica en Telegram.
+- **Campañas:** lotes grandes desde un brief.
+- **Banco de modelos:** personajes, autos, lugares y productos recurrentes.
+- **Marca:** tono, estilo visual, pilares, hashtags fijos y piloto automático diario.
+
+CLI (con el servidor corriendo):
 
 ```bash
-cp .env.example .env
-# Edit .env with your settings:
-# - ANTHROPIC_API_KEY: Your Claude API key
-# - COMFYUI_LOCAL_URL: Your local ComfyUI instance
-# - COMFYUI_CLOUD_URL: Optional cloud instance
+python cli/shelton_cli.py chat
+python cli/shelton_cli.py campaign "lanzamiento menú de otoño" -n 50
+python cli/shelton_cli.py export --status approved -o semana.zip
 ```
 
-### 3. Ensure ComfyUI is Running
+## Formatos
 
-Make sure ComfyUI is running on your specified local URL (default: http://localhost:8188)
+Instagram feed 4:5 (1080×1350) · Story/Reels 9:16 (1080×1920) · TikTok 9:16 · Telegram 4:5 · Facebook 4:5 · X 16:9 · Pinterest 2:3 · Miniatura YouTube 16:9 · Cuadrado 1:1. Cada imagen se genera en su proporción nativa (~1,3 MP) y se recorta al tamaño exacto en JPEG de alta calidad.
 
-### 4. Start the Server
+## Usar tus propios workflows
 
-```bash
-python app/main.py
-```
+Exporta cualquier workflow de ComfyUI con **Save (API Format)**, pon marcadores `{{prompt}}`, `{{width}}`, `{{height}}`, `{{seed}}`, `{{steps}}`, `{{unet}}`, `{{clip}}`, `{{vae}}`, `{{lora}}`, `{{image}}` o `{{instruction}}` donde correspondan y apunta `WORKFLOW_GENERATE` / `WORKFLOW_EDIT` / `WORKFLOW_SUBJECT` a ese archivo.
 
-The web dashboard will be available at: `http://localhost:8000`
-
-## 📝 Usage
-
-### Web Dashboard
-
-1. Open `http://localhost:8000` in your browser
-2. Enter your content description
-3. Choose ComfyUI location (local or cloud)
-4. Click "Generate Content"
-5. Wait for processing to complete
-6. Review results and approve or reject
-
-### Command Line Interface
-
-```bash
-# Generate content
-python cli/shelton_cli.py "Woman cooking pasta in modern kitchen with natural light"
-
-# Check job status
-python cli/shelton_cli.py status <job_id>
-
-# View content details
-python cli/shelton_cli.py content <content_id>
-
-# View history
-python cli/shelton_cli.py history --limit 10
-
-# Approve content
-python cli/shelton_cli.py approve <content_id>
-
-# Reject content
-python cli/shelton_cli.py approve <content_id> --reject
-
-# Check API health
-python cli/shelton_cli.py health
-```
-
-## 🏗️ Architecture
-
-### Processing Pipeline
+## Estructura
 
 ```
-User Input
-    ↓
-[Copywriter Agent] → Enrich prompt with details
-    ↓
-[Strategist Agent] → Define style, platform, tone
-    ↓
-[Generator Agent] → Create image with Z-Image Turbo
-    ↓
-[Editor Agent] → Refine with Qwen-Image-Edit
-    ↓
-[QA Judge Agent] → Validate quality
-    ↓
-[Human Reviewer] → Final approval
-    ↓
-Published Content
+app/
+  main.py              API y servidor web
+  agents/shelton.py    Shelton (jefe): chat + herramientas
+  agents/specialists.py subagentes: director creativo, juez, redactor, planificador, banco
+  pipeline.py          cola de trabajos y cadena de producción
+  engines/             motores de imagen (comfyui, mock)
+  comfyui/             cliente de ComfyUI y plantillas de workflow
+  publishers/          publicación (Telegram) y exportación ZIP/CSV
+  platforms.py         formatos por red social
+  db.py                base de datos (SQLite en data/)
+web/                   interfaz
+tests/                 prueba de la cadena completa sin GPU ni API
 ```
 
-### Database
-
-SQLite (development) / PostgreSQL (production)
-
-Tables:
-- `jobs` - Processing jobs
-- `content` - Generated content
-- `processing_logs` - Agent execution history
-
-## 🔑 API Endpoints
-
-### Generate Content
-```
-POST /api/generate
-{
-  "prompt": "Woman cooking in kitchen",
-  "comfyui_location": "local"  // or "cloud"
-}
-```
-
-### Check Status
-```
-GET /api/status/{job_id}
-```
-
-### Get Content
-```
-GET /api/content/{content_id}
-```
-
-### Approve Content
-```
-POST /api/approve
-{
-  "content_id": "...",
-  "approved": true,
-  "notes": "..."
-}
-```
-
-### View History
-```
-GET /api/history?skip=0&limit=20
-```
-
-## 🎨 Agents Explained
-
-### Copywriter Agent
-Transforms simple user requests into detailed, evocative prompts for Z-Image Turbo. Focuses on:
-- Physical appearance details
-- Lighting and atmosphere
-- Camera/photography style
-- Textures and materials
-
-### Strategist Agent
-Analyzes the enriched prompt and defines:
-- Visual style (lifestyle, editorial, documentary, etc.)
-- Target platform (Instagram, TikTok, LinkedIn, etc.)
-- Tone and mood
-- Optimal aspect ratio
-- Any needed adjustments
-
-### Generator Agent
-Creates images using Z-Image Turbo via ComfyUI:
-- Configured for 8 steps (optimized for quality/speed)
-- Supports custom prompts
-- Works with both local and cloud ComfyUI
-
-### Editor Agent
-Refines images using Qwen-Image-Edit:
-- Adjusts lighting and shadows
-- Applies strategic improvements
-- Maintains image consistency
-
-### QA Judge Agent
-Validates quality:
-- Technical assessment (artifacts, distortions)
-- Prompt adherence checking
-- Realism evaluation
-- Safety validation
-
-## 🔧 Configuration
-
-### Models
-The system uses:
-- **Z-Image Turbo** (6B parameters): Fast, realistic image generation
-- **Qwen-Image-Edit** (20B parameters): Intelligent image refinement
-- **Claude API**: Agent reasoning and decision-making
-
-### ComfyUI Setup
-
-Download and install ComfyUI, then:
-
-1. **Install Z-Image Turbo models:**
-   - Download `z_image_turbo_bf16.safetensors` to `models/diffusion_models/`
-   - Download `qwen_3_4b` to `models/text_encoders/`
-
-2. **Install Qwen-Image-Edit models:**
-   - Download `qwen_image_edit_2511.safetensors` to `models/diffusion_models/`
-   - Download `qwen_2.5_vl_7b_fp8_scaled` to `models/text_encoders/`
-
-## 📊 Performance
-
-- **Average generation time**: 30-60 seconds (depending on ComfyUI location)
-- **Database queries**: Optimized with indexed job_id and created_at
-- **Concurrent jobs**: Limited by available VRAM
-
-## 🐛 Troubleshooting
-
-### ComfyUI Connection Issues
-- Verify ComfyUI is running on the configured URL
-- Check firewall settings
-- Try local first, then cloud if available
-
-### Model Missing Errors
-- Ensure all required models are downloaded to ComfyUI
-- Check model file names match exactly
-- Restart ComfyUI after adding new models
-
-### Generation Timeout
-- Increase timeout in ComfyUI settings
-- Check system resources (VRAM, CPU)
-- Try cloud ComfyUI if available
-
-## 📄 License
-
-This project is open source and available under the MIT License.
-
-## 🤝 Contributing
-
-Contributions are welcome! Areas for improvement:
-- Additional specialized agents
-- Advanced image curation workflows
-- Social media posting integration
-- Analytics and performance metrics
-
-## 📧 Support
-
-For issues or questions, please create an issue in the repository.
-
----
-
-**Powered by Claude AI, ComfyUI, and open-source AI models**
+Pruebas: `pip install pytest && python -m pytest -q`

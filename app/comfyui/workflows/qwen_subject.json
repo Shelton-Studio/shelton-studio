@@ -1,0 +1,20 @@
+{
+  "_doc": "Generación con referencia (banco de modelos): Qwen-Image-Edit 2509 recibe la foto del personaje/auto/lugar y crea una escena nueva en el tamaño pedido. Shelton añade image2/image3 si hay más modelos.",
+  "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "{{unet}}", "weight_dtype": "default"}},
+  "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": "{{clip}}", "type": "qwen_image", "device": "default"}},
+  "3": {"class_type": "VAELoader", "inputs": {"vae_name": "{{vae}}"}},
+  "4": {"class_type": "LoraLoaderModelOnly", "inputs": {"model": ["1", 0], "lora_name": "{{lora}}", "strength_model": 1.0}},
+  "5": {"class_type": "ModelSamplingAuraFlow", "inputs": {"model": ["4", 0], "shift": 3}},
+  "6": {"class_type": "CFGNorm", "inputs": {"model": ["5", 0], "strength": 1.0}},
+  "7": {"class_type": "LoadImage", "inputs": {"image": "{{image}}"}},
+  "8": {"class_type": "ImageScaleToTotalPixels", "inputs": {"image": ["7", 0], "upscale_method": "lanczos", "megapixels": 1.0, "resolution_steps": 1}},
+  "9": {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {"clip": ["2", 0], "prompt": "{{prompt}}", "vae": ["3", 0], "image1": ["8", 0]}},
+  "10": {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {"clip": ["2", 0], "prompt": "", "vae": ["3", 0], "image1": ["8", 0]}},
+  "11": {"class_type": "EmptySD3LatentImage", "inputs": {"width": "{{width}}", "height": "{{height}}", "batch_size": 1}},
+  "12": {"class_type": "KSampler", "inputs": {
+    "model": ["6", 0], "positive": ["9", 0], "negative": ["10", 0], "latent_image": ["11", 0],
+    "seed": "{{seed}}", "steps": "{{steps}}", "cfg": 1.0,
+    "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}},
+  "13": {"class_type": "VAEDecode", "inputs": {"samples": ["12", 0], "vae": ["3", 0]}},
+  "14": {"class_type": "SaveImage", "inputs": {"images": ["13", 0], "filename_prefix": "shelton/subject"}}
+}

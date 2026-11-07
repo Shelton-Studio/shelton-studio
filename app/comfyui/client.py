@@ -1,131 +1,138 @@
-import httpx
+"""Cliente de la API de ComfyUI: encola workflows, espera el resultado y descarga las imágenes."""
 import asyncio
+import copy
 import json
-from typing import Dict, Any
+import re
+import time
+import uuid
+from pathlib import Path
+from typing import Any
+
+import httpx
+
 from app.config import settings
 
+WORKFLOW_DIR = Path(__file__).parent / "workflows"
+_PLACEHOLDER = re.compile(r"\{\{(\w+)\}\}")
+
+
+class ComfyUIError(RuntimeError):
+    pass
+
+
+def load_workflow(name: str) -> dict:
+    p = Path(name)
+    if not p.is_absolute():
+        p = WORKFLOW_DIR / name
+    if not p.exists():
+        raise ComfyUIError(f"No existe la plantilla de workflow: {p}")
+    data = json.loads(p.read_text(encoding="utf-8"))
+    return {k: v for k, v in data.items() if not k.startswith("_")}  # quita comentarios "_doc"
+
+
+def fill_workflow(workflow: dict, values: dict[str, Any]) -> dict:
+    """Reemplaza {{clave}}. Si el valor completo es un marcador, conserva el tipo (int, float...)."""
+    def sub(v):
+        if isinstance(v, str):
+            m = _PLACEHOLDER.fullmatch(v)
+            if m and m.group(1) in values:
+                return values[m.group(1)]
+            return _PLACEHOLDER.sub(lambda mm: str(values.get(mm.group(1), mm.group(0))), v)
+        if isinstance(v, dict):
+            return {k: sub(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [sub(x) for x in v]
+        return v
+    filled = sub(copy.deepcopy(workflow))
+    missing = sorted(set(_PLACEHOLDER.findall(json.dumps(filled))))
+    if missing:
+        raise ComfyUIError(f"Faltan valores para el workflow: {missing}")
+    return filled
+
+
 class ComfyUIClient:
-    """Client for ComfyUI API - handles both local and cloud connections"""
+    def __init__(self, base_url: str | None = None, token: str | None = None):
+        self.base = (base_url or settings.COMFYUI_URL).rstrip("/")
+        self.headers = {"Authorization": f"Bearer {token or settings.COMFYUI_TOKEN}"} if (token or settings.COMFYUI_TOKEN) else {}
+        self.client_id = uuid.uuid4().hex
 
-    def __init__(self):
-        self.local_url = settings.COMFYUI_LOCAL_URL
-        self.cloud_url = settings.COMFYUI_CLOUD_URL
-        self.cloud_token = settings.COMFYUI_CLOUD_TOKEN
+    def _http(self, timeout: float = 30) -> httpx.AsyncClient:
+        return httpx.AsyncClient(base_url=self.base, headers=self.headers, timeout=timeout)
 
-    async def execute_workflow(
-        self,
-        workflow: Dict[str, Any],
-        location: str = "local"
-    ) -> Dict[str, Any]:
-        """Execute workflow on selected ComfyUI instance"""
+    async def system_stats(self) -> dict:
+        async with self._http(5) as c:
+            r = await c.get("/system_stats")
+            r.raise_for_status()
+            return r.json()
 
-        if location == "local":
-            return await self._execute_local(workflow)
-        elif location == "cloud":
-            return await self._execute_cloud(workflow)
-        else:
-            raise ValueError(f"Unknown location: {location}")
+    async def object_info(self, node: str | None = None) -> dict:
+        async with self._http(60) as c:
+            r = await c.get(f"/object_info/{node}" if node else "/object_info")
+            r.raise_for_status()
+            return r.json()
 
-    async def _execute_local(self, workflow: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute workflow on local ComfyUI instance"""
+    async def upload_image(self, data: bytes, filename: str) -> str:
+        async with self._http(60) as c:
+            r = await c.post("/upload/image", files={"image": (filename, data, "image/png")},
+                             data={"overwrite": "true", "type": "input"})
+            r.raise_for_status()
+            j = r.json()
+            return f"{j['subfolder']}/{j['name']}" if j.get("subfolder") else j["name"]
 
-        try:
-            async with httpx.AsyncClient(timeout=300.0) as client:
-                # Prompt endpoint (queues the workflow)
-                response = await client.post(
-                    f"{self.local_url}/prompt",
-                    json={"prompt": workflow}
-                )
+    async def run(self, workflow: dict, on_progress=None) -> list[bytes]:
+        """Ejecuta el workflow y devuelve los bytes de todas las imágenes de salida."""
+        async with self._http(30) as c:
+            r = await c.post("/prompt", json={"prompt": workflow, "client_id": self.client_id})
+            if r.status_code != 200:
+                raise ComfyUIError(_explain_prompt_error(r))
+            prompt_id = r.json()["prompt_id"]
 
-                if response.status_code != 200:
-                    return {
-                        "success": False,
-                        "error": f"ComfyUI error: {response.text}"
-                    }
+            start = time.monotonic()
+            while time.monotonic() - start < settings.COMFYUI_TIMEOUT:
+                await asyncio.sleep(0.75)
+                h = await c.get(f"/history/{prompt_id}")
+                if h.status_code != 200:
+                    continue
+                entry = h.json().get(prompt_id)
+                if not entry:
+                    if on_progress:
+                        await on_progress(f"en GPU ({int(time.monotonic() - start)}s)")
+                    continue
+                status = entry.get("status", {})
+                if status.get("status_str") == "error":
+                    raise ComfyUIError(_explain_exec_error(status))
+                if not status.get("completed", True):
+                    continue
+                images = []
+                for node_out in entry.get("outputs", {}).values():
+                    for img in node_out.get("images", []):
+                        if img.get("type") != "output":
+                            continue
+                        v = await c.get("/view", params={"filename": img["filename"],
+                                                         "subfolder": img.get("subfolder", ""),
+                                                         "type": img["type"]}, timeout=120)
+                        v.raise_for_status()
+                        images.append(v.content)
+                if not images:
+                    raise ComfyUIError("ComfyUI terminó pero no devolvió imágenes (¿falta un nodo SaveImage?)")
+                return images
+            raise ComfyUIError(f"Tiempo de espera agotado ({settings.COMFYUI_TIMEOUT}s)")
 
-                result = response.json()
-                prompt_id = result.get("prompt_id")
 
-                # Poll for completion
-                if prompt_id:
-                    return await self._wait_for_completion(prompt_id, "local")
-                else:
-                    return {"success": False, "error": "No prompt_id returned"}
+def _explain_prompt_error(r: httpx.Response) -> str:
+    try:
+        j = r.json()
+    except Exception:
+        return f"ComfyUI rechazó el workflow ({r.status_code}): {r.text[:500]}"
+    parts = [j.get("error", {}).get("message", "error")]
+    for node_id, info in (j.get("node_errors") or {}).items():
+        for e in info.get("errors", []):
+            parts.append(f"nodo {node_id} ({info.get('class_type')}): {e.get('message')} {e.get('details', '')}".strip())
+    return "ComfyUI rechazó el workflow: " + " | ".join(parts)
 
-        except Exception as e:
-            return {"success": False, "error": str(e)}
 
-    async def _execute_cloud(self, workflow: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute workflow on cloud ComfyUI instance"""
-
-        if not self.cloud_url or not self.cloud_token:
-            return {
-                "success": False,
-                "error": "Cloud ComfyUI not configured"
-            }
-
-        try:
-            headers = {"Authorization": f"Bearer {self.cloud_token}"}
-
-            async with httpx.AsyncClient(timeout=300.0) as client:
-                response = await client.post(
-                    f"{self.cloud_url}/prompt",
-                    json={"prompt": workflow},
-                    headers=headers
-                )
-
-                if response.status_code != 200:
-                    return {
-                        "success": False,
-                        "error": f"Cloud API error: {response.text}"
-                    }
-
-                result = response.json()
-                prompt_id = result.get("prompt_id")
-
-                if prompt_id:
-                    return await self._wait_for_completion(prompt_id, "cloud")
-                else:
-                    return {"success": False, "error": "No prompt_id returned"}
-
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    async def _wait_for_completion(
-        self,
-        prompt_id: str,
-        location: str,
-        timeout: int = 300
-    ) -> Dict[str, Any]:
-        """Wait for workflow to complete"""
-
-        base_url = self.local_url if location == "local" else self.cloud_url
-        headers = {"Authorization": f"Bearer {self.cloud_token}"} if location == "cloud" else {}
-
-        start_time = asyncio.get_event_loop().time()
-
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            while asyncio.get_event_loop().time() - start_time < timeout:
-                try:
-                    response = await client.get(
-                        f"{base_url}/history/{prompt_id}",
-                        headers=headers
-                    )
-
-                    if response.status_code == 200:
-                        history = response.json()
-                        if prompt_id in history:
-                            # Workflow completed
-                            return {
-                                "success": True,
-                                "prompt_id": prompt_id,
-                                "output": history[prompt_id]
-                            }
-
-                    await asyncio.sleep(1)  # Check every second
-
-                except Exception as e:
-                    print(f"Error checking status: {e}")
-                    await asyncio.sleep(2)
-
-        return {"success": False, "error": "Workflow execution timeout"}
+def _explain_exec_error(status: dict) -> str:
+    for kind, data in status.get("messages", []):
+        if kind == "execution_error":
+            return f"Error en ComfyUI ({data.get('node_type')}): {data.get('exception_message', '').strip()[:400]}"
+    return "Error de ejecución en ComfyUI"

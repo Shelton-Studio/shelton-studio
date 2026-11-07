@@ -1,0 +1,16 @@
+{
+  "_doc": "Z-Image Turbo (texto -> imagen). Formato API de ComfyUI. Los {{marcadores}} los rellena Shelton.",
+  "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "{{unet}}", "weight_dtype": "default"}},
+  "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": "{{clip}}", "type": "lumina2", "device": "default"}},
+  "3": {"class_type": "VAELoader", "inputs": {"vae_name": "{{vae}}"}},
+  "4": {"class_type": "ModelSamplingAuraFlow", "inputs": {"model": ["1", 0], "shift": 3}},
+  "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": "{{prompt}}"}},
+  "6": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["5", 0]}},
+  "7": {"class_type": "EmptySD3LatentImage", "inputs": {"width": "{{width}}", "height": "{{height}}", "batch_size": 1}},
+  "8": {"class_type": "KSampler", "inputs": {
+    "model": ["4", 0], "positive": ["5", 0], "negative": ["6", 0], "latent_image": ["7", 0],
+    "seed": "{{seed}}", "steps": "{{steps}}", "cfg": 1.0,
+    "sampler_name": "res_multistep", "scheduler": "simple", "denoise": 1.0}},
+  "9": {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["3", 0]}},
+  "10": {"class_type": "SaveImage", "inputs": {"images": ["9", 0], "filename_prefix": "shelton/gen"}}
+}
