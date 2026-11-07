@@ -4,153 +4,27 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Shelton Studio</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%238b5cf6'/><text x='16' y='22' font-size='17' text-anchor='middle' fill='white' font-family='Arial' font-weight='bold'>S</text></svg>">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<div class="app">
-  <aside class="nav">
-    <div class="logo"><span class="logo-mark">S</span><div><b>Shelton</b><small>Studio</small></div></div>
-    <button class="nav-item active" data-view="chat"><i>💬</i><span>Shelton</span></button>
-    <button class="nav-item" data-view="gallery"><i>🖼️</i><span>Galería</span><em id="badge-ready"></em></button>
-    <button class="nav-item" data-view="campaigns"><i>🚀</i><span>Campañas</span></button>
-    <button class="nav-item" data-view="bank"><i>👤</i><span>Banco de modelos</span></button>
-    <button class="nav-item" data-view="brand"><i>🏷️</i><span>Marca</span></button>
-    <button class="nav-item" data-view="status"><i>⚙️</i><span>Estado</span></button>
-    <div class="nav-foot" id="queue-pill">cola: –</div>
-  </aside>
-
-  <main>
-    <!-- CHAT -->
-    <section class="view active" id="view-chat">
-      <div class="chat-layout">
-        <div class="convs">
-          <button class="btn primary block" id="new-chat">+ Nueva conversación</button>
-          <div id="conv-list"></div>
-        </div>
-        <div class="chat">
-          <div class="messages" id="messages">
-            <div class="welcome" id="welcome">
-              <h1>Hola, soy Shelton.</h1>
-              <p>Dirijo a todo el equipo: director creativo, motor de imagen, juez de calidad, redactor y planificador. Dime qué necesitas y lo saco listo para publicar.</p>
-              <div class="chips">
-                <button class="chip">Hazme 4 posts para Instagram de una cafetería de especialidad, estilo cálido y natural</button>
-                <button class="chip">Crea un personaje llamado Valentina: 26 años, pelo rizado castaño, estilo urbano, influencer fitness</button>
-                <button class="chip">Planifica 50 posts para esta semana mezclando Instagram, TikTok y Telegram</button>
-                <button class="chip">Haz 3 posts de TikTok con Valentina entrenando en distintos lugares</button>
-              </div>
-            </div>
-          </div>
-          <form class="composer" id="composer">
-            <div class="attachments" id="attachments"></div>
-            <div class="composer-row">
-              <label class="icon-btn" title="Subir imagen">📎<input type="file" id="file-input" accept="image/*" multiple hidden></label>
-              <textarea id="input" rows="1" placeholder="Pídele a Shelton lo que quieras…"></textarea>
-              <button class="btn primary" id="send">Enviar</button>
-            </div>
-          </form>
-        </div>
-      </div>
-    </section>
-
-    <!-- GALERÍA -->
-    <section class="view" id="view-gallery">
-      <header class="view-head">
-        <h2>Galería</h2>
-        <div class="filters" id="status-filters">
-          <button class="pill active" data-status="">Todo</button>
-          <button class="pill" data-status="queued,generating">En proceso</button>
-          <button class="pill" data-status="ready">Para revisar</button>
-          <button class="pill" data-status="approved">Aprobados</button>
-          <button class="pill" data-status="published">Publicados</button>
-          <button class="pill" data-status="failed,rejected">Fallidos</button>
-        </div>
-        <div class="head-actions">
-          <span class="muted" id="sel-count"></span>
-          <button class="btn" id="bulk-approve">Aprobar selección</button>
-          <button class="btn" id="export">Descargar ZIP</button>
-        </div>
-      </header>
-      <form class="quick" id="quick-form">
-        <input id="quick-idea" placeholder="Generación rápida: describe la imagen…" required>
-        <select id="quick-platform"></select>
-        <input id="quick-count" type="number" min="1" max="12" value="1" title="Cantidad">
-        <button class="btn primary">Generar</button>
-      </form>
-      <div class="grid" id="grid"></div>
-      <button class="btn block" id="load-more" hidden>Cargar más</button>
-    </section>
-
-    <!-- CAMPAÑAS -->
-    <section class="view" id="view-campaigns">
-      <header class="view-head"><h2>Campañas</h2></header>
-      <form class="card form" id="campaign-form">
-        <label>Brief<textarea name="brief" rows="3" placeholder="Ej: semana de lanzamiento del nuevo menú de otoño, tono cálido, promo 2x1 el viernes" required></textarea></label>
-        <div class="row">
-          <label>Cantidad<input name="count" type="number" min="1" max="200" value="50"></label>
-          <label class="grow">Modelos del banco (opcional)<input name="subjects" placeholder="Valentina, Mustang Rojo"></label>
-        </div>
-        <div class="checks" id="campaign-platforms"></div>
-        <button class="btn primary">Lanzar campaña</button>
-      </form>
-      <div id="campaign-list"></div>
-    </section>
-
-    <!-- BANCO -->
-    <section class="view" id="view-bank">
-      <header class="view-head"><h2>Banco de modelos</h2><p class="muted">Personajes, autos, lugares y productos recurrentes. Shelton los reconoce por su nombre y mantiene su identidad en cada post.</p></header>
-      <form class="card form" id="subject-form">
-        <div class="row">
-          <label class="grow">Nombre<input name="name" placeholder="Valentina" required></label>
-          <label>Tipo<select name="kind">
-            <option value="person">Persona</option><option value="car">Auto</option><option value="place">Lugar</option>
-            <option value="product">Producto</option><option value="pet">Mascota</option><option value="other">Otro</option>
-          </select></label>
-        </div>
-        <label>Cómo es<textarea name="request" rows="2" placeholder="26 años, pelo rizado castaño, ojos verdes, estilo urbano deportivo…"></textarea></label>
-        <div class="row">
-          <label class="grow">…o sube tus fotos de referencia<input type="file" name="photos" accept="image/*" multiple></label>
-        </div>
-        <button class="btn primary">Guardar en el banco</button>
-      </form>
-      <div class="bank-grid" id="bank-grid"></div>
-    </section>
-
-    <!-- MARCA -->
-    <section class="view" id="view-brand">
-      <header class="view-head"><h2>Marca</h2><p class="muted">Todo el contenido sigue este perfil.</p></header>
-      <form class="card form" id="brand-form">
-        <label>Nombre<input name="name"></label>
-        <label>Qué es / qué vende<textarea name="description" rows="2"></textarea></label>
-        <label>Público<input name="audience"></label>
-        <div class="row">
-          <label class="grow">Tono<input name="tone"></label>
-          <label class="grow">Estilo visual<input name="visual_style"></label>
-        </div>
-        <label>Pilares de contenido (separados por coma)<input name="pillars"></label>
-        <label>Hashtags fijos<input name="base_hashtags" placeholder="#mimarca #ciudad"></label>
-        <div class="checks" id="brand-platforms"></div>
-        <div class="row">
-          <label>Piloto automático (posts/día)<input name="autopilot_daily" type="number" min="0" max="200"></label>
-          <label>Hora del lote diario<input name="autopilot_hour" type="number" min="0" max="23"></label>
-        </div>
-        <button class="btn primary">Guardar</button>
-      </form>
-    </section>
-
-    <!-- ESTADO -->
-    <section class="view" id="view-status">
-      <header class="view-head"><h2>Estado del sistema</h2><button class="btn" id="refresh-status">Actualizar</button></header>
-      <div id="status-box" class="card"></div>
-    </section>
-  </main>
-
-  <!-- PANEL DE DETALLE -->
-  <aside class="drawer" id="drawer">
-    <button class="icon-btn close" id="drawer-close">✕</button>
-    <div id="drawer-body"></div>
-  </aside>
+<div class="app" id="app">
+  <nav class="rail" id="rail"></nav>
+  <div class="main">
+    <header class="topbar">
+      <div class="search" id="search-open"><span id="i-search"></span><span>Buscar o ir a…</span><span class="kbd">Ctrl K</span></div>
+      <div class="grow"></div>
+      <div class="pill-local" id="local-pill" title="Estado de los motores"><span class="dot" id="local-dot"></span><span id="local-text">Local</span></div>
+      <button class="icon-btn" id="bell" title="Avisos"><span id="i-bell"></span><span class="badge-num" id="bell-count"></span></button>
+    </header>
+    <section class="view" id="view"></section>
+  </div>
 </div>
-<div class="toast" id="toast"></div>
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer"></aside>
+<div class="modal hidden" id="modal"></div>
+<div class="toasts" id="toasts"></div>
 <script src="/static/app.js"></script>
+<script src="/static/app2.js"></script>
 </body>
 </html>

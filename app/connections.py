@@ -87,7 +87,7 @@ TYPES: dict[str, dict] = {
                                  F("events", "Eventos (coma)", placeholder="post.ready, post.approved, post.published")]},
 }
 
-ENGINE_ROLES = ["generate", "edit", "subject", "video"]
+ENGINE_ROLES = ["generate", "edit", "subject", "video", "sound"]
 
 
 def public(c: Connection) -> dict:

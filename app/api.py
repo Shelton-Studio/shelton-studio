@@ -165,8 +165,9 @@ async def runs(agent: str | None = None, limit: int = 100, failed: bool = False)
 
 # ------------------------------------------------------------------ Tareas (tablero)
 KIND_AGENT = {"create": "art_director", "edit": "edit_director", "subject": "subject_designer",
-              "video": "video_producer", "reel": "video_producer"}
-KIND_LABEL = {"create": "Crear post", "edit": "Editar", "subject": "Banco de modelos", "video": "Video", "reel": "Reel"}
+              "video": "video_producer", "reel": "video_producer", "audio": "voice_director"}
+KIND_LABEL = {"create": "Crear post", "edit": "Editar", "subject": "Banco de modelos", "video": "Video", "reel": "Reel",
+              "audio": "Voz y sonido"}
 
 
 @router.get("/tasks")
