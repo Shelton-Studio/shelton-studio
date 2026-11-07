@@ -21,6 +21,7 @@ from app.agents import shelton  # noqa: E402
 
 shelton.create = test_chain.FakeChief()
 llm.create = test_chain.fake_create
+llm.json_call = test_chain._logged_fake
 
 from app.main import app  # noqa: E402
 

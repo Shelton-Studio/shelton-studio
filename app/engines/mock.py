@@ -78,5 +78,9 @@ class MockEngine:
             frames[0].save(buf, "WEBP", save_all=True, append_images=frames[1:], duration=62, loop=0, quality=80)
             return buf.getvalue(), 16
 
+    async def sound(self, prompt, negative, seconds, seed, on_progress: Progress = None) -> bytes:
+        from app.voice import _mock_wav
+        return _mock_wav("x" * int(seconds * 14))
+
     async def health(self) -> dict:
         return {"ok": True, "engine": self.name, "note": "Modo prueba: no usa GPU ni modelos reales."}

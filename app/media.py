@@ -23,12 +23,29 @@ def save_bytes(data: bytes, name: str) -> str:
 
 
 def fit_to_platform(raw_path: str, width: int, height: int, out_name: str) -> str:
-    """Recorte centrado + redimensión Lanczos al tamaño exacto. JPEG alta calidad (lo que piden las redes)."""
+    """Recorte centrado + redimensión Lanczos al tamaño exacto. JPEG alta calidad (lo que piden las redes).
+    width/height = 0 -> formato original (sin recortar; como máximo 2048 px de lado)."""
     img = Image.open(raw_path)
     img = ImageOps.exif_transpose(img).convert("RGB")
-    img = ImageOps.fit(img, (width, height), method=Image.Resampling.LANCZOS, centering=(0.5, 0.45))
+    if not width or not height:
+        img.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
+    else:
+        img = ImageOps.fit(img, (width, height), method=Image.Resampling.LANCZOS, centering=(0.5, 0.45))
     out = media_path(out_name)
     img.save(out, "JPEG", quality=94, optimize=True, progressive=True, subsampling=0)
+    return str(out)
+
+
+def size_of(path: str) -> tuple[int, int]:
+    with Image.open(path) as im:
+        return im.size
+
+
+def resize_to(path_in: str, size: tuple[int, int], out_name: str) -> str:
+    """Devuelve la edición al tamaño exacto del original (sin recortar)."""
+    img = Image.open(path_in).convert("RGB").resize(size, Image.Resampling.LANCZOS)
+    out = media_path(out_name)
+    img.save(out, "JPEG", quality=95, subsampling=0)
     return str(out)
 
 

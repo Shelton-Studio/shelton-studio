@@ -5,6 +5,7 @@ editar post: director de edición -> Qwen-Image-Edit -> juez -> (redactor si hac
 crear modelo del banco: diseñador -> imagen de referencia -> juez -> guardar ficha
 """
 import asyncio
+import json
 import logging
 import random
 import shutil
@@ -96,7 +97,7 @@ async def _run_job(job_id: str) -> None:
         kind, target, payload = job.kind, job.post_id, dict(job.payload or {})
 
     handler = {"create": _create_post, "edit": _edit_post, "subject": _create_subject,
-               "video": _video_post, "reel": _reel_post}[kind]
+               "video": _video_post, "reel": _reel_post, "audio": _audio_post}[kind]
     try:
         await handler(target, payload)
         status, error = "done", ""
@@ -184,13 +185,24 @@ async def _create_post(post_id: str, payload: dict) -> None:
     hashtags = _merge_hashtags(copy.get("hashtags", []), brand.base_hashtags if brand else [])
     # Siempre termina en revisión humana: el juez solo opina.
     _update_post(post_id, prompt=best["prompt"], seed=best["seed"], raw_path=best["raw"], image_path=best["final"],
-                 width=platform.width, height=platform.height, caption=copy["caption"], hashtags=hashtags,
+                 width=_dims(platform, best["final"])[0], height=_dims(platform, best["final"])[1],
+                 caption=copy["caption"], hashtags=hashtags,
                  alt_text=copy.get("alt_text", ""), qa_score=best["score"], qa_passed=passed,
                  qa_notes=_qa_text(best, passed), alternatives=[t for t in tries if t is not best],
                  status="generating" if payload.get("media") == "video" else "ready")
     if payload.get("media") == "video":
         await _animate_into(post_id, best["final"], payload.get("motion", ""), payload.get("video_engine") or None,
                             rewrite_caption=True)
+
+
+def _dims(platform, image_path: str | None) -> tuple[int, int]:
+    """Tamaño final: el de la red, o el de la imagen de origen (pares, máx. 1920) si el formato es 'original'."""
+    if platform.width and platform.height:
+        return platform.width, platform.height
+    from app.media import size_of
+    w, h = size_of(image_path) if image_path else (1080, 1350)
+    k = min(1.0, 1920 / max(w, h))
+    return int(w * k) // 2 * 2, int(h * k) // 2 * 2
 
 
 # ============================================================ Video y reels
@@ -204,13 +216,13 @@ async def _animate_into(post_id: str, source_image: str, motion: str, choice: st
     vp = await sp.direct_video(source_image, post.idea, motion)
     engine = get_engine("video", choice)
     step = _progress(post_id, "Animando con el motor de video")
+    W, H = _dims(platform, source_image)
     clip, fps = await engine.video(Path(source_image).read_bytes(), vp["motion_prompt"], vp.get("negative", ""),
-                                   platform.width, platform.height, random.randint(1, 2**31 - 1), None, step)
+                                   W, H, random.randint(1, 2**31 - 1), None, step)
     raw = save_bytes(clip, f"{post_id}_clip.{'webp' if vid.is_webp(clip) else 'mp4'}")
     events.publish({"type": "progress", "id": post_id, "text": "Post-producción: 30 fps y formato vertical"})
     mp4 = str(settings.media_dir / f"{post_id}.mp4")
-    await asyncio.to_thread(vid.clip_to_mp4, clip, fps, mp4, platform.width, platform.height,
-                            settings.VIDEO_OUTPUT_FPS, True)
+    await asyncio.to_thread(vid.clip_to_mp4, clip, fps, mp4, W, H, settings.VIDEO_OUTPUT_FPS, True)
     poster = await asyncio.to_thread(vid.frame_at, mp4, str(settings.media_dir / f"{post_id}_poster.jpg"))
     sheet = await asyncio.to_thread(vid.contact_sheet, mp4, str(settings.media_dir / f"{post_id}_sheet.jpg"))
     seconds = await asyncio.to_thread(vid.duration, mp4)
@@ -219,8 +231,7 @@ async def _animate_into(post_id: str, source_image: str, motion: str, choice: st
                                "check temporal consistency, warping, identity drift and flicker)", vp["motion_prompt"],
                         brand, subjects)
     score = int(qa.get("score", 0))
-    fields = dict(video_path=mp4, raw_path=raw, image_path=poster, duration=seconds, width=platform.width,
-                  height=platform.height, qa_score=score, qa_passed=score >= settings.QA_MIN_SCORE,
+    fields = dict(video_path=mp4, raw_path=raw, image_path=poster, duration=seconds, width=W, height=H, qa_score=score, qa_passed=score >= settings.QA_MIN_SCORE,
                   qa_notes=_qa_text(qa, score >= settings.QA_MIN_SCORE),
                   prompt=f"{post.prompt}\n[VIDEO] {vp['motion_prompt']}".strip())
     if rewrite_caption:
@@ -254,7 +265,8 @@ async def _reel_post(post_id: str, payload: dict) -> None:
     _update_post(post_id, status="generating", media_type="reel")
     events.publish({"type": "progress", "id": post_id, "text": f"Montando el reel ({len(clips)} escenas)"})
     mp4 = str(settings.media_dir / f"{post_id}.mp4")
-    await asyncio.to_thread(vid.concat, clips, mp4, platform.width, platform.height, settings.VIDEO_OUTPUT_FPS)
+    W, H = _dims(platform, post.image_path or None) if platform.width else (1080, 1920)
+    await asyncio.to_thread(vid.concat, clips, mp4, W, H, settings.VIDEO_OUTPUT_FPS)
     poster = await asyncio.to_thread(vid.frame_at, mp4, str(settings.media_dir / f"{post_id}_poster.jpg"), "0.5")
     seconds = await asyncio.to_thread(vid.duration, mp4)
     copy = await sp.write_post(poster, post.idea, platform, brand,
@@ -262,8 +274,8 @@ async def _reel_post(post_id: str, payload: dict) -> None:
     with session() as s:
         scores = [p.qa_score for p in (s.get(Post, i) for i in payload["clip_ids"]) if p and p.qa_score]
     avg = round(sum(scores) / len(scores)) if scores else 0
-    _update_post(post_id, status="ready", video_path=mp4, image_path=poster, duration=seconds, width=platform.width,
-                 height=platform.height, caption=copy["caption"], alt_text=copy.get("alt_text", ""),
+    _update_post(post_id, status="ready", video_path=mp4, image_path=poster, duration=seconds, width=W,
+                 height=H, caption=copy["caption"], alt_text=copy.get("alt_text", ""),
                  hashtags=_merge_hashtags(copy.get("hashtags", []), brand.base_hashtags if brand else []),
                  qa_score=avg, qa_passed=avg >= settings.QA_MIN_SCORE,
                  qa_notes=f"Nota media de las escenas según el juez: {avg}/100. Revisa cada escena en su post.")
@@ -329,6 +341,99 @@ def new_reel_from_scenes(scenes: list[str], idea: str, platform: str = "tiktok",
     return new_reel(scene_ids, idea, conversation_id, platform, video_engine)
 
 
+# ============================================================ Voz y sonido
+async def _audio_post(post_id: str, payload: dict) -> None:
+    """Locutor (guion + diseño de voz) -> voz local -> efectos de voz -> efectos de sonido -> mezcla con video/imagen."""
+    from app import video as vid
+    from app import voice as vc
+    post, brand, subjects = _load(post_id)
+    with session() as s:
+        parent = s.get(Post, post.parent_id)
+        src_video, src_image = parent.video_path, parent.image_path
+        parent_dur = parent.duration or 0
+        caption, hashtags, alt = parent.caption, parent.hashtags, parent.alt_text
+    platform = get_platform(post.platform)
+    _update_post(post_id, status="generating", media_type="video", caption=caption, hashtags=hashtags, alt_text=alt)
+    seconds = float(payload.get("seconds") or parent_dur or 8)
+    tracks = []
+
+    if payload.get("voice", True):
+        events.publish({"type": "progress", "id": post_id, "text": "Locutor escribiendo el guion y diseñando la voz"})
+        speaker = next((x for x in subjects if x.voice_path or x.kind in ("person", "creature")), None)
+        voices = vc.list_voices()
+        dv = await sp.direct_voice(post.idea, payload.get("voice_request", ""), seconds, voices,
+                                   f"{speaker.name}: {speaker.voice_style or speaker.notes}" if speaker else "",
+                                   payload.get("script", ""))
+        spec = dv["spec"]
+        ref = None
+        if speaker and speaker.voice_path and Path(speaker.voice_path).exists():
+            ref = Path(speaker.voice_path).read_bytes()
+        elif spec.get("base_voice"):
+            match = next((v for v in voices if v["name"].lower() == spec["base_voice"].lower()), None)
+            if match:
+                ref = (vc.voices_dir() / match["file"]).read_bytes()
+        events.publish({"type": "progress", "id": post_id, "text": "Generando la voz"})
+        wav = await vc.synthesize(dv["script"], settings.CONTENT_LANGUAGE, ref, spec)
+        voice_path = str(settings.media_dir / f"{post_id}_voice.wav")
+        await asyncio.to_thread(vc.apply_fx, wav, spec, voice_path)
+        tracks.append(("voice", voice_path))
+        _update_post(post_id, voiceover=dv["script"])
+
+    if payload.get("sound_request"):
+        events.publish({"type": "progress", "id": post_id, "text": "Diseñador de sonido creando el efecto"})
+        sd = await sp.design_sound(payload["sound_request"], post.idea)
+        engine = get_engine("sound", payload.get("engine") or None)
+        sfx_len = max(seconds, vid.duration(tracks[0][1]) if tracks else seconds)
+        audio = await engine.sound(sd["prompt"], sd.get("negative", ""), sfx_len + 0.5, random.randint(1, 2**31 - 1),
+                                   _progress(post_id, "Generando sonido"))
+        raw = save_bytes(audio, f"{post_id}_sfx_raw.bin")
+        sfx_path = str(settings.media_dir / f"{post_id}_sfx.wav")
+        await asyncio.to_thread(vid._run, ["-i", raw, "-ar", "44100", "-ac", "2", sfx_path])
+        tracks.append(("sfx", sfx_path))
+
+    if not tracks:
+        raise RuntimeError("Pide voz y/o un efecto de sonido")
+    # Mezcla: la voz manda; el efecto queda de fondo (o solo, si no hay voz)
+    mix = str(settings.media_dir / f"{post_id}_mix.wav")
+    if len(tracks) == 2:
+        await asyncio.to_thread(vid._run, ["-i", tracks[0][1], "-i", tracks[1][1], "-filter_complex",
+                                           "[1:a]volume=0.35[b];[0:a][b]amix=inputs=2:duration=first:normalize=0,loudnorm=I=-14",
+                                           "-ar", "44100", mix])
+    else:
+        await asyncio.to_thread(vid._run, ["-i", tracks[0][1], "-af", "loudnorm=I=-14", "-ar", "44100", mix])
+
+    out = str(settings.media_dir / f"{post_id}.mp4")
+    events.publish({"type": "progress", "id": post_id, "text": "Mezclando audio y video"})
+    if src_video:
+        await asyncio.to_thread(vc.mux, src_video, mix, out)
+    else:
+        await asyncio.to_thread(vc.still_to_video, src_image, mix, out, *_dims(platform, src_image))
+    poster = await asyncio.to_thread(vid.frame_at, out, str(settings.media_dir / f"{post_id}_poster.jpg"), "0.3")
+    _update_post(post_id, status="ready", video_path=out, audio_path=mix, image_path=poster,
+                 duration=await asyncio.to_thread(vid.duration, out), width=_dims(platform, src_image)[0],
+                 height=_dims(platform, src_image)[1],
+                 qa_score=parent.qa_score, qa_passed=parent.qa_passed,
+                 qa_notes="Audio agregado. Escúchalo antes de aprobar: el juez solo revisa la imagen.")
+
+
+def new_audio(parent_id: str, voice_request: str = "", script: str = "", sound_request: str = "", voice: bool = True,
+              conversation_id=None, seconds: float | None = None) -> str:
+    with session() as s:
+        parent = s.get(Post, parent_id)
+        if not parent or not (parent.image_path or parent.video_path):
+            raise ValueError(f"El post {parent_id} no existe o no tiene imagen/video todavía")
+        p = Post(idea=parent.idea, platform=parent.platform, brand_id=parent.brand_id, parent_id=parent.id,
+                 campaign_id=parent.campaign_id, conversation_id=conversation_id or parent.conversation_id,
+                 subject_ids=parent.subject_ids, media_type="video", status="queued", prompt=parent.prompt)
+        s.add(p)
+        s.flush()
+        pid, data = p.id, post_dict(p)
+    events.publish({"type": "post", "post": data})
+    enqueue("audio", pid, {"voice_request": voice_request, "script": script, "sound_request": sound_request,
+                           "voice": voice, "seconds": seconds})
+    return pid
+
+
 def use_alternative(post_id: str, index: int) -> dict:
     """La persona elige un intento que el juez puntuó más bajo. El actual pasa a ser alternativa (nada se pierde)."""
     with session() as s:
@@ -343,6 +448,10 @@ def use_alternative(post_id: str, index: int) -> dict:
         p.prompt, p.seed, p.raw_path, p.image_path = chosen["prompt"], chosen.get("seed", 0), chosen["raw"], chosen["final"]
         p.qa_score, p.qa_passed = chosen.get("score", 0), chosen.get("score", 0) >= settings.QA_MIN_SCORE
         p.qa_notes = "Elegida por una persona. Opinión del juez: " + _qa_text(chosen, p.qa_passed)
+        from app.db import Feedback
+        s.add(Feedback(post_id=post_id, action="chose_lower_scored_attempt",
+                       detail={"chosen_score": chosen.get("score"), "judge_preferred_score": current["score"],
+                               "judge_issues_on_chosen": chosen.get("issues", []), "idea": p.idea}))
         s.flush()
         data = post_dict(p)
     events.publish({"type": "post", "post": data})
@@ -390,10 +499,15 @@ async def _edit_post(post_id: str, payload: dict) -> None:
         src = Path(parent.raw_path or parent.image_path).read_bytes()
         out = await get_engine("edit", payload.get("engine") or None).edit(src, ei["instruction"], random.randint(1, 2**31 - 1), step)
         raw = save_bytes(out, f"{post_id}_raw.png")
-        final = fit_to_platform(raw, platform.width, platform.height, f"{post_id}.jpg")
+        if platform.key == "original":
+            from app.media import resize_to, size_of
+            final = resize_to(raw, size_of(parent.image_path), f"{post_id}.jpg")
+        else:
+            final = fit_to_platform(raw, platform.width, platform.height, f"{post_id}.jpg")
         prompt = f"{parent.prompt}\n[EDIT] {ei['instruction']}"
         events.publish({"type": "progress", "id": post_id, "text": "Juez de calidad revisando la edición"})
-        qa = await sp.judge(str(final), f"{parent.idea}. Edit requested: {request}", prompt, brand, subjects)
+        qa = await sp.judge(str(final), f"{parent.idea}. Edit requested: {request}", prompt, brand, subjects,
+                            original_path=parent.image_path)
         qa_score = int(qa.get("score", 0))
         qa_notes = _qa_text(qa, qa_score >= settings.QA_MIN_SCORE)
 
@@ -402,8 +516,10 @@ async def _edit_post(post_id: str, payload: dict) -> None:
         copy = await sp.write_post(str(final), parent.idea, platform, brand, request)
         caption, alt = copy["caption"], copy.get("alt_text", alt)
         hashtags = _merge_hashtags(copy.get("hashtags", []), brand.base_hashtags if brand else [])
-    _update_post(post_id, prompt=prompt, raw_path=str(raw), image_path=str(final), width=platform.width,
-                 height=platform.height, caption=caption, hashtags=hashtags, alt_text=alt,
+    from app.media import size_of
+    fw, fh = size_of(str(final))
+    _update_post(post_id, prompt=prompt, raw_path=str(raw), image_path=str(final), width=fw,
+                 height=fh, caption=caption, hashtags=hashtags, alt_text=alt,
                  qa_score=qa_score, qa_notes=qa_notes, qa_passed=qa_score >= settings.QA_MIN_SCORE, status="ready")
 
 
@@ -504,6 +620,8 @@ def new_edit(parent_id: str, instruction: str, rewrite_caption: bool = False, co
         pid, data = p.id, post_dict(p)
     events.publish({"type": "post", "post": data})
     enqueue("edit", pid, {"instruction": instruction, "rewrite_caption": rewrite_caption, "engine": engine or ""})
+    from app.db import record_feedback
+    record_feedback(parent_id, "requested_edit", instruction=instruction)
     return pid
 
 
@@ -640,3 +758,67 @@ async def scout_loop() -> None:
         except Exception:
             log.exception("scout loop")
         await asyncio.sleep(600)
+
+
+# ============================================================ Aprendizaje continuo
+LEARNER = """You are Shelton, chief of a content studio, reviewing what the human team decided recently, to improve your
+team. From the decisions below, extract only clear, repeated or strongly signaled preferences and turn each into a
+short, actionable lesson for the ONE agent it concerns:
+- judge: when humans approve images it scored low or reject ones it scored high (calibrate criteria).
+- art_director: visual preferences (style, light, framing, subjects) shown by approvals/rejections and edit requests.
+- copywriter: how humans rewrite captions/hashtags (tone, length, emojis, CTA, hashtag count).
+- video_producer / voice_director: preferences about motion or voice.
+Do not invent; skip if there is not enough signal. Lessons in Spanish, with a concrete example when possible."""
+
+
+async def run_learning(min_items: int = 3) -> list[dict]:
+    """Revisa decisiones humanas no procesadas y guarda lecciones (revisando contradicciones)."""
+    from app.agents import training
+    from app.agents.registry import AGENTS
+    from app.db import Feedback
+    from app.llm import json_call, obj
+    with session() as s:
+        brand = get_or_create_brand(s)
+        mode = brand.learning_mode or "auto"
+        items = s.query(Feedback).filter(Feedback.processed.is_(False)).order_by(Feedback.created_at).limit(200).all()
+        rows = [{"post": f.post_id, "action": f.action, "detail": f.detail, "at": f.created_at.isoformat()} for f in items]
+        ids = [f.id for f in items]
+    if mode == "off" or len(rows) < min_items:
+        return []
+    keys = [k for k in ("judge", "art_director", "copywriter", "video_producer", "voice_director", "planner") if k in AGENTS]
+    data = await json_call(LEARNER, json.dumps(rows, ensure_ascii=False)[:60000], obj({"lessons": {"type": "array", "items": obj({
+        "agent": {"type": "string", "enum": keys}, "title": {"type": "string"}, "content": {"type": "string"}})}}),
+        effort="medium", agent="shelton", summary=f"aprender de {len(rows)} decisiones")
+    saved = []
+    for l in data["lessons"][:8]:
+        e = await training.add_checked(l["agent"], l["title"], l["content"], author="Shelton (aprendizaje automático)",
+                                       role="auto", source="auto", auto_apply=(mode == "auto"))
+        ev = {"type": "learned", "agent": l["agent"], "agent_name": AGENTS[l["agent"]]["name"], "title": e["title"],
+              "applied": e["status"] == "active", "status": e["status"], "reason": e["conflict_reason"], "id": e["id"]}
+        events.publish(ev)
+        saved.append(ev)
+    with session() as s:
+        for f in s.query(Feedback).filter(Feedback.id.in_(ids)):
+            f.processed = True
+    return saved
+
+
+async def learning_loop() -> None:
+    """Cada 30 min aprende de las decisiones humanas; una vez al día revisa al equipo completo."""
+    from app.agents import training
+    last_audit = None
+    while True:
+        await asyncio.sleep(1800)
+        try:
+            await run_learning()
+            with session() as s:
+                b = get_or_create_brand(s)
+                mode = b.learning_mode
+                brand_text = f"Marca: {b.name}. {b.description}. Tono: {b.tone}. Hashtags fijos: {' '.join(b.base_hashtags or [])}"
+            today = now().date()
+            if mode != "off" and last_audit != today:
+                last_audit = today
+                audit = await training.team_audit(brand_text)
+                events.publish({"type": "audit", "issues": len(audit["issues"]), "summary": audit["summary"]})
+        except Exception:
+            log.exception("aprendizaje")

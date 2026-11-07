@@ -31,6 +31,7 @@ async def lifespan(_: FastAPI):
     await pipeline.start_workers()
     autopilot = asyncio.create_task(pipeline.autopilot_loop())
     scout = asyncio.create_task(pipeline.scout_loop())
+    learning = asyncio.create_task(pipeline.learning_loop())
     try:
         health = await get_engine().health()
     except Exception as e:
@@ -41,6 +42,7 @@ async def lifespan(_: FastAPI):
     yield
     autopilot.cancel()
     scout.cancel()
+    learning.cancel()
     await pipeline.stop_workers()
 
 
@@ -48,6 +50,8 @@ app = FastAPI(title="Shelton", lifespan=lifespan)
 app.include_router(panel_router)
 app.mount("/static", StaticFiles(directory=ROOT / "web"), name="static")
 app.mount("/media", StaticFiles(directory=settings.media_dir), name="media")
+(settings.DATA_DIR / "voices").mkdir(parents=True, exist_ok=True)
+app.mount("/voices", StaticFiles(directory=settings.DATA_DIR / "voices"), name="voices")
 
 
 def sse(ev: dict) -> str:
@@ -277,8 +281,18 @@ class PostPatch(BaseModel):
 
 @app.patch("/api/posts/{pid}")
 async def patch_post(pid: str, body: PostPatch):
+    from app.db import Feedback
     with session() as s:
         p = s.get(Post, pid) or _404("Post")
+        if body.status and body.status != p.status and body.status in ("approved", "rejected"):
+            s.add(Feedback(post_id=pid, action=body.status, detail={"idea": p.idea, "judge_score": p.qa_score,
+                                                                     "judge_passed": p.qa_passed, "platform": p.platform,
+                                                                     "media": p.media_type, "prompt": p.prompt[:500]}))
+        if body.caption is not None and body.caption.strip() != (p.caption or "").strip():
+            s.add(Feedback(post_id=pid, action="human_rewrote_caption", detail={"platform": p.platform,
+                                                                                "before": p.caption, "after": body.caption}))
+        if body.hashtags is not None and body.hashtags != (p.hashtags or []):
+            s.add(Feedback(post_id=pid, action="human_changed_hashtags", detail={"before": p.hashtags, "after": body.hashtags}))
         for k, v in body.model_dump(exclude_none=True).items():
             setattr(p, k, v)
         s.flush()
@@ -309,7 +323,7 @@ async def publish(pid: str, body: PublishIn):
 
 
 @app.post("/api/upload")
-async def upload(file: UploadFile = File(...), platform: str = Form("instagram_feed")):
+async def upload(file: UploadFile = File(...), platform: str = Form("original")):
     """Sube una foto propia: queda como post editable y puede ir al banco de modelos."""
     data = await file.read()
     pid = uuid.uuid4().hex[:12]
@@ -318,8 +332,10 @@ async def upload(file: UploadFile = File(...), platform: str = Form("instagram_f
     final = fit_to_platform(raw, plat.width, plat.height, f"{pid}.jpg")
     with session() as s:
         brand = get_or_create_brand(s)
+        from app.media import size_of
+        w, h = size_of(final)
         p = Post(id=pid, idea="Imagen subida por el usuario", platform=plat.key, raw_path=raw, image_path=final,
-                 width=plat.width, height=plat.height, status="ready", brand_id=brand.id, prompt="(subida)")
+                 width=w, height=h, status="ready", brand_id=brand.id, prompt="(subida)")
         s.add(p)
         s.flush()
         out = post_dict(p)

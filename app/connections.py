@@ -4,6 +4,7 @@ Cada tipo declara sus campos (para que la web arme el formulario), su categoría
 Categorías:
   brain     -> clave de Claude
   engine    -> motores de imagen (ComfyUI local/remoto, fal.ai, Replicate, OpenAI, Gemini, HTTP genérico)
+  voice     -> motores de voz (local Chatterbox, ElevenLabs, API genérica)
   publisher -> destinos de publicación (Telegram, Instagram, Facebook, Discord, webhook)
   webhook   -> avisos salientes de eventos (n8n, Make, Zapier, tu propio servidor)
 """
@@ -47,6 +48,18 @@ TYPES: dict[str, dict] = {
                     "fields": [F("url", "URL (POST)", required=True), F("headers", "Cabeceras (JSON)", "json", placeholder='{"Authorization": "Bearer ..."}'),
                                F("body", "Cuerpo (JSON con marcadores)", "json", required=True, placeholder='{"prompt": "{{prompt}}", "width": "{{width}}"}'),
                                F("result_path", "Ruta a la imagen en la respuesta", required=True, placeholder="images.0.url")]},
+
+    # --- voz
+    "local_tts": {"category": "voice", "name": "Voz local (Chatterbox)",
+                  "help": "Servidor de voz en tu GPU: python tts_server/server.py. Español y 22 idiomas más, clona voces con 5-10 s de muestra.",
+                  "fields": [F("url", "URL", placeholder="http://127.0.0.1:8189", required=True)]},
+    "elevenlabs": {"category": "voice", "name": "ElevenLabs (nube)", "fields": [
+        F("api_key", "API key", "secret", required=True), F("voice_id", "Voice id por defecto"),
+        F("model", "Modelo", placeholder="eleven_multilingual_v2")]},
+    "http_tts": {"category": "voice", "name": "API de voz genérica",
+                 "help": "Cuerpo JSON con {{text}}, {{language}}, {{ref_audio_b64}}. Respuesta: audio directo o base64 en la ruta indicada.",
+                 "fields": [F("url", "URL (POST)", required=True), F("headers", "Cabeceras (JSON)", "json"),
+                            F("body", "Cuerpo (JSON)", "json", required=True), F("result_path", "Ruta al audio base64")]},
 
     # --- publicación
     "telegram": {"category": "publisher", "name": "Telegram", "fields": [

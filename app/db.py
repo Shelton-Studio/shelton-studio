@@ -38,6 +38,7 @@ class Brand(Base):
     autopilot_last: Mapped[str] = mapped_column(String, default="")   # fecha del último lote
     scout_every_hours: Mapped[int] = mapped_column(Integer, default=12)  # 0 = scout apagado
     scout_last: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    learning_mode: Mapped[str] = mapped_column(String, default="auto")  # auto | approve | off
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
@@ -52,6 +53,8 @@ class Subject(Base):
     notes: Mapped[str] = mapped_column(Text, default="")          # personalidad, historia, uso
     references: Mapped[list] = mapped_column(JSON, default=list)  # rutas de imágenes; la primera es la principal
     alternatives: Mapped[list] = mapped_column(JSON, default=list)  # intentos de referencia no elegidos
+    voice_path: Mapped[str] = mapped_column(String, default="")     # muestra de su voz (para clonarla)
+    voice_style: Mapped[str] = mapped_column(Text, default="")      # cómo suena: "grave, cálida, acento neutro"
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
@@ -67,6 +70,8 @@ class Post(Base):
     media_type: Mapped[str] = mapped_column(String, default="image")      # image | video | reel
     video_path: Mapped[str] = mapped_column(String, default="")           # MP4 final (video/reel)
     duration: Mapped[float] = mapped_column(Float, default=0)
+    voiceover: Mapped[str] = mapped_column(Text, default="")              # guion locutado
+    audio_path: Mapped[str] = mapped_column(String, default="")           # pista de voz/sonido
     idea: Mapped[str] = mapped_column(Text, default="")
     platform: Mapped[str] = mapped_column(String, default="instagram_feed")
     prompt: Mapped[str] = mapped_column(Text, default="")
@@ -253,3 +258,20 @@ class Finding(Base):
     platforms: Mapped[list] = mapped_column(JSON, default=list)
     status: Mapped[str] = mapped_column(String, default="new", index=True)  # new / used / dismissed
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
+
+
+class Feedback(Base):
+    """Decisiones humanas (aprobar, rechazar, elegir otro intento, pedir cambios, editar textos).
+    Shelton las revisa y aprende de ellas."""
+    __tablename__ = "feedback"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    post_id: Mapped[str] = mapped_column(String, index=True)
+    action: Mapped[str] = mapped_column(String)
+    detail: Mapped[dict] = mapped_column(JSON, default=dict)
+    processed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+def record_feedback(post_id: str, action: str, **detail) -> None:
+    with session() as s:
+        s.add(Feedback(post_id=post_id, action=action, detail=detail))

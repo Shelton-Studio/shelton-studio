@@ -302,6 +302,74 @@ def test_whitelabel_export_search(srv):
     assert "posts.csv" in names and any(n.endswith(".mp4") for n in names) and any(n.endswith(".jpg") for n in names)
     assert srv.get("/api/search?q=Valentina").json()
     up = srv.post("/api/upload", files={"file": ("foto.png", png.getvalue(), "image/png")}).json()
-    assert up["status"] == "ready" and up["width"] == 1080
+    assert up["status"] == "ready" and up["width"] == 64 and up["platform"] == "original"
     assert srv.post("/api/upload", files={"file": ("x.txt", b"hola", "text/plain")}).status_code == 400
     assert srv.delete(f"/api/posts/{up['id']}").json()["ok"]
+
+
+def test_voice_sound_and_uploaded_edit(srv):
+    # Voz sobre un video, con efecto de sonido de fondo
+    r = srv.post(f"/api/posts/{pytest.video}/audio", json={"voice_request": "grave y robotizada",
+                                                           "sound_request": "motor V8 rugiendo"}).json()
+    p = wait_post(srv, r["id"], timeout=240)
+    assert p["status"] == "ready" and p["voiceover"] and p["audio_url"], p
+    mp4 = srv.get(p["video_url"]).content
+    assert mp4[4:8] == b"ftyp"
+    # Voz sobre una imagen -> video con movimiento lento
+    r = srv.post(f"/api/posts/{pytest.posts[0]}/audio", json={"voice_request": "femenina y cálida"}).json()
+    p = wait_post(srv, r["id"], timeout=240)
+    assert p["status"] == "ready" and p["media_type"] == "video" and p["duration"] > 1
+    # Solo sonido, desde el chat
+    out = tool(srv, pytest.conv, "add_sound", {"post_id": pytest.video, "sound_request": "moto pasando rápido"})
+    assert out.startswith("OK"), out
+    # Banco de voces + prueba de voz
+    wav = srv.post("/api/voices/preview", json={"text": "hola", "request": "voz de anciano"}).json()
+    assert srv.get(wav["url"]).status_code == 200
+    up = srv.post("/api/voices", files={"file": ("lola.wav", srv.get(wav["url"]).content, "audio/wav")},
+                  params={"name": "Lola", "description": "cálida"}).json()
+    assert any(v["name"] == "Lola" for v in srv.get("/api/voices").json())
+    assert srv.delete(f"/api/voices/{up['name']}").json()["ok"]
+    # Foto subida: se edita sin recortar y conserva su tamaño
+    import io as _io
+    from PIL import Image
+    buf = _io.BytesIO()
+    Image.new("RGB", (900, 600), "blue").save(buf, "PNG")
+    upl = srv.post("/api/upload", files={"file": ("mia.png", buf.getvalue(), "image/png")}).json()
+    assert (upl["width"], upl["height"]) == (900, 600) and upl["platform"] == "original"
+    e = wait_post(srv, srv.post(f"/api/posts/{upl['id']}/edit", json={"instruction": "cielo al atardecer"}).json()["id"])
+    assert e["status"] == "ready" and (e["width"], e["height"]) == (900, 600), e
+
+
+def test_training_memory_contradictions(srv):
+    a = srv.post("/api/training/copywriter", json={"title": "Hashtags", "content": "Usa 10 hashtags siempre",
+                                                    "author": "Ana", "role": "admin"}).json()
+    assert a["status"] == "active" and Path(a["file"]).exists()
+    b = srv.post("/api/training/copywriter", json={"title": "Pocos hashtags", "content": "CONTRADICE: solo 3 hashtags",
+                                                    "author": "Luis", "role": "operador"}).json()
+    assert b["status"] == "conflict" and "Contradice" in b["conflict_reason"] and b["conflict_with"] == a["id"]
+    feed = srv.get("/api/training").json()
+    assert {a["id"], b["id"]} <= {e["id"] for e in feed}
+    r = srv.post(f"/api/training/copywriter/{b['id']}/resolve", json={"action": "replace", "decided_by": "Ana"}).json()
+    assert r["status"] == "active"
+    les = {e["id"]: e for e in srv.get("/api/training/copywriter").json()}
+    assert les[a["id"]]["status"] == "disabled"
+    # Enseñar en el chat directo con un agente
+    events, conv = chat(srv, "TOOL remember " + json.dumps({"title": "Emojis", "content": "Máximo 2 emojis"}),
+                        agent="copywriter")
+    learned = [e for e in events if e["type"] == "learned"]
+    assert learned and learned[0]["applied"] and learned[0]["agent"] == "copywriter"
+    # Shelton lee la memoria de un subagente y revisa al equipo
+    assert "Emojis" in tool(srv, pytest.conv, "read_agent_memory", {"agent": "copywriter"})
+    assert "Hashtags" in tool(srv, pytest.conv, "review_team")
+    assert srv.get("/api/audits").json()
+    # Aprende de las decisiones humanas
+    st = srv.get("/api/learning/status").json()
+    assert st["total_decisions"] >= 3
+    res = srv.post("/api/learning/run").json()
+    assert res["lessons"] and res["lessons"][0]["agent"] == "copywriter"
+    assert srv.get("/api/learning/status").json()["pending_decisions"] == 0
+
+
+def test_research_tool(srv):
+    out = tool(srv, pytest.conv, "research_web", {"question": "autos exóticos 2026"})
+    assert out.startswith("OK") and "Informe" in out

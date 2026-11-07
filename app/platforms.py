@@ -32,6 +32,8 @@ PLATFORMS: dict[str, Platform] = {p.key: p for p in [
              "Título de video corto y llamativo (máx 70 caracteres). Sin hashtags."),
     Platform("square", "Cuadrado 1:1", "1:1", 1080, 1080,
              "Caption genérico para redes: gancho, 2-3 líneas, 5-10 hashtags."),
+    Platform("original", "Original (sin recortar)", "orig", 0, 0,
+             "Caption genérico para redes: gancho, 2-3 líneas, 5-10 hashtags."),
 ]}
 
 DEFAULT_PLATFORM = "instagram_feed"

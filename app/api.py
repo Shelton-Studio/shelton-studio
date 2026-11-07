@@ -491,3 +491,203 @@ async def search(q: str):
 
 def _404():
     raise HTTPException(404, "No encontrado")
+
+
+# ------------------------------------------------------------------ Entrenamiento y memoria
+from app.agents import training  # noqa: E402
+
+
+class LessonIn(BaseModel):
+    title: str
+    content: str
+    author: str = ""
+    role: str = "admin"
+
+
+@router.get("/training")
+async def memory_feed(status: str | None = None):
+    """Toda la memoria del equipo (todas las lecciones de todos los agentes), más nueva primero."""
+    out = []
+    for key, meta in registry.AGENTS.items():
+        for e in training.entries(key):
+            if status and e["status"] not in status.split(","):
+                continue
+            out.append({**e, "agent": key, "agent_name": meta["name"], "color": meta["color"]})
+    return sorted(out, key=lambda e: e["created"], reverse=True)
+
+
+@router.get("/training/{agent}")
+async def lessons(agent: str):
+    if agent not in registry.AGENTS:
+        _404()
+    return training.entries(agent)
+
+
+@router.post("/training/{agent}")
+async def add_lesson(agent: str, body: LessonIn):
+    if agent not in registry.AGENTS:
+        _404()
+    e = await training.add_checked(agent, body.title, body.content, body.author, body.role, "manual")
+    ev = {"type": "learned", "agent": agent, "agent_name": registry.AGENTS[agent]["name"], "title": e["title"],
+          "applied": e["status"] == "active", "status": e["status"], "reason": e["conflict_reason"], "id": e["id"]}
+    events.publish(ev)
+    return e
+
+
+class LessonPatch(BaseModel):
+    title: str | None = None
+    content: str | None = None
+    enabled: bool | None = None
+
+
+@router.patch("/training/{agent}/{entry_id}")
+async def patch_lesson(agent: str, entry_id: str, body: LessonPatch):
+    try:
+        return training.update(agent, entry_id, **body.model_dump())
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+class ResolveIn(BaseModel):
+    action: str          # activate | replace | discard
+    decided_by: str = ""
+
+
+@router.post("/training/{agent}/{entry_id}/resolve")
+async def resolve_lesson(agent: str, entry_id: str, body: ResolveIn):
+    try:
+        e = training.resolve(agent, entry_id, body.action, body.decided_by)
+    except ValueError as err:
+        raise HTTPException(400, str(err))
+    events.publish({"type": "learned", "agent": agent, "agent_name": registry.AGENTS[agent]["name"],
+                    "title": e["title"], "applied": e["status"] == "active", "status": e["status"], "id": e["id"]})
+    return e
+
+
+@router.delete("/training/{agent}/{entry_id}")
+async def delete_lesson(agent: str, entry_id: str):
+    training.delete(agent, entry_id)
+    return {"ok": True}
+
+
+@router.get("/audits")
+async def list_audits():
+    return training.audits()
+
+
+@router.post("/audits")
+async def run_audit():
+    with session() as s:
+        b = get_or_create_brand(s)
+        brand_text = f"Marca: {b.name}. {b.description}. Tono: {b.tone}. Hashtags fijos: {' '.join(b.base_hashtags or [])}"
+    audit = await training.team_audit(brand_text)
+    events.publish({"type": "audit", "issues": len(audit["issues"]), "summary": audit["summary"]})
+    return audit
+
+
+@router.post("/learning/run")
+async def learning_run():
+    saved = await pipeline.run_learning(min_items=1)
+    return {"lessons": saved}
+
+
+@router.get("/learning/status")
+async def learning_status():
+    from app.db import Feedback
+    with session() as s:
+        b = get_or_create_brand(s)
+        return {"mode": b.learning_mode or "auto",
+                "pending_decisions": s.query(Feedback).filter(Feedback.processed.is_(False)).count(),
+                "total_decisions": s.query(Feedback).count()}
+
+
+# ------------------------------------------------------------------ Voces y audio
+from app import voice as vc  # noqa: E402
+
+
+@router.get("/voices")
+async def voices():
+    return vc.list_voices()
+
+
+@router.post("/voices")
+async def upload_voice(file: UploadFile = File(...), name: str = "", description: str = ""):
+    ext = (Path(file.filename or "").suffix or ".wav").lower()
+    if ext not in (".wav", ".mp3", ".m4a", ".ogg", ".flac"):
+        raise HTTPException(400, "Sube un audio .wav, .mp3, .m4a, .ogg o .flac")
+    stem = re.sub(r"[^\w-]", "_", name or Path(file.filename or "voz").stem)[:40] or "voz"
+    path = vc.voices_dir() / f"{stem}{ext}"
+    path.write_bytes(await file.read())
+    path.with_suffix(".json").write_text(json.dumps({"description": description}, ensure_ascii=False), encoding="utf-8")
+    return {"name": stem, "url": f"/voices/{path.name}"}
+
+
+@router.delete("/voices/{name}")
+async def delete_voice(name: str):
+    for p in vc.voices_dir().glob(f"{Path(name).name}.*"):
+        p.unlink()
+    return {"ok": True}
+
+
+class VoicePreviewIn(BaseModel):
+    text: str
+    request: str = ""
+    subject: str = ""
+
+
+@router.post("/voices/preview")
+async def voice_preview(body: VoicePreviewIn):
+    """Prueba rápida: el Locutor diseña la voz pedida y se escucha el texto."""
+    from app.agents import specialists as sp
+    from app.db import Subject
+    ref, notes = None, ""
+    if body.subject:
+        with session() as s:
+            sub = s.query(Subject).filter(Subject.name.ilike(body.subject)).first()
+            if sub:
+                notes = f"{sub.name}: {sub.voice_style or sub.notes}"
+                if sub.voice_path and Path(sub.voice_path).exists():
+                    ref = Path(sub.voice_path).read_bytes()
+    voices_ = vc.list_voices()
+    dv = await sp.direct_voice("Prueba de voz", body.request, max(3, len(body.text) / 14), voices_, notes, body.text)
+    spec = dv["spec"]
+    if ref is None and spec.get("base_voice"):
+        m = next((v for v in voices_ if v["name"].lower() == spec["base_voice"].lower()), None)
+        if m:
+            ref = (vc.voices_dir() / m["file"]).read_bytes()
+    try:
+        wav = await vc.synthesize(body.text, settings.CONTENT_LANGUAGE, ref, spec)
+    except Exception as e:
+        raise HTTPException(503, str(e))
+    out = settings.media_dir / f"preview_{uuid.uuid4().hex[:8]}.wav"
+    vc.apply_fx(wav, spec, str(out))
+    return {"url": url_for(str(out)), "spec": spec}
+
+
+@router.post("/subjects/{sid}/voice")
+async def subject_voice(sid: str, file: UploadFile | None = File(None), style: str = ""):
+    from app.db import Subject
+    with session() as s:
+        sub = s.get(Subject, sid) or _404()
+        if file is not None:
+            ext = (Path(file.filename or "").suffix or ".wav").lower()
+            sub.voice_path = save_bytes(await file.read(), f"voice_{sid}{ext}")
+        if style:
+            sub.voice_style = style
+        from app.serialize import subject_dict
+        return subject_dict(sub)
+
+
+class AudioIn(BaseModel):
+    voice_request: str = ""
+    script: str = ""
+    sound_request: str = ""
+    voice: bool = True
+
+
+@router.post("/posts/{pid}/audio")
+async def add_audio(pid: str, body: AudioIn):
+    try:
+        return {"id": pipeline.new_audio(pid, body.voice_request, body.script, body.sound_request, body.voice)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))

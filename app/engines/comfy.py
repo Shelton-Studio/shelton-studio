@@ -9,6 +9,7 @@ from app.config import settings
 from app.engines import Progress, gpu_slot
 
 LOADER_FIELDS = {"UNETLoader": "unet_name", "CLIPLoader": "clip_name", "VAELoader": "vae_name",
+                 "CheckpointLoaderSimple": "ckpt_name",
                  "LoraLoaderModelOnly": "lora_name", "UnetLoaderGGUF": "unet_name"}
 
 # Perfiles de generación listos: el workflow y sus modelos.
@@ -106,6 +107,15 @@ class ComfyEngine:
             wf = fill_workflow(wf, {k: v for k, v in values.items() if k in placeholders(wf)})
             return (await self.client.run(wf, on_progress))[0], fps
 
+    async def sound(self, prompt: str, negative: str, seconds: float, seed: int, on_progress: Progress = None) -> bytes:
+        """Efecto de sonido / ambiente con Stable Audio Open. Devuelve audio (FLAC)."""
+        wf = load_workflow(settings.WORKFLOW_SFX)
+        values = {"ckpt": settings.SFX_CKPT, "clip": settings.SFX_CLIP, "prompt": prompt, "negative": negative,
+                  "seconds": float(max(1.0, min(seconds, 47.0))), "seed": seed, "steps": settings.SFX_STEPS}
+        wf = fill_workflow(wf, {k: v for k, v in values.items() if k in placeholders(wf)})
+        async with gpu_slot(self.url):
+            return (await self.client.run(wf, on_progress))[0]
+
     async def health(self) -> dict:
         """Comprueba conexión, GPU, modelos descargados y que los workflows encajen con los nodos instalados."""
         try:
@@ -134,6 +144,13 @@ class ComfyEngine:
                            if k in placeholders(vwf)})))
         except ComfyUIError as e:
             problems.append(f"video: {e}")
+        try:
+            swf = load_workflow(settings.WORKFLOW_SFX)
+            checks.append((settings.WORKFLOW_SFX, fill_workflow(swf, {k: v for k, v in {
+                "ckpt": settings.SFX_CKPT, "clip": settings.SFX_CLIP, "prompt": "x", "negative": "", "seconds": 5.0,
+                "seed": 1, "steps": 10}.items() if k in placeholders(swf)})))
+        except ComfyUIError as e:
+            problems.append(f"sonido: {e}")
         for wf_name, wf in checks:
             role = wf_name
             for node_id, node in wf.items():

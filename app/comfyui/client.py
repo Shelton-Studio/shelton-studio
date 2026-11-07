@@ -116,7 +116,9 @@ class ComfyUIClient:
                     continue
                 images = []
                 for node_out in entry.get("outputs", {}).values():
-                    for img in node_out.get("images", []):
+                    files = [f for key in ("images", "gifs", "videos", "audio") for f in node_out.get(key, [])
+                             if isinstance(f, dict) and f.get("filename")]
+                    for img in files:
                         if img.get("type") != "output":
                             continue
                         v = await c.get("/view", params={"filename": img["filename"],
@@ -125,7 +127,7 @@ class ComfyUIClient:
                         v.raise_for_status()
                         images.append(v.content)
                 if not images:
-                    raise ComfyUIError("ComfyUI terminó pero no devolvió imágenes (¿falta un nodo SaveImage?)")
+                    raise ComfyUIError("ComfyUI terminó pero no devolvió archivos (¿falta un nodo Save...?)")
                 return images
             raise ComfyUIError(f"Tiempo de espera agotado ({settings.COMFYUI_TIMEOUT}s)")
 

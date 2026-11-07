@@ -23,6 +23,21 @@ from app.db import Post, Subject, init_db, session  # noqa: E402
 
 async def fake_json_call(system, content, schema, effort="low", max_tokens=8000, **kw):
     keys = set(schema["properties"])
+    if "script" in keys and "spec" in keys:
+        return {"script": "Hola, esto es una prueba de voz.", "spec": {"pitch_semitones": -3, "speed": 0.95,
+                "exaggeration": 0.6, "cfg_weight": 0.5, "warmth": True, "breathy": False, "tremolo": 0.0,
+                "robot": "robot" in str(content).lower(), "reverb": 0.2, "base_voice": ""}}
+    if keys == {"prompt", "negative"}:
+        return {"prompt": "aggressive V8 engine revving", "negative": "music"}
+    if "contradicts" in keys:
+        hit = "CONTRADICE" in str(content).split("NEW:")[-1]
+        old = str(content).split("[")[1].split("]")[0] if hit and "[" in str(content) else ""
+        return {"contradicts": hit, "conflicting_id": old, "explanation": "Una dice 3 hashtags y otra 10."}
+    if keys == {"issues", "summary"}:
+        return {"summary": "Hay 1 problema.", "issues": [{"agents": ["copywriter", "planner"], "severity": "media",
+                "problem": "Hashtags", "explanation": "x", "suggestion": "y"}]}
+    if "lessons" in keys:
+        return {"lessons": [{"agent": "copywriter", "title": "Captions más cortos", "content": "Máximo 2 líneas."}]}
     if "motion_prompt" in keys:
         return {"motion_prompt": "slow push-in, hair moving in the wind", "negative": "blur"}
     if "findings" in keys:

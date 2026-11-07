@@ -94,9 +94,13 @@ List concrete issues; `fix_hint` explains how to change the prompt to avoid them
 
 
 async def judge(image_path: str, idea: str, prompt: str, brand: Brand | None,
-                subjects: list[Subject] | None = None) -> dict:
+                subjects: list[Subject] | None = None, original_path: str | None = None) -> dict:
     content = [{"type": "text", "text": "Image to judge:"}, image_block(image_path, 1024)]
     text = f"{brand_context(brand)}\n\nContent idea: {idea}\n\nPrompt used: {prompt}"
+    if original_path:
+        content += [{"type": "text", "text": "ORIGINAL image before the edit:"}, image_block(original_path, 1024)]
+        text += ("\n\nThis is an EDIT of the original. Only the requested change may differ. Penalize hard any "
+                 "unrequested change (face/identity, text, logos, composition, colors, background details) and list it.")
     for sub in (subjects or [])[:3]:
         if sub.references:
             content += [{"type": "text", "text": f"Reference of {sub.name} ({sub.kind}):"}, image_block(sub.references[0], 512)]
@@ -258,3 +262,72 @@ async def scout(kind: str, brand: Brand | None, subjects: list[Subject], known_t
                            f"Ideas in {LANG}. Platforms from: instagram_feed, instagram_story, tiktok, telegram, facebook, x, pinterest.",
                            report, _FINDINGS_SCHEMA, effort="low", agent=key, summary="ordenar hallazgos")
     return data["findings"]
+
+
+# ---------------------------------------------------------------- Locutor (voz)
+VOICE_DIRECTOR = registry.register_default("voice_director", f"""You are a voice-over director for short social videos.
+1) Write `script`: the exact words to be spoken, in {LANG} unless the user asks for another language. Natural, spoken
+   rhythm, hook in the first words, no hashtags or emojis. Fit the target duration (about 2.5 words per second).
+2) Design the voice from the user's description and the subject, mapping it to these controls:
+   - pitch_semitones (-8..+8): deep/grave/masculine/old/villain -> negative; high/aguda/young/childlike/cute -> positive.
+   - speed (0.7..1.35): calm/sensual/dramatic/old -> slower; energetic/excited/ad-like -> faster.
+   - exaggeration (0.25..1.2): emotional intensity; flat narrator 0.3, natural 0.5, excited/dramatic 0.8-1.1.
+   - cfg_weight (0.2..0.8): lower = slower, more deliberate delivery; 0.5 default.
+   - warmth (bool): close-mic, intimate, sensual, cozy, radio voice.
+   - breathy (bool): soft, whispery, sensual.
+   - tremolo (0..0.5): elderly or nervous voice.
+   - robot (bool): robotic, android, AI voice. reverb (0..0.8): epic, cathedral, trailer, cave.
+   - base_voice: the best matching voice name from the voice library list, or "" if none fits.
+Keep "sensual/sexy" tasteful (warm, slow, intimate) — never explicit.""")
+
+
+async def direct_voice(idea: str, request: str, seconds: float, voices: list[dict], subject_notes: str = "",
+                       script: str = "") -> dict:
+    text = (f"Content idea: {idea}\nTarget duration: {seconds:.0f} seconds\nUser's voice request: {request or '-'}\n"
+            f"Speaker (if a recurring model): {subject_notes or '-'}\n"
+            f"Voice library: {', '.join(v['name'] + (' (' + v['description'] + ')' if v['description'] else '') for v in voices) or 'empty'}")
+    if script:
+        text += f"\nThe user already wrote the script, keep it exactly: {script}"
+    return await _call("voice_director", text, obj({
+        "script": {"type": "string"},
+        "spec": obj({"pitch_semitones": {"type": "number"}, "speed": {"type": "number"},
+                     "exaggeration": {"type": "number"}, "cfg_weight": {"type": "number"},
+                     "warmth": {"type": "boolean"}, "breathy": {"type": "boolean"}, "tremolo": {"type": "number"},
+                     "robot": {"type": "boolean"}, "reverb": {"type": "number"}, "base_voice": {"type": "string"}}),
+    }), effort="low")
+
+
+# ---------------------------------------------------------------- Diseñador de sonido
+SOUND_DESIGNER = registry.register_default("sound_designer", """You are a sound designer. Write a prompt for Stable Audio Open
+(an AI sound-effects model, English only) that describes the sound precisely: source, character, perspective, space
+and dynamics. Examples: "aggressive V8 sports car engine revving, deep growl, exhaust pops, close mic, outdoor";
+"motorcycle passing by fast from left to right, doppler effect, high revs"; "calm ocean waves on sand, light wind".
+No music unless asked. `negative`: what to avoid (e.g. "music, speech, distortion, low quality").""")
+
+
+async def design_sound(request: str, idea: str = "") -> dict:
+    return await _call("sound_designer", f"Sound request: {request}\nScene: {idea or '-'}", obj({
+        "prompt": {"type": "string"}, "negative": {"type": "string"}}), effort="low")
+
+
+# ---------------------------------------------------------------- Investigador (web)
+RESEARCHER = registry.register_default("researcher", f"""You are a researcher for a content studio. Use web search to answer
+the request with concrete, current options the team can choose from (e.g. exotic car models, locations, outfits,
+aesthetics, references). For each option: name, 1-2 lines on what makes it visually distinctive, and the source URL.
+Write in {LANG}. End with a one-line recommendation. Be factual; only report what your sources support.""")
+
+
+async def research(question: str) -> str:
+    from app.llm import create, text_of
+    messages = [{"role": "user", "content": question}]
+    out = ""
+    for _ in range(4):
+        resp = await create(agent="researcher", summary=question[:200], system=registry.prompt("researcher"),
+                            messages=messages, max_tokens=12000,
+                            output_config={"effort": registry.effort("researcher", "medium")},
+                            tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": 6}])
+        out += text_of(resp)
+        if resp.stop_reason != "pause_turn":
+            break
+        messages.append({"role": "assistant", "content": [b.model_dump(mode="json", exclude_none=True) for b in resp.content]})
+    return out.strip() or "No encontré resultados."

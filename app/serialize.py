@@ -10,6 +10,7 @@ def post_dict(p: Post) -> dict:
         "platform_name": get_platform(p.platform).name, "prompt": p.prompt,
         "image_url": url_for(p.image_path), "raw_url": url_for(p.raw_path),
         "media_type": p.media_type or "image", "video_url": url_for(p.video_path), "duration": p.duration or 0,
+        "voiceover": p.voiceover or "", "audio_url": url_for(p.audio_path),
         "width": p.width, "height": p.height, "caption": p.caption, "hashtags": p.hashtags or [],
         "alt_text": p.alt_text, "qa_score": p.qa_score, "qa_notes": p.qa_notes, "attempts": p.attempts,
         "qa_passed": p.qa_passed,
@@ -25,12 +26,14 @@ def subject_dict(s: Subject) -> dict:
     return {"id": s.id, "name": s.name, "kind": s.kind, "description": s.description, "notes": s.notes,
             "references": [url_for(r) for r in (s.references or [])],
             "alternatives": [url_for(a) for a in (s.alternatives or [])],
+            "voice_url": url_for(s.voice_path) if s.voice_path else "", "voice_style": s.voice_style or "",
             "created_at": s.created_at.isoformat() + "Z" if s.created_at else None}
 
 
 def brand_dict(b: Brand) -> dict:
     return {k: getattr(b, k) for k in ("id", "name", "description", "audience", "tone", "visual_style", "pillars",
-                                       "base_hashtags", "platforms", "autopilot_daily", "autopilot_hour")}
+                                       "base_hashtags", "platforms", "autopilot_daily", "autopilot_hour",
+                                       "scout_every_hours", "learning_mode")}
 
 
 def campaign_dict(c: Campaign, counts: dict | None = None) -> dict:

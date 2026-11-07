@@ -8,7 +8,7 @@ import logging
 from typing import AsyncIterator
 
 from app import events, pipeline, publishers
-from app.agents import registry
+from app.agents import registry, training
 from app.db import Brand, Campaign, Conversation, Post, Subject, get_or_create_brand, session
 from app.engines import engine_choices
 from app.llm import create, text_of
@@ -50,6 +50,16 @@ Cómo trabajas:
 - Motor de imagen: si el usuario pide cambiar de modelo/motor o pregunta cuáles hay, usa image_engines y
   set_image_engine, y explícale en 1-2 líneas la diferencia (velocidad, calidad, costo) y que también puede
   cambiarlo con el selector "Motor" arriba del chat.
+- Voz y sonido: add_voice pone locución (el usuario puede pedir grave, aguda, femenina, sensual, adulta, anciana,
+  robotizada, épica...) y add_sound efectos (motor rugiendo, moto, olas...). Para un reel con voz: create_reel y luego
+  add_voice sobre el reel. Si un modelo del banco tiene voz propia, se usa sola.
+- Investigación: research_web para opciones actuales con fuentes (autos exóticos, lugares, estilos). Presenta las
+  opciones y deja que el usuario elija antes de crear modelos del banco.
+- Memoria: si alguien te enseña algo ("aprende que...", "de ahora en adelante..."), guárdalo con remember en el agente
+  que corresponda (copywriter para textos, judge para criterios de calidad, art_director para estilo visual...).
+- Eres el núcleo: puedes leer la memoria de cualquier subagente (read_agent_memory) y revisar al equipo completo
+  (review_team). Si detectas un problema o contradicción entre agentes, explícalo claro (quién, qué dice cada uno, por
+  qué choca) y sugiere la solución; la decisión de cambiar lecciones es de las personas.
 - Plataformas: {', '.join(PLATFORM_KEYS)}. Si no dicen, usa las de la marca.
 - Después de generar, resume en 1-3 líneas lo que salió (nota del juez, qué mejorarías). No repitas el caption.
 - Nunca inventes resultados: solo informa lo que devuelven las herramientas.
@@ -102,6 +112,26 @@ TOOLS = [
     _tool("make_reel", "Une varios posts de video en un solo reel vertical (en orden) con su caption.",
           {"post_ids": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 12},
            "idea": {"type": "string", "description": "De qué trata el reel (para el texto)"}}, ["post_ids"]),
+    _tool("add_voice", "Le pone voz (y opcionalmente un efecto de sonido) a un post de imagen o video. El Locutor escribe "
+          "el guion y diseña la voz según la descripción (grave, aguda, femenina, masculina, sensual, adulta, anciana, "
+          "robotizada, épica...). Si el post tiene un modelo del banco con voz propia, la usa. Crea una versión nueva.",
+          {"post_id": {"type": "string"},
+           "voice_request": {"type": "string", "description": "Cómo debe sonar y qué tono"},
+           "script": {"type": "string", "description": "Texto exacto a decir (vacío = lo escribe el Locutor)"},
+           "sound_request": {"type": "string", "description": "Efecto de fondo opcional: 'motor V8 rugiendo', 'olas'..."},
+           "seconds": {"type": "number"}}, ["post_id"]),
+    _tool("add_sound", "Le pone solo un efecto de sonido o ambiente (sin voz) a un post: motor de auto, moto, olas, "
+          "ciudad, viento, multitud... Crea una versión nueva.",
+          {"post_id": {"type": "string"}, "sound_request": {"type": "string"}}, ["post_id", "sound_request"]),
+    _tool("research_web", "Investiga en internet y devuelve opciones con fuentes (modelos de autos exóticos, lugares, "
+          "estilos, referencias, datos). Úsala cuando el usuario pida investigar u opciones actuales.",
+          {"question": {"type": "string"}}, ["question"]),
+    training.REMEMBER_TOOL,
+    _tool("read_agent_memory", "Lee el prompt y las lecciones de entrenamiento de un subagente (para entender cómo trabaja, "
+          "detectar problemas o explicar por qué hizo algo).",
+          {"agent": {"type": "string", "enum": list(registry.AGENTS)}}, ["agent"]),
+    _tool("review_team", "Revisa la memoria y las instrucciones de TODO el equipo, detecta contradicciones o problemas entre "
+          "subagentes y propone soluciones. Úsala si el usuario lo pide o si notas resultados incoherentes.", {}, []),
     _tool("list_posts", "Lista los posts más recientes (opcionalmente filtrados por estado).",
           {"status": {"type": "string", "enum": ["queued", "generating", "ready", "approved", "published", "failed", "rejected"]},
            "limit": {"type": "integer", "minimum": 1, "maximum": 30}}, []),
@@ -213,6 +243,49 @@ async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
     if name == "make_reel":
         pid = pipeline.new_reel(args["post_ids"], args.get("idea", ""), conv_id)
         return await _wait_and_report([pid], emit, "Montando el reel…")
+
+    if name == "add_voice":
+        pid = pipeline.new_audio(args["post_id"], args.get("voice_request", ""), args.get("script", ""),
+                                 args.get("sound_request", ""), True, conv_id, args.get("seconds"))
+        return await _wait_and_report([pid], emit, "Locutor trabajando en la voz…")
+
+    if name == "add_sound":
+        pid = pipeline.new_audio(args["post_id"], sound_request=args["sound_request"], voice=False, conversation_id=conv_id)
+        return await _wait_and_report([pid], emit, "Diseñador de sonido trabajando…")
+
+    if name == "research_web":
+        from app.agents import specialists
+        await emit({"type": "status", "text": "Investigador buscando en internet…"})
+        return await specialists.research(args["question"])
+
+    if name == "remember":
+        target = args.get("agent") or ctx.get("agent", "shelton")
+        if target not in registry.AGENTS:
+            target = ctx.get("agent", "shelton")
+        e = await training.add_checked(target, args["title"], args["content"], author="Chat", role="usuario", source="chat")
+        applied = e["status"] == "active"
+        ev = {"type": "learned", "agent": target, "agent_name": registry.AGENTS[target]["name"], "title": e["title"],
+              "applied": applied, "status": e["status"], "reason": e["conflict_reason"], "id": e["id"]}
+        await emit(ev)
+        events.publish(ev)
+        if not applied:
+            return (f"NO aplicada: hay una contradicción. {e['conflict_reason']} Quedó en espera en Memoria; "
+                    "explícale al usuario la contradicción y que decida: activarla igual (bajo su responsabilidad), "
+                    "reemplazar la anterior o descartarla.")
+        return f"Lección guardada y aplicada en {registry.AGENTS[target]['name']} ({e['created']})."
+
+    if name == "read_agent_memory":
+        key = args["agent"]
+        lessons = training.entries(key)
+        return json.dumps({"agent": key, "name": registry.AGENTS[key]["name"], "prompt": registry.base_prompt(key)[:3000],
+                           "lessons": [{k: e[k] for k in ("id", "title", "created", "author", "status", "content",
+                                                          "conflict_reason")} for e in lessons[:40]]}, ensure_ascii=False)
+
+    if name == "review_team":
+        await emit({"type": "status", "text": "Shelton revisando la memoria de todo el equipo…"})
+        audit = await training.team_audit(studio_context(ctx["engine"]))
+        events.publish({"type": "audit", "issues": len(audit["issues"]), "summary": audit["summary"]})
+        return json.dumps(audit, ensure_ascii=False)
 
     if name == "list_posts":
         with session() as s:
@@ -364,7 +437,7 @@ async def _turn(conv_id, user_text, upload_post_ids, emit, agent, engine):
             conv.engine = engine
         conv_id, agent = conv.id, conv.agent or "shelton"
         messages, display = list(conv.api_messages or []), list(conv.display or [])
-        ctx = {"conv_id": conv_id, "engine": conv.engine or ""}
+        ctx = {"conv_id": conv_id, "engine": conv.engine or "", "agent": conv.agent or "shelton"}
     await emit({"type": "conversation", "id": conv_id, "agent": agent})
 
     content: list = [{"type": "text", "text": studio_context(ctx["engine"])}]
@@ -380,8 +453,8 @@ async def _turn(conv_id, user_text, upload_post_ids, emit, agent, engine):
 
     is_chief = agent == "shelton"
     system = registry.prompt(agent) if is_chief else (
-        registry.prompt(agent) + "\n\nAhora estás conversando directamente con el usuario (sin herramientas). "
-        "Responde en su idioma, como el especialista que eres.")
+        registry.prompt(agent) + "\n\nAhora estás conversando directamente con un miembro del equipo. Responde en su "
+        "idioma, como el especialista que eres. Si te enseña algo para el futuro, guárdalo con la herramienta remember.")
     created_posts: list[str] = []
     final_text = ""
     for _ in range(25):
@@ -389,8 +462,7 @@ async def _turn(conv_id, user_text, upload_post_ids, emit, agent, engine):
                       thinking={"type": "adaptive", "display": "updates"},
                       output_config={"effort": registry.AGENTS[agent]["effort"]},
                       cache_control={"type": "ephemeral"}, betas_extra=[UPDATES_BETA])
-        if is_chief:
-            kwargs["tools"] = TOOLS
+        kwargs["tools"] = TOOLS if is_chief else [training.REMEMBER_TOOL]
         resp = await create(agent=agent, summary=user_text[:200], **kwargs)
         messages.append({"role": "assistant", "content": [b.model_dump(mode="json", exclude_none=True) for b in resp.content]})
         for b in resp.content:
@@ -411,7 +483,7 @@ async def _turn(conv_id, user_text, upload_post_ids, emit, agent, engine):
             try:
                 out = await _run_tool(u.name, dict(u.input or {}), ctx, emit)
                 results.append({"type": "tool_result", "tool_use_id": u.id, "content": out})
-                if u.name in ("create_posts", "edit_post", "make_video", "make_reel", "create_reel"):
+                if u.name in ("create_posts", "edit_post", "make_video", "make_reel", "create_reel", "add_voice", "add_sound"):
                     created_posts += [r["id"] for r in json.loads(out[0]["text"])]
                 if u.name in ("create_subject", "add_subject_reference"):
                     await emit({"type": "subjects_changed"})

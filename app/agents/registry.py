@@ -14,6 +14,9 @@ AGENTS: dict[str, dict] = {
     "video_producer": {"name": "Trends y Video", "role": "Productor de reels: dirige el movimiento de cada clip (Wan 2.2)", "effort": "low", "color": "#ef4444"},
     "trend_scout": {"name": "Scout de tendencias", "role": "Busca 24/7 tendencias de redes para replicar con tus modelos", "effort": "medium", "color": "#22c55e"},
     "tool_scout": {"name": "Scout de tools", "role": "Busca y evalúa herramientas y modelos locales nuevos", "effort": "medium", "color": "#84cc16"},
+    "voice_director": {"name": "Locutor", "role": "Guion de voz y diseño de voz (grave, aguda, sensual, robot...)", "effort": "low", "color": "#f97316"},
+    "sound_designer": {"name": "Diseñador de sonido", "role": "Efectos y ambientes: motores, motos, olas, ciudad", "effort": "low", "color": "#14b8a6"},
+    "researcher": {"name": "Investigador", "role": "Investiga en internet y te da opciones con fuentes", "effort": "medium", "color": "#3b82f6"},
     "subject_analyst": {"name": "Analista de referencias", "role": "Describe las fotos que subes al banco", "effort": "low", "color": "#0ea5e9"},
 }
 _DEFAULT_PROMPTS: dict[str, str] = {}
@@ -32,9 +35,15 @@ def profile(key: str) -> AgentProfile | None:
     return _cache[key]
 
 
-def prompt(key: str) -> str:
+def base_prompt(key: str) -> str:
     p = profile(key)
     return (p.prompt if p and p.prompt.strip() else _DEFAULT_PROMPTS.get(key, ""))
+
+
+def prompt(key: str) -> str:
+    """Prompt de la ficha + lecciones del entrenamiento humano."""
+    from app.agents import training
+    return base_prompt(key) + training.knowledge(key)
 
 
 def model(key: str) -> str:
@@ -69,7 +78,10 @@ def save(key: str, **fields) -> AgentProfile:
 def info(key: str) -> dict:
     p = profile(key)
     meta = AGENTS[key]
-    return {"key": key, **meta, "prompt": prompt(key), "default_prompt": _DEFAULT_PROMPTS.get(key, ""),
+    from app.agents import training
+    lessons = training.entries(key)
+    return {"key": key, **meta, "prompt": base_prompt(key), "default_prompt": _DEFAULT_PROMPTS.get(key, ""),
+            "lessons": len(lessons), "lessons_active": sum(1 for e in lessons if e["enabled"]),
             "custom_prompt": bool(p and p.prompt.strip()), "model": model(key),
             "effort": effort(key, meta["effort"]), "version": p.version if p else 1,
             "enabled": p.enabled if p else True}

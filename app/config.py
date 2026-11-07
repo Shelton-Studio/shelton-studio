@@ -66,6 +66,13 @@ class Settings:
     VIDEO_SECONDS = float(os.getenv("VIDEO_SECONDS", "5"))
     VIDEO_OUTPUT_FPS = int(os.getenv("VIDEO_OUTPUT_FPS", "30"))
 
+    # --- Audio (local) ---
+    TTS_URL = os.getenv("TTS_URL", "http://127.0.0.1:8189")          # tts_server/server.py (Chatterbox)
+    WORKFLOW_SFX = os.getenv("WORKFLOW_SFX", "stable_audio_sfx.json")
+    SFX_CKPT = os.getenv("SFX_CKPT", "stable_audio_open_1.0.safetensors")
+    SFX_CLIP = os.getenv("SFX_CLIP", "t5_base.safetensors")
+    SFX_STEPS = int(os.getenv("SFX_STEPS", "50"))
+
     # --- Cadena de producción ---
     QA_MIN_SCORE = int(os.getenv("QA_MIN_SCORE", "70"))      # por debajo se regenera
     QA_MAX_RETRIES = int(os.getenv("QA_MAX_RETRIES", "2"))   # reintentos por imagen
