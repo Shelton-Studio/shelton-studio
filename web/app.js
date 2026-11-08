@@ -157,6 +157,7 @@ function connectEvents() {
       if (location.hash.startsWith("#/banco")) VIEWS.banco($("#view"));
       if (ev.type === "subject_failed") toast("No se pudo crear la referencia: " + esc(ev.error), "bad");
     } else if (ev.type === "campaign" && location.hash.startsWith("#/campanas")) { VIEWS.campanas($("#view")); }
+    else if (window.onExtraEvent) onExtraEvent(ev);
   };
   es.onerror = () => { es.close(); setTimeout(connectEvents, 3000); };
 }
@@ -413,9 +414,9 @@ async function sendMessage() {
   const input = $("#input"), text = input.value.trim();
   if (!text || S.busy) return;
   S.busy = true; $("#send").disabled = true;
-  const uploads = S.uploads.map((p) => p.id);
+  const uploads = S.uploads.map((p) => p.id), attachments = (S.attach || []).map((a) => ({ kind: a.kind, id: a.id }));
   addMsg("user", text, uploads);
-  input.value = ""; input.style.height = "auto"; S.uploads = []; $("#attachments").innerHTML = "";
+  input.value = ""; input.style.height = "auto"; S.uploads = []; S.attach = []; $("#attachments").innerHTML = "";
   const body = addMsg("bot", "");
   const steps = document.createElement("div"); steps.className = "steps"; body.append(steps);
   const step = (t) => { $$(".step", steps).forEach((s) => s.classList.remove("live")); const s = document.createElement("div"); s.className = "step live"; s.textContent = t; steps.append(s); $("#msgs").scrollTop = 1e9; };
@@ -423,7 +424,7 @@ async function sendMessage() {
   const shown = new Set();
   try {
     const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text, conversation_id: S.conv, upload_ids: uploads, agent: S.chatAgent, engine: S.chatEngine }) });
+      body: JSON.stringify({ message: text, conversation_id: S.conv, upload_ids: uploads, agent: S.chatAgent, engine: S.chatEngine, attachments }) });
     if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
     const reader = r.body.getReader(), dec = new TextDecoder(); let buf = "";
     for (;;) {

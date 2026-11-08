@@ -23,6 +23,9 @@ class Settings:
     OPENROUTER_IMAGE_MODEL = os.getenv("OPENROUTER_IMAGE_MODEL", "auto")
     # Video vía OpenRouter: "auto" elige el mejor disponible (Veo 3.1 > Sora 2 > Seedance > Kling > Wan)
     OPENROUTER_VIDEO_MODEL = os.getenv("OPENROUTER_VIDEO_MODEL", "auto")
+    OPENROUTER_AUDIO_MODEL = os.getenv("OPENROUTER_AUDIO_MODEL", "google/gemini-2.5-flash")   # dictado por voz
+    WHISPER_LOCAL = os.getenv("WHISPER_LOCAL", "1") == "1"      # usa faster-whisper si está instalado
+    WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
 
     # --- Motor de imágenes ---
     # "comfyui" = ComfyUI real (GPU). "mock" = imágenes de prueba sin GPU.

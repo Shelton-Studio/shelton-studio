@@ -175,6 +175,8 @@ REMEMBER_TOOL = {
         "title": {"type": "string", "description": "Título corto de la lección"},
         "content": {"type": "string", "description": "La lección clara y accionable, con ejemplos si los dio"},
         "agent": {"type": "string", "description": "A qué agente entrenar (por defecto, tú mismo)"},
+        "subject": {"type": "string", "description": "Opcional: nombre de un modelo del banco si la lección es de ESE "
+                    "modelo (ej. «Valentina siempre con el lunar en la mejilla izquierda»). Se aplica cada vez que se use."},
     }, "required": ["title", "content"]},
 }
 
@@ -228,4 +230,59 @@ def audits(limit: int = 20) -> list[dict]:
         d = json.loads(p.read_text(encoding="utf-8"))
         d["id"] = p.stem
         out.append(d)
+    return out
+
+
+# ------------------------------------------------------------------ Entrenamiento por modelo del banco
+def subject_key(subject_id: str) -> str:
+    return f"subject_{subject_id}"
+
+
+def subject_knowledge(subject_id: str, max_chars: int = 1500) -> str:
+    """Lecciones activas de un modelo del banco (ej. «a Valentina siempre con lunar en la mejilla izquierda»)."""
+    parts, total = [], 0
+    for e in entries(subject_key(subject_id)):
+        if not e["enabled"]:
+            continue
+        chunk = f"{e['title']}: {e['content']}".replace("\n", " ")
+        if total + len(chunk) > max_chars:
+            break
+        parts.append(chunk)
+        total += len(chunk)
+    return " | ".join(parts)
+
+
+# ------------------------------------------------------------------ Shelton pasa cada cambio al equipo entero
+PROPAGATE = """You are Shelton, the chief of an AI content team. A human just taught ONE agent (or one recurring model of
+the bank) a new lesson. Decide which OTHER agents must also know it so the whole chain stays consistent
+(e.g. "never show the car's logo" taught to the art director also matters to the judge, who must check it, and to
+the video producer, who must not reveal it in motion). Only include agents whose work is really affected; for each,
+rewrite the lesson in its own terms (Spanish, short, actionable). If nobody else is affected, return an empty list.
+Never weaken safety rules."""
+
+
+async def propagate(agent: str, entry: dict) -> list[dict]:
+    """Copia adaptada de una lección a los agentes que también la necesitan (no se re-propaga en cadena)."""
+    from app.agents import registry
+    from app.llm import json_call, obj
+    if entry.get("source", "").startswith("equipo") or entry.get("status") != "active":
+        return []
+    team = "\n".join(f"- {k}: {m['name']} — {m['role']}" for k, m in registry.AGENTS.items() if k != agent)
+    who = registry.AGENTS.get(agent, {}).get("name") or agent
+    try:
+        r = await json_call(PROPAGATE, f"Lesson taught to {who} ({agent}):\n{entry['title']}: {entry['content']}\n\n"
+                                       f"Team:\n{team}", obj({
+            "updates": {"type": "array", "items": obj({
+                "agent": {"type": "string"}, "title": {"type": "string"}, "content": {"type": "string"}})}}),
+            effort="low", agent="shelton", summary="pasar lección al equipo")
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for u in r.get("updates", [])[:8]:
+        key = u.get("agent", "")
+        if key == agent or key not in registry.AGENTS or not u.get("content"):
+            continue
+        e = await add_checked(key, u.get("title") or entry["title"], u["content"] + f"\n\n(Pasada por Shelton desde {who}.)",
+                              author="Shelton", role="jefe", source=f"equipo:{agent}")
+        out.append({**e, "agent": key, "agent_name": registry.AGENTS[key]["name"]})
     return out

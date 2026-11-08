@@ -519,22 +519,46 @@ async def memory_feed(status: str | None = None):
     return sorted(out, key=lambda e: e["created"], reverse=True)
 
 
+def _memory_name(agent: str) -> str | None:
+    """Nombre de un agente o de un modelo del banco (subject_<id>) con memoria propia."""
+    if agent in registry.AGENTS:
+        return registry.AGENTS[agent]["name"]
+    if agent.startswith("subject_"):
+        from app.db import Subject
+        with session() as s:
+            sub = s.get(Subject, agent[8:])
+            return f"Modelo {sub.name}" if sub else None
+    return None
+
+
 @router.get("/training/{agent}")
 async def lessons(agent: str):
-    if agent not in registry.AGENTS:
+    if not _memory_name(agent):
         _404()
     return training.entries(agent)
 
 
 @router.post("/training/{agent}")
 async def add_lesson(agent: str, body: LessonIn):
-    if agent not in registry.AGENTS:
+    name = _memory_name(agent)
+    if not name:
         _404()
     e = await training.add_checked(agent, body.title, body.content, body.author, body.role, "manual")
-    ev = {"type": "learned", "agent": agent, "agent_name": registry.AGENTS[agent]["name"], "title": e["title"],
+    ev = {"type": "learned", "agent": agent, "agent_name": name, "title": e["title"],
           "applied": e["status"] == "active", "status": e["status"], "reason": e["conflict_reason"], "id": e["id"]}
     events.publish(ev)
+    import asyncio as _aio
+    _aio.create_task(_share_with_team(agent, e))
     return e
+
+
+async def _share_with_team(agent: str, e: dict) -> None:
+    """Shelton pasa la lección (adaptada) a los demás agentes que la necesitan y avisa con un banner."""
+    shared = await training.propagate(agent, e)
+    if shared:
+        events.publish({"type": "team_learned", "from": _memory_name(agent), "title": e["title"],
+                        "agents": [x["agent_name"] for x in shared],
+                        "applied": [x["agent_name"] for x in shared if x["status"] == "active"]})
 
 
 class LessonPatch(BaseModel):
@@ -562,7 +586,7 @@ async def resolve_lesson(agent: str, entry_id: str, body: ResolveIn):
         e = training.resolve(agent, entry_id, body.action, body.decided_by)
     except ValueError as err:
         raise HTTPException(400, str(err))
-    events.publish({"type": "learned", "agent": agent, "agent_name": registry.AGENTS[agent]["name"],
+    events.publish({"type": "learned", "agent": agent, "agent_name": _memory_name(agent) or agent,
                     "title": e["title"], "applied": e["status"] == "active", "status": e["status"], "id": e["id"]})
     return e
 

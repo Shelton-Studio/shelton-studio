@@ -17,6 +17,7 @@ AGENTS: dict[str, dict] = {
     "voice_director": {"name": "Locutor", "role": "Guion de voz y diseño de voz (grave, aguda, sensual, robot...)", "effort": "low", "color": "#f97316"},
     "sound_designer": {"name": "Diseñador de sonido", "role": "Efectos y ambientes: motores, motos, olas, ciudad", "effort": "low", "color": "#14b8a6"},
     "researcher": {"name": "Investigador", "role": "Investiga en internet y te da opciones con fuentes", "effort": "medium", "color": "#3b82f6"},
+    "video_analyst": {"name": "Analista de videos", "role": "Desarma TikToks y Reels de referencia para recrearlos con tus modelos", "effort": "low", "color": "#e11d48"},
     "subject_analyst": {"name": "Analista de referencias", "role": "Describe las fotos que subes al banco", "effort": "low", "color": "#0ea5e9"},
 }
 _DEFAULT_PROMPTS: dict[str, str] = {}

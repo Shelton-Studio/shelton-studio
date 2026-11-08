@@ -51,6 +51,8 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Shelton", lifespan=lifespan)
 app.include_router(panel_router)
+from app.api_extra import router as extra_router  # noqa: E402
+app.include_router(extra_router)
 app.mount("/static", StaticFiles(directory=ROOT / "web"), name="static")
 app.mount("/media", StaticFiles(directory=settings.media_dir), name="media")
 (settings.DATA_DIR / "voices").mkdir(parents=True, exist_ok=True)
@@ -124,12 +126,14 @@ class ChatIn(BaseModel):
     upload_ids: list[str] = []
     agent: str = "shelton"
     engine: str | None = None
+    attachments: list[dict] = []     # [{"kind": "audio"|"reference", "id": ...}]
 
 
 @app.post("/api/chat")
 async def chat(body: ChatIn):
     async def gen():
-        async for ev in shelton.chat(body.conversation_id, body.message, body.upload_ids, body.agent, body.engine):
+        async for ev in shelton.chat(body.conversation_id, body.message, body.upload_ids, body.agent, body.engine,
+                                     body.attachments):
             yield sse(ev)
     return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 

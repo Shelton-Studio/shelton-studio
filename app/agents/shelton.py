@@ -57,6 +57,17 @@ Cómo trabajas:
   modelo funcionó mejor para cada tipo de pedido. Si dudas, déjalo vacío (automático = el más realista). Di en una
   línea qué modelo elegiste y por qué. Cuando el usuario apruebe o critique un resultado, guarda con remember qué
   modelo funcionó (o no) para ese tipo de pedido, para elegir mejor la próxima vez.
+- Videos de referencia: si el usuario pega un link de TikTok/Reels/Shorts (o sube un video) y pide "algo
+  similar", "igual" o "hazlo con mi modelo", usa analyze_reference y luego recreate_reference con el modelo del banco
+  (mode same = mismo fondo, encuadre y movimiento cambiando la cara; similar = versión original inspirada). Solo
+  reemplaza a la persona por modelos del banco; nunca pongas la cara de una persona real que no dio permiso ni de
+  famosos. Si el audio es música de otra persona, avisa en una línea que revise los derechos antes de publicar
+  fuera de esa red.
+- Audios: el usuario puede subir WAV/MP3 (llegan con su audio_id). Para ponerlos en un post usa use_audio; para
+  guardar el audio de un video, save_audio; para ver los que hay, list_audio.
+- Trabajo en paralelo: puedes lanzar varios pedidos a la vez (varios modelos, reels y fotos). Mira studio_capacity
+  para saber cuántos corren a la vez y cuánto tardan, y da tiempos realistas. Mientras algo se procesa, propón
+  avanzar con otra cosa (otro modelo, más fotos del mismo, el texto, la voz).
 - Banco de fotos: si el usuario sube o pega varias fotos de lo mismo (un carro, una persona, una flor, un paisaje)
   y pide crear el modelo, usa create_subject_from_photos con TODAS las fotos. Si no dio nombre, pregúntalo una vez.
   Después ofrece hacer contenido con ese modelo: se usarán sus fotos como referencia para mantener la identidad.
@@ -67,6 +78,9 @@ Cómo trabajas:
   opciones y deja que el usuario elija antes de crear modelos del banco.
 - Memoria: si alguien te enseña algo ("aprende que...", "de ahora en adelante..."), guárdalo con remember en el agente
   que corresponda (copywriter para textos, judge para criterios de calidad, art_director para estilo visual...).
+  Si la corrección es de un modelo del banco ("a Valentina no le pongas pecas", "el Mustang es azul petróleo, no
+  azul"), pásale `subject` para que quede en la memoria de ESE modelo y no se repita el error. Tú pasas
+  automáticamente cada lección, adaptada, a los demás agentes que la necesitan.
 - Eres el núcleo: puedes leer la memoria de cualquier subagente (read_agent_memory) y revisar al equipo completo
   (review_team). Si detectas un problema o contradicción entre agentes, explícalo claro (quién, qué dice cada uno, por
   qué choca) y sugiere la solución; la decisión de cambiar lecciones es de las personas.
@@ -195,6 +209,34 @@ TOOLS = [
            "autopilot_daily": {"type": "integer", "minimum": 0, "maximum": 200},
            "autopilot_hour": {"type": "integer", "minimum": 0, "maximum": 23}}, []),
     _tool("studio_status", "Estado de la cola, posts listos hoy y campañas en curso.", {}, []),
+    _tool("studio_capacity", "Con qué cuentas AHORA: trabajadores en paralelo, GPUs y nube, cola, cuánto tarda cada "
+          "cosa (medido) y en cuánto se libera. Úsalo para planear varios pedidos a la vez y dar tiempos realistas.", {}, []),
+    _tool("analyze_reference", "Analiza un video de referencia (link de TikTok, Instagram Reels, YouTube Shorts, X o "
+          "Facebook, o un video subido): lo baja, saca cuadros clave, guarda su audio en la biblioteca y lo desarma "
+          "escena por escena. Devuelve reference_id para recrearlo.",
+          {"url": {"type": "string", "description": "Link del video"},
+           "reference_id": {"type": "string", "description": "Si el usuario ya subió el video (aparece en el mensaje)"}}, []),
+    _tool("recreate_reference", "Recrea un video de referencia con modelos del banco: mode='same' = igual (mismo fondo, "
+          "encuadre, pose, ropa y luz; cambia la persona/cara por tu modelo); mode='similar' = algo parecido pero "
+          "original. Cada escena pasa por imagen -> juez -> video -> juez y se monta el reel; con keep_audio le pone el "
+          "audio original. Espera el resultado.",
+          {"reference_id": {"type": "string"},
+           "subjects": {"type": "array", "items": {"type": "string"}, "description": "Modelos del banco que reemplazan a la persona/objeto principal"},
+           "mode": {"type": "string", "enum": ["same", "similar"]},
+           "changes": {"type": "string", "description": "Cambios pedidos (ropa, color, hora del día...)"},
+           "keep_audio": {"type": "boolean", "description": "Ponerle el audio original (por defecto sí)"},
+           "scenes": {"type": "array", "items": {"type": "integer"}, "description": "Solo estas escenas (0, 1, 2...). Vacío = todas"},
+           "platform": {"type": "string", "enum": ["tiktok", "instagram_story", "instagram_feed", "square", "x"]},
+           **_MODEL_PICK}, ["reference_id"]),
+    _tool("list_audio", "Biblioteca de audios: WAV/MP3 subidos y audios sacados de videos (con id, nombre y duración).", {}, []),
+    _tool("use_audio", "Le pone un audio de la biblioteca a un post de imagen o video (crea una versión nueva). "
+          "mode='replace' reemplaza el audio; 'mix' lo deja de fondo sin tapar la voz que ya tenga.",
+          {"post_id": {"type": "string"}, "audio_id": {"type": "string"},
+           "mode": {"type": "string", "enum": ["replace", "mix"]},
+           "start": {"type": "number", "description": "Desde qué segundo del audio empezar"},
+           "volume": {"type": "number", "description": "1 = normal"}}, ["post_id", "audio_id"]),
+    _tool("save_audio", "Guarda en la biblioteca el audio de un post de video (para reutilizarlo en otros).",
+          {"post_id": {"type": "string"}, "name": {"type": "string"}}, ["post_id"]),
 ]
 
 
@@ -211,7 +253,19 @@ def studio_context(engine: str) -> str:
     mode = MODES[infra_mode()]
     return (f"[Estado del estudio — {brand}. Banco de modelos: {bank}. Motor de imagen de esta conversación: {label}. "
             f"Switch de herramientas: {mode} (Local = solo máquinas propias; Nube = solo APIs en la nube). "
-            f"Si una herramienta falta en este modo, explícale al usuario que la conecte en el botón APIs o cambie el switch.]")
+            f"Si una herramienta falta en este modo, explícale al usuario que la conecte en el botón APIs o cambie el switch. "
+            f"{_capacity_line()}]")
+
+
+def _capacity_line() -> str:
+    try:
+        c = pipeline.capacity()
+    except Exception:  # noqa: BLE001
+        return ""
+    mins = round(c["queue_eta_seconds"] / 60)
+    return (f"Capacidad: {c['parallel_lanes']} trabajos a la vez, {c['running']} corriendo y {c['pending']} en cola"
+            f"{f' (se libera en ~{mins} min)' if c['pending'] or c['running'] else ''}; una imagen tarda "
+            f"~{c['seconds_per_job']['imagen']} s y un video ~{c['seconds_per_job']['video']} s.")
 
 
 # ------------------------------------------------------------------ Ejecución de herramientas
@@ -249,14 +303,14 @@ async def _announce(emit, role: str, engine: str | None = None) -> None:
 
 async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
     conv_id, engine = ctx["conv_id"], ctx["engine"] or None
-    if name in ("create_posts", "create_campaign", "create_reel", "make_video") and (
+    if name in ("create_posts", "create_campaign", "create_reel", "make_video", "recreate_reference") and (
             args.get("image_model") or args.get("video_model")):
         from app.model_picker import choice_for
         engine, note = await choice_for(args.get("image_model"), args.get("video_model"), engine)
         if note:
             await emit({"type": "status", "text": note})
     picked = engine if (engine or "").startswith("or:") else None   # el video también usa el modelo que eligió Shelton
-    if name in ("create_reel", "make_video", "make_reel") or (
+    if name in ("create_reel", "make_video", "make_reel", "recreate_reference") or (
             name == "create_posts" and any(p.get("format") == "video" for p in args.get("posts", []))):
         await _announce(emit, "video", engine if (engine or "").startswith("or:") else None)
     elif name in ("add_voice", "add_sound"):
@@ -325,17 +379,34 @@ async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
         target = args.get("agent") or ctx.get("agent", "shelton")
         if target not in registry.AGENTS:
             target = ctx.get("agent", "shelton")
+        target_name = registry.AGENTS[target]["name"]
+        if args.get("subject"):   # lección de un modelo del banco: se aplica cada vez que se use ese modelo
+            sids, _missing = pipeline.find_subjects([args["subject"]])
+            if not sids:
+                return f"No encontré el modelo «{args['subject']}» en el banco."
+            target = training.subject_key(sids[0])
+            target_name = f"Modelo {args['subject']}"
         e = await training.add_checked(target, args["title"], args["content"], author="Chat", role="usuario", source="chat")
         applied = e["status"] == "active"
-        ev = {"type": "learned", "agent": target, "agent_name": registry.AGENTS[target]["name"], "title": e["title"],
+        ev = {"type": "learned", "agent": target, "agent_name": target_name, "title": e["title"],
               "applied": applied, "status": e["status"], "reason": e["conflict_reason"], "id": e["id"]}
         await emit(ev)
         events.publish(ev)
+        if applied:
+            shared = await training.propagate(target, e)
+            if shared:
+                tev = {"type": "team_learned", "from": target_name, "title": e["title"],
+                       "agents": [x["agent_name"] for x in shared],
+                       "applied": [x["agent_name"] for x in shared if x["status"] == "active"]}
+                await emit({"type": "status", "text": "Shelton pasó la lección a: " + ", ".join(tev["agents"])})
+                events.publish(tev)
+                return (f"Lección guardada y aplicada en {target_name} ({e['created']}). Shelton también la pasó, "
+                        f"adaptada, a: {', '.join(tev['agents'])}.")
         if not applied:
             return (f"NO aplicada: hay una contradicción. {e['conflict_reason']} Quedó en espera en Memoria; "
                     "explícale al usuario la contradicción y que decida: activarla igual (bajo su responsabilidad), "
                     "reemplazar la anterior o descartarla.")
-        return f"Lección guardada y aplicada en {registry.AGENTS[target]['name']} ({e['created']})."
+        return f"Lección guardada y aplicada en {target_name} ({e['created']})."
 
     if name == "read_agent_memory":
         key = args["agent"]
@@ -457,6 +528,58 @@ async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
                     setattr(b, k, v)
         return "Perfil de marca actualizado. " + studio_context(ctx["engine"])
 
+    if name == "studio_capacity":
+        return json.dumps(pipeline.capacity(), ensure_ascii=False)
+
+    if name == "analyze_reference":
+        from app import reference
+        if args.get("reference_id"):
+            ref = reference.public(reference.get(args["reference_id"]))
+        elif args.get("url"):
+            await emit({"type": "status", "text": "Bajando el video de referencia…"})
+            ref = await reference.from_url(args["url"], conv_id)
+        else:
+            return "Falta el link del video (o que el usuario lo suba con 📎)."
+        await emit({"type": "posts", "ids": ref["frame_post_ids"]})
+        await emit({"type": "reference", "reference": ref})
+        return json.dumps({k: ref[k] for k in ("id", "url", "title", "duration", "platform", "frame_post_ids",
+                                               "audio_id", "analysis")}, ensure_ascii=False)
+
+    if name == "recreate_reference":
+        from app import reference
+        sids, missing = pipeline.find_subjects(args.get("subjects", []))
+        if missing:
+            await emit({"type": "status", "text": f"No encontré en el banco: {', '.join(missing)}"})
+        r = reference.recreate(args["reference_id"], sids, args.get("mode", "same"), args.get("changes", ""),
+                               args.get("keep_audio", True), args.get("platform", ""), args.get("scenes") or None,
+                               conv_id, engine, picked)
+        await emit({"type": "posts", "ids": r["scene_ids"]})
+        out = await _wait_and_report([r["target_id"]], emit, f"Recreando la referencia: {len(r['scene_ids'])} escena(s)…")
+        if r["audio"]:
+            await emit({"type": "status", "text": "Cuando termine el video, se le pone el audio original (versión nueva)."})
+        return out
+
+    if name == "list_audio":
+        from app import audio_lib
+        return json.dumps([{k: a.get(k) for k in ("id", "name", "duration", "source", "created")}
+                           for a in audio_lib.list_audio()[:60]], ensure_ascii=False)
+
+    if name == "use_audio":
+        pid = pipeline.new_audio_track(args["post_id"], args["audio_id"], args.get("mode", "replace"),
+                                       float(args.get("start") or 0), float(args.get("volume") or 1), conv_id)
+        return await _wait_and_report([pid], emit, "Poniendo el audio…")
+
+    if name == "save_audio":
+        from app import audio_lib
+        with session() as s:
+            p = s.get(Post, args["post_id"])
+            path, idea = (p.video_path, p.idea) if p else ("", "")
+        if not path:
+            return "Ese post no tiene video (y por lo tanto no tiene audio)."
+        a = await asyncio.to_thread(audio_lib.from_video, path, args.get("name") or f"Audio de {idea[:50]}", "post", args["post_id"])
+        events.publish({"type": "audio", "audio": a})
+        return json.dumps(a, ensure_ascii=False)
+
     if name == "studio_status":
         with session() as s:
             camps = [{"id": c.id, "brief": c.brief[:80], "count": c.count, "status": c.status}
@@ -482,7 +605,8 @@ def _posts_result(ids: list[str]) -> list:
 
 # ------------------------------------------------------------------ Bucle del agente
 async def chat(conv_id: str | None, user_text: str, upload_post_ids: list[str] | None = None,
-               agent: str = "shelton", engine: str | None = None) -> AsyncIterator[dict]:
+               agent: str = "shelton", engine: str | None = None,
+               attachments: list[dict] | None = None) -> AsyncIterator[dict]:
     """Procesa un mensaje del usuario y va emitiendo eventos (estado, posts, respuesta final)."""
     queue: asyncio.Queue = asyncio.Queue()
 
@@ -491,7 +615,7 @@ async def chat(conv_id: str | None, user_text: str, upload_post_ids: list[str] |
 
     async def run():
         try:
-            await _turn(conv_id, user_text, upload_post_ids or [], emit, agent, engine)
+            await _turn(conv_id, user_text, upload_post_ids or [], emit, agent, engine, attachments or [])
         except Exception as e:
             log.exception("chat")
             await emit({"type": "error", "text": str(e)})
@@ -507,7 +631,28 @@ async def chat(conv_id: str | None, user_text: str, upload_post_ids: list[str] |
     await task
 
 
-async def _turn(conv_id, user_text, upload_post_ids, emit, agent, engine):
+def _attachment_notes(attachments: list[dict]) -> list[str]:
+    """Audios y videos de referencia que el usuario adjuntó al mensaje."""
+    from app import audio_lib, reference
+    notes = []
+    for a in attachments[:10]:
+        try:
+            if a.get("kind") == "audio":
+                x = audio_lib.get(a["id"])
+                notes.append(f"El usuario subió un audio: audio_id={x['id']} «{x['name']}» ({x['duration']} s). "
+                             "Ya está en la biblioteca de audios.")
+            elif a.get("kind") == "reference":
+                r = reference.get(a["id"])
+                an = r.get("analysis") or {}
+                notes.append(f"El usuario subió un video de referencia: reference_id={r['id']} «{r.get('title', '')}» "
+                             f"({r['duration']} s, {len(r['frames'])} escenas, audio_id={r.get('audio_id') or 'sin audio'}). "
+                             f"Análisis: {an.get('summary', '')} Gancho: {an.get('hook', '')}")
+        except (ValueError, KeyError):
+            continue
+    return notes
+
+
+async def _turn(conv_id, user_text, upload_post_ids, emit, agent, engine, attachments=()):
     if agent not in registry.AGENTS:
         raise ValueError(f"Agente desconocido: {agent}")
     with session() as s:
@@ -530,9 +675,12 @@ async def _turn(conv_id, user_text, upload_post_ids, emit, agent, engine):
             path = p.image_path if p else None
         if path:
             content += [{"type": "text", "text": f"El usuario subió esta imagen (post_id={pid}):"}, image_block(path, 1024)]
+    for note in _attachment_notes(list(attachments)):
+        content.append({"type": "text", "text": note})
     content.append({"type": "text", "text": user_text})
     messages.append({"role": "user", "content": content})
-    display.append({"role": "user", "text": user_text, "post_ids": upload_post_ids})
+    display.append({"role": "user", "text": user_text, "post_ids": upload_post_ids,
+                    "attachments": list(attachments)[:10]})
 
     is_chief = agent == "shelton"
     system = registry.prompt(agent) if is_chief else (
@@ -566,7 +714,8 @@ async def _turn(conv_id, user_text, upload_post_ids, emit, agent, engine):
             try:
                 out = await _run_tool(u.name, dict(u.input or {}), ctx, emit)
                 results.append({"type": "tool_result", "tool_use_id": u.id, "content": out})
-                if u.name in ("create_posts", "edit_post", "make_video", "make_reel", "create_reel", "add_voice", "add_sound"):
+                if u.name in ("create_posts", "edit_post", "make_video", "make_reel", "create_reel", "add_voice", "add_sound",
+                              "recreate_reference", "use_audio"):
                     created_posts += [r["id"] for r in json.loads(out[0]["text"])]
                 if u.name in ("create_subject", "add_subject_reference"):
                     await emit({"type": "subjects_changed"})
