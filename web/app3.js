@@ -14,6 +14,7 @@
 const _renderWorking = renderWorking;
 window.renderWorking = renderWorking = function () { _renderWorking(); if (window.Bot) Bot.renderLive(); };
 window.onExtraEvent = (ev) => {
+  if (ev.type === "reference_progress") { S.refSteps?.[ev.token]?.(ev.text); return; }
   if (ev.type === "network_review") {
     if (ev.status === "done") toast(`🌐 <b>Revisión de la red lista</b>: ${ev.findings || 0} novedad(es) de los scouts${ev.timing ? " y mejor hora para publicar actualizada" : ""}.`, "good", "🌐", `<button class="btn sm" onclick="Bot.toggle(true)">Ver</button>`);
     if (window.Bot) Bot.refresh();
@@ -150,15 +151,36 @@ async function attachFileNow(f) {
     catch (err) { toast(esc(err.message), "bad"); }
     return;
   }
-  const chip = document.createElement("span"); chip.className = "att-chip"; chip.innerHTML = `<span class="spinner sm"></span> ${kind === "audio" ? "Subiendo audio" : "Analizando video (escenas y audio, ~30 s)"}: ${esc(f.name)}…`;
+  const chip = document.createElement("span"); chip.className = "att-chip";
+  const say = (t) => { chip.innerHTML = `<span class="spinner sm"></span> ${esc(t)} · ${esc(f.name)}`; };
+  say(kind === "audio" ? "Subiendo audio…" : "Subiendo video 0%");
   box.append(chip);
   const fd = new FormData(); fd.append("file", f);
+  const token = Math.random().toString(36).slice(2, 12);
+  if (kind === "reference") { fd.append("token", token); S.refSteps = S.refSteps || {}; S.refSteps[token] = say; }
   try {
-    const r = await api(kind === "audio" ? "/api/audio" : "/api/references/upload", { method: "POST", body: fd });
+    const r = kind === "audio" ? await api("/api/audio", { method: "POST", body: fd })
+      : await uploadWithProgress("/api/references/upload", fd, (pct) => say(pct < 100 ? `Subiendo video ${pct}%` : "Video subido, preparando…"));
     S.attach = S.attach || []; S.attach.push({ kind, id: r.id });
     chip.innerHTML = kind === "audio" ? `🎵 ${esc(r.name)} · ${Math.round(r.duration)} s` : `🎞️ ${esc(r.title || f.name)} · ${r.frames.length} escenas${r.audio_id ? " · 🎵 audio guardado" : ""}`;
     if (kind === "reference" && !$("#input").value) $("#input").value = "Hazme algo igual a este video con mi modelo ";
-  } catch (err) { chip.remove(); toast(`No pude ${kind === "audio" ? "guardar el audio" : "analizar el video"} «${esc(f.name)}»: ${esc(err.message)}`, "bad"); }
+    if (S.refSteps) delete S.refSteps[token];
+  } catch (err) { if (S.refSteps) delete S.refSteps[token]; chip.remove(); toast(`No pude ${kind === "audio" ? "guardar el audio" : "analizar el video"} «${esc(f.name)}»: ${esc(err.message)}`, "bad"); }
+}
+
+// Subida con porcentaje (los videos pueden pesar varios MB)
+function uploadWithProgress(url, fd, onPct) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest(); x.open("POST", url);
+    x.upload.onprogress = (e) => { if (e.lengthComputable) onPct(Math.round(e.loaded / e.total * 100)); };
+    x.onload = () => {
+      let j = {}; try { j = JSON.parse(x.responseText); } catch {}
+      if (x.status === 401) { location.replace("/login"); return; }
+      x.status < 400 ? resolve(j) : reject(new Error(j.detail || x.statusText || "Error"));
+    };
+    x.onerror = () => reject(new Error("Se cortó la conexión mientras subía el video"));
+    x.send(fd);
+  });
 }
 
 // Respuesta en voz alta si la orden fue por voz

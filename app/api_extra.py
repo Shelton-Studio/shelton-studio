@@ -122,12 +122,12 @@ async def refs_from_url(body: RefUrlIn):
 
 
 @router.post("/references/upload")
-async def refs_upload(file: UploadFile = File(...)):
+async def refs_upload(file: UploadFile = File(...), token: str = Form("")):
     data = await file.read()
     if len(data) > 300 * 1024 * 1024:
         raise HTTPException(400, "El video es muy grande (máximo 300 MB)")
     try:
-        return await reference.from_file(data, file.filename or "video.mp4")
+        return await reference.from_file(data, file.filename or "video.mp4", token=token[:40])
     except ValueError as e:
         raise HTTPException(400, str(e))
 
