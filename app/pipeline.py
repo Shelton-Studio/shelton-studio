@@ -126,6 +126,17 @@ def _update_post(post_id: str, **fields) -> dict:
     return data
 
 
+def _mark(post_id: str, kind: str, label: str) -> None:
+    """Guarda qué modelo hizo cada parte del post (se muestra como etiqueta)."""
+    with session() as s:
+        p = s.get(Post, post_id)
+        if p:
+            p.made_with = {**(p.made_with or {}), kind: label}
+    icon = {"image": "🖼️ Modo imagen", "edit": "✏️ Modo edición", "video": "🎬 Modo video", "voice": "🎙️ Modo audio",
+            "sound": "🔊 Modo audio"}.get(kind, kind)
+    events.publish({"type": "progress", "id": post_id, "text": f"{icon} · {label}"})
+
+
 def _progress(post_id: str, text: str):
     async def cb(extra: str):
         events.publish({"type": "progress", "id": post_id, "text": f"{text} · {extra}"})
@@ -148,6 +159,8 @@ async def _create_post(post_id: str, payload: dict) -> None:
     choice = payload.get("engine") or None
     refs = [Path(s.references[0]).read_bytes() for s in subjects if s.references]
     engine = get_engine("subject" if refs else "generate", choice)
+    from app.engines import engine_label
+    _mark(post_id, "image", engine_label(engine, "subject" if refs else "generate"))
 
     feedback: list[str] = []
     tries: list[dict] = []   # todos los intentos se conservan
@@ -217,8 +230,11 @@ async def _animate_into(post_id: str, source_image: str, motion: str, choice: st
     engine = get_engine("video", choice)
     step = _progress(post_id, "Animando con el motor de video")
     W, H = _dims(platform, source_image)
+    from app.engines import describe_role, engine_label
+    _mark(post_id, "video", await describe_role("video", choice))
     clip, fps = await engine.video(Path(source_image).read_bytes(), vp["motion_prompt"], vp.get("negative", ""),
                                    W, H, random.randint(1, 2**31 - 1), None, step)
+    _mark(post_id, "video", engine_label(engine, "video"))
     raw = save_bytes(clip, f"{post_id}_clip.{'webp' if vid.is_webp(clip) else 'mp4'}")
     events.publish({"type": "progress", "id": post_id, "text": "Post-producción: 30 fps y formato vertical"})
     mp4 = str(settings.media_dir / f"{post_id}.mp4")
@@ -372,7 +388,7 @@ async def _audio_post(post_id: str, payload: dict) -> None:
             match = next((v for v in voices if v["name"].lower() == spec["base_voice"].lower()), None)
             if match:
                 ref = (vc.voices_dir() / match["file"]).read_bytes()
-        events.publish({"type": "progress", "id": post_id, "text": "Generando la voz"})
+        _mark(post_id, "voice", vc.voice_label())
         wav = await vc.synthesize(dv["script"], settings.CONTENT_LANGUAGE, ref, spec)
         voice_path = str(settings.media_dir / f"{post_id}_voice.wav")
         await asyncio.to_thread(vc.apply_fx, wav, spec, voice_path)
@@ -383,6 +399,8 @@ async def _audio_post(post_id: str, payload: dict) -> None:
         events.publish({"type": "progress", "id": post_id, "text": "Diseñador de sonido creando el efecto"})
         sd = await sp.design_sound(payload["sound_request"], post.idea)
         engine = get_engine("sound", payload.get("engine") or None)
+        _mark(post_id, "sound", "Stable Audio Open" if engine.name == "comfyui" else
+              ("Simulado (demo)" if engine.name == "mock" else engine.name))
         sfx_len = max(seconds, vid.duration(tracks[0][1]) if tracks else seconds)
         audio = await engine.sound(sd["prompt"], sd.get("negative", ""), sfx_len + 0.5, random.randint(1, 2**31 - 1),
                                    _progress(post_id, "Generando sonido"))
@@ -497,7 +515,10 @@ async def _edit_post(post_id: str, payload: dict) -> None:
     else:
         step = _progress(post_id, "Editando con Qwen-Image-Edit")
         src = Path(parent.raw_path or parent.image_path).read_bytes()
-        out = await get_engine("edit", payload.get("engine") or None).edit(src, ei["instruction"], random.randint(1, 2**31 - 1), step)
+        edit_engine = get_engine("edit", payload.get("engine") or None)
+        from app.engines import engine_label
+        _mark(post_id, "edit", engine_label(edit_engine, "edit"))
+        out = await edit_engine.edit(src, ei["instruction"], random.randint(1, 2**31 - 1), step)
         raw = save_bytes(out, f"{post_id}_raw.png")
         if platform.key == "original":
             from app.media import resize_to, size_of

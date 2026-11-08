@@ -46,10 +46,34 @@ def list_voices() -> list[dict]:
 
 
 # ------------------------------------------------------------------ Motores
+def voice_label() -> str:
+    """Qué voz se usaría ahora (para la etiqueta «Modo audio»)."""
+    from app.connections import list_enabled
+    from app.engines import infra_mode
+    mode = infra_mode()
+    voices = list_enabled("voice")
+    if mode == "local":
+        voices = [c for c in voices if c.type == "local_tts"]
+    elif mode == "cloud":
+        voices = [c for c in voices if c.type != "local_tts"]
+    if voices:
+        return voices[0].name
+    return "Simulado (demo)" if settings.IMAGE_ENGINE == "mock" else "Chatterbox (local)"
+
+
 async def synthesize(text: str, language: str, ref_audio: bytes | None, spec: dict) -> bytes:
     """Devuelve WAV. Elige el motor según Conexiones (rol 'voice') o .env."""
     from app.connections import list_enabled
-    conn = next((c for c in list_enabled("voice")), None)
+    from app.engines import infra_mode
+    mode = infra_mode()
+    voices = list_enabled("voice")
+    if mode == "local":
+        voices = [c for c in voices if c.type == "local_tts"]
+    elif mode == "cloud":
+        voices = [c for c in voices if c.type != "local_tts"]
+        if not voices and settings.IMAGE_ENGINE != "mock":
+            raise RuntimeError("Modo Nube: falta una voz en la nube (ElevenLabs u otra API de voz). Agrégala en el botón APIs.")
+    conn = voices[0] if voices else None
     kind = conn.type if conn else ("mock" if settings.IMAGE_ENGINE == "mock" else "local_tts")
     cfg = dict(conn.config) if conn else {"url": settings.TTS_URL}
     if kind == "mock":

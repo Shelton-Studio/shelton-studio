@@ -54,11 +54,14 @@ def clip_to_mp4(data: bytes, src_fps: float, out_path: str, width: int, height: 
         raw = b"".join(f.resize((w, h)).tobytes() for f in frames)
         _run(["-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", str(src_fps), "-i", "-",
               "-vf", vf, "-r", str(out_fps), *_ENCODE, out_path], stdin=raw)
-    else:  # MP4/MOV/WebM de motores en la nube
+    else:  # MP4/MOV/WebM de motores en la nube (ya vienen fluidos; se conserva su audio si traen, ej. Veo/Sora)
         with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp:
             tmp.write(data)
         try:
-            _run(["-i", tmp.name, "-vf", vf, "-r", str(out_fps), *_ENCODE, out_path])
+            vf = _vf(width, height, src_fps, out_fps, False)
+            enc = [x for x in _ENCODE if x != "-an"]
+            _run(["-i", tmp.name, "-map", "0:v:0", "-map", "0:a?", "-vf", vf, "-r", str(out_fps), *enc,
+                  "-c:a", "aac", "-b:a", "192k", out_path])
         finally:
             Path(tmp.name).unlink(missing_ok=True)
     return out_path

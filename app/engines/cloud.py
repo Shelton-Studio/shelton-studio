@@ -300,5 +300,105 @@ class OpenRouterImageEngine(_Base):
         return await self._run(prefix + prompt, images, width, height)
 
 
-CLOUD_ENGINES = {"openrouter_image": OpenRouterImageEngine, "fal": FalEngine, "replicate": ReplicateEngine, "openai_images": OpenAIImagesEngine,
+# ------------------------------------------------------------------ OpenRouter (video)
+class OpenRouterVideoEngine(_Base):
+    """Video con OpenRouter (Veo, Sora, Seedance, Wan, ...), misma clave. Flujo asíncrono:
+    POST /api/v1/videos -> consultar estado -> descargar. Imagen -> video usando la imagen como primer cuadro."""
+    name = "openrouter_video"
+    BASE = "https://openrouter.ai/api/v1"
+    PREFERENCE = ("veo-3.1", "veo-3", "sora-2-pro", "sora-2", "seedance-2", "kling", "wan-2.7", "seedance", "wan")
+    transport = None
+    _models_cache: list | None = None
+
+    def _key(self) -> str:
+        return OpenRouterImageEngine(self.cfg)._key()
+
+    def _headers(self) -> dict:
+        return {"Authorization": f"Bearer {self._key()}", "X-Title": "Shelton Studio"}
+
+    async def list_models(self) -> list[dict]:
+        if OpenRouterVideoEngine._models_cache is None:
+            async with httpx.AsyncClient(timeout=30, transport=self.transport) as c:
+                r = await c.get(f"{self.BASE}/videos/models", headers=self._headers())
+            if r.status_code >= 400:
+                raise RuntimeError(f"OpenRouter video {r.status_code}: {r.text[:300]}")
+            j = r.json()
+            OpenRouterVideoEngine._models_cache = j.get("data", j) if isinstance(j, dict) else j
+        return OpenRouterVideoEngine._models_cache
+
+    async def _pick(self) -> dict:
+        from app.config import settings
+        wanted = self.cfg.get("model") or settings.OPENROUTER_VIDEO_MODEL
+        models = await self.list_models()
+        if wanted and wanted != "auto":
+            return next((m for m in models if m.get("id") == wanted), {"id": wanted})
+        for pref in self.PREFERENCE:
+            for m in models:
+                if pref in str(m.get("id", "")).lower():
+                    return m
+        if not models:
+            raise RuntimeError("OpenRouter no devolvió modelos de video")
+        return models[0]
+
+    @staticmethod
+    def _options(m: dict, *names) -> list:
+        for n in names:
+            v = m.get(n)
+            if isinstance(v, list) and v:
+                return v
+        return []
+
+    async def video(self, image, prompt, negative, width, height, seed, preset=None, on_progress: Progress = None):
+        m = await self._pick()
+        self.last_model = m["id"]
+        ratio = _ratio(width, height) if width and height else "9:16"
+        body = {"model": m["id"], "prompt": prompt + (f"\nAvoid: {negative}" if negative else ""),
+                "frame_images": [{"type": "image_url", "image_url": {"url": _data_uri(image)}, "frame_type": "first_frame"}]}
+        durations = self._options(m, "supported_durations", "durations")
+        if durations:
+            nums = [d for d in durations if isinstance(d, (int, float))]
+            if nums:
+                body["duration"] = min(nums, key=lambda d: (abs(d - 5), -d))  # ~5 s; ante empate, el más largo
+        else:
+            body["duration"] = 5
+        ratios = self._options(m, "supported_aspect_ratios", "aspect_ratios")
+        if not ratios or ratio in ratios:
+            body["aspect_ratio"] = ratio
+        elif "9:16" in ratios and height > width:
+            body["aspect_ratio"] = "9:16"
+        res = self._options(m, "supported_resolutions", "resolutions")
+        for r in ("1080p", "720p"):
+            if not res or r in res:
+                body["resolution"] = r
+                break
+        async with httpx.AsyncClient(timeout=120, transport=self.transport) as c:
+            r = await c.post(f"{self.BASE}/videos", json=body, headers=self._headers())
+            if r.status_code >= 400:
+                raise RuntimeError(f"OpenRouter video ({m['id']}) {r.status_code}: {r.text[:300]}")
+            job = r.json()
+            job_id = job.get("id") or job.get("job_id")
+            poll = job.get("polling_url") or f"{self.BASE}/videos/{job_id}"
+            for i in range(120):  # hasta ~20 minutos
+                if job.get("status") == "completed":
+                    break
+                if job.get("status") in ("failed", "cancelled", "expired"):
+                    raise RuntimeError(f"OpenRouter video {job.get('status')}: {job.get('error') or ''}")
+                if on_progress:
+                    await on_progress(f"{m['id']} · {job.get('status', 'en cola')} ({i * 10}s)")
+                await asyncio.sleep(10 if i else 5)
+                pr = await c.get(poll, headers=self._headers())
+                if pr.status_code >= 400:
+                    raise RuntimeError(f"OpenRouter video {pr.status_code}: {pr.text[:300]}")
+                job = pr.json()
+            else:
+                raise RuntimeError("OpenRouter video: tiempo de espera agotado")
+            urls = job.get("unsigned_urls") or job.get("urls") or []
+            url = urls[0] if urls else f"{self.BASE}/videos/{job_id}/content?index=0"
+            v = await c.get(url, headers=self._headers(), follow_redirects=True, timeout=300)
+            if v.status_code >= 400:
+                raise RuntimeError(f"OpenRouter video: no se pudo descargar ({v.status_code})")
+        return v.content, 30
+
+
+CLOUD_ENGINES = {"openrouter_video": OpenRouterVideoEngine, "openrouter_image": OpenRouterImageEngine, "fal": FalEngine, "replicate": ReplicateEngine, "openai_images": OpenAIImagesEngine,
                  "gemini_image": GeminiImageEngine, "http_engine": HttpEngine}

@@ -342,7 +342,8 @@ VIEWS.ajustes = async (el) => {
       <div class="row"><label class="f" style="width:140px">Color principal<input type="color" name="accent" value="${esc(w.accent)}"></label><label class="f" style="width:140px">Color secundario<input type="color" name="accent2" value="${esc(w.accent2)}"></label>
       <label class="f grow">Logo<input type="file" id="logo-up" accept="image/*"></label></div>
       <label class="f">URL de soporte (opcional)<input name="support_url" value="${esc(w.support_url)}"></label>
-      <div class="hint">Para cambiar también la personalidad del jefe, edita su ficha en Agentes.</div><div><button class="btn primary">Guardar marca blanca</button></div></form>
+      <div class="hint">Para cambiar también la personalidad del jefe, edita su ficha en Agentes.</div><div><button class="btn primary">Guardar marca blanca</button></div>
+      <label class="checks" style="margin-top:8px"><label><input type="checkbox" id="asks-toggle" ${asksOn() ? "checked" : ""}> Los subagentes me hacen preguntas y recomendaciones (banners)</label></label></form>
     <div class="card col"><div class="card-title"><h3>Estado del sistema</h3><button class="btn sm right" id="rs">${icon("refresh", 15)} Revisar</button></div><div id="sbox"><div class="spinner"></div></div></div></div>`;
   $("#wf").onsubmit = async (e) => {
     e.preventDefault(); const f = e.target;
@@ -363,6 +364,7 @@ VIEWS.ajustes = async (el) => {
       <div class="faint small">Cola: ${h.queue.pending} pendientes · ${h.queue.running} en curso · ${h.queue.ready_today} listos hoy · ${h.queue.workers} trabajadores</div></div>`;
   };
   $("#rs").onclick = status; status();
+  $("#asks-toggle").onchange = (e) => { try { localStorage.setItem("agent-asks", e.target.checked ? "on" : "off"); } catch {} toast(e.target.checked ? "Los subagentes te harán sugerencias" : "Banners de sugerencias apagados", "good"); };
 };
 
 // ------------------------------------------------------------------ BOTÓN "APIs": ver y cambiar claves y modelos
@@ -382,7 +384,7 @@ async function openApis() {
   const box = modal(`${icon("key", 18)} APIs conectadas`,
     `<div class="hint">Aquí ves todo lo que Shelton usa. Las claves se muestran solo con sus últimos 4 caracteres. Si cambias algo que viene del <b>.env</b>, se guarda en la web y tiene prioridad (el archivo no se toca).</div>` +
     groups.map((g) => `<div class="small muted" style="font-weight:700;margin-top:6px">${esc(g)}</div>` + items.map((it, n) => it.group === g ? row(it, n) : "").join("")).join(""),
-    `<button class="btn" onclick="closeModal();go('conexiones')">${icon("plus", 16)} Agregar otra API</button>`, true);
+    `<button class="btn" onclick="openVideoModels()">🎬 Modelos de video</button><button class="btn" onclick="closeModal();go('conexiones')">${icon("plus", 16)} Agregar otra API</button>`, true);
   const reopen = () => openApis();
   $$("[data-edit-api]", box).forEach((b) => b.onclick = () => {
     const it = items[+b.dataset.editApi];
@@ -414,5 +416,100 @@ async function openApis() {
     const c = conns.find((x) => x.id === b.dataset.togApi);
     await api(`/api/connections/${c.id}`, { method: "PUT", body: { type: c.type, name: c.name, config: c.config, roles: c.roles, enabled: !c.enabled } });
     S.engines = null; reopen(); pollHealth();
+  });
+}
+
+// ------------------------------------------------------------------ Banners de los subagentes: preguntan y recomiendan
+// Reglas locales (no gastan tokens). Solo proponen: nada se hace sin tu clic.
+const ASKED = new Set();
+const asksOn = () => { try { return localStorage.getItem("agent-asks") !== "off"; } catch { return true; } };
+function ask(agent, question, rec, buttons, secs = 25) {
+  if (!asksOn()) return;
+  const box = $("#asks"); if (!box) return;
+  while (box.children.length >= 3) box.firstElementChild.remove();
+  const el = document.createElement("div");
+  el.className = "ask"; el.style.setProperty("--t", secs + "s");
+  el.innerHTML = `<div class="a-top">${avatar(agent, true)}<b>${esc(agentName(agent))}</b><span class="faint small">pregunta</span><div class="grow"></div><button class="icon-btn" data-x style="width:28px;height:28px">${icon("x", 14)}</button></div>
+    <div class="a-q">${question}</div>${rec ? `<div class="a-rec">💡 Recomendación: ${rec}</div>` : ""}
+    <div class="row" style="gap:6px">${buttons.map((b, i) => `<button class="btn sm ${i === 0 ? "primary" : ""}" data-b="${i}">${b.label}</button>`).join("")}</div>`;
+  const close = () => { el.classList.add("out"); setTimeout(() => el.remove(), 260); };
+  $("[data-x]", el).onclick = close;
+  $$("[data-b]", el).forEach((btn) => btn.onclick = async () => {
+    const b = buttons[+btn.dataset.b]; close();
+    if (b.run) { try { await b.run(); if (b.done) toast(b.done, "good"); } catch (e) { toast(esc(e.message), "bad"); } }
+  });
+  box.append(el);
+  setTimeout(() => el.isConnected && close(), secs * 1000);
+}
+function agentAsk(p, prev) {
+  if (!prev || prev.status === p.status || p.status !== "ready") return;
+  if (!["generating", "queued"].includes(prev.status)) return;
+  const key = p.id + ":" + p.media_type; if (ASKED.has(key)) return; ASKED.add(key);
+  const short = (s) => String(s || "").split("/").pop();
+  if (p.qa_score && !p.qa_passed) {
+    return ask("judge", `«${esc(p.idea.slice(0, 70))}» sacó <b>${Math.round(p.qa_score)}/100</b>. ${esc((p.qa_notes || "").replace(/^⚠[^.]*\.\s*/, "").slice(0, 110))}`,
+      "regenerarla con otro enfoque; igual guardo los intentos para que elijas.",
+      [{ label: "Regenerar", run: () => api(`/api/posts/${p.id}/regenerate`, { method: "POST" }), done: "Regenerando…" },
+       { label: "La reviso yo", run: async () => openPost(p.id) }]);
+  }
+  if (p.media_type === "image") {
+    const vid = S.mode?.routes?.find((r) => r.role === "video");
+    if (!vid?.ok) return;
+    // Agrupa los posts que terminan casi juntos en un solo banner.
+    (agentAsk.batch ||= []).push(p);
+    clearTimeout(agentAsk.t);
+    agentAsk.t = setTimeout(() => {
+      const ps = agentAsk.batch; agentAsk.batch = [];
+      const model = esc(short(vid.tool.replace(/^.*·\s*/, "")));
+      const animate = () => Promise.all(ps.map((x) => api(`/api/posts/${x.id}/video`, { method: "POST", body: { motion: "" } })));
+      ask("video_producer", ps.length === 1
+        ? `El post «${esc(ps[0].idea.slice(0, 60))}» está listo. ¿Lo convierto en <b>video</b> para Reels/TikTok?`
+        : `<b>${ps.length} posts</b> listos («${esc(ps[0].idea.slice(0, 40))}»…). ¿Los convierto en <b>video</b> para Reels/TikTok?`,
+        `animar${ps.length > 1 ? "los" : "lo"} con <b>${model}</b>; los videos tienen más alcance.`,
+        [{ label: ps.length > 1 ? `🎬 Animar los ${ps.length}` : "🎬 Animar", run: animate, done: "Animando…" }, { label: "Ahora no" }]);
+    }, 2500);
+    return;
+  }
+  if ((p.media_type === "video" || p.media_type === "reel") && !p.audio_url) {
+    return ask("voice_director", `El ${p.media_type === "reel" ? "reel" : "video"} quedó listo y no tiene voz. ¿Le pongo locución?`,
+      "voz femenina cálida con un gancho al inicio (los videos con voz retienen más).",
+      [{ label: "🎙️ Voz femenina cálida", run: () => api(`/api/posts/${p.id}/audio`, { method: "POST", body: { voice_request: "femenina, cálida, cercana" } }), done: "El Locutor está trabajando…" },
+       { label: "Voz grave", run: () => api(`/api/posts/${p.id}/audio`, { method: "POST", body: { voice_request: "masculina, grave, segura" } }), done: "El Locutor está trabajando…" },
+       { label: "Sin voz" }]);
+  }
+  if (p.audio_url) {
+    return ask("copywriter", `Listo con audio: «${esc(p.idea.slice(0, 60))}». ¿Lo revisas para aprobarlo?`, "revisar el texto y aprobar si te gusta; publicar pasa por Aprobaciones.",
+      [{ label: "Revisar ahora", run: async () => openPost(p.id) }, { label: "Luego" }]);
+  }
+}
+async function agentAskFindings(n) {
+  const list = await api("/api/findings").catch(() => []);
+  const f = list[0]; if (!f || ASKED.has("f" + f.id)) return; ASKED.add("f" + f.id);
+  ask(f.kind === "trend" ? "trend_scout" : "tool_scout", `Encontré ${n > 1 ? n + " novedades" : "algo nuevo"}: <b>${esc(f.title)}</b>`, esc(f.why.slice(0, 140)),
+    [{ label: "Ver y replicar", run: async () => go("tendencias") }, { label: "Luego" }], 30);
+}
+
+// ------------------------------------------------------------------ Catálogo de modelos de video (OpenRouter)
+async function openVideoModels() {
+  const box = modal("🎬 Modelos de video", `<div class="empty"><div class="spinner"></div>Consultando OpenRouter…</div>`, "", true);
+  let data;
+  try { data = await api("/api/video-models"); }
+  catch (e) { $(".m-body", box).innerHTML = `<div class="qa-box" style="color:#fca5a5">${esc(e.message)}</div><div class="hint">Revisa que tu clave de OpenRouter esté en el botón APIs.</div>`; return; }
+  const cur = data.current || "auto";
+  const price = (p) => { const e = Object.entries(p || {}).filter(([, v]) => v !== null && v !== "" && v !== "0"); return e.length ? e.slice(0, 3).map(([k, v]) => `${esc(k)}: ${esc(v)}`).join(" · ") : ""; };
+  const card = (m) => `<div class="card" style="padding:14px;display:grid;gap:8px">
+      <div class="row" style="gap:8px"><b>${esc(m.name)}</b>${cur === m.id ? '<span class="chip good">En uso</span>' : ""}${data.auto_pick === m.id && cur === "auto" ? '<span class="chip accent">Elegido por «auto»</span>' : ""}<div class="grow"></div>
+        <button class="btn sm ${cur === m.id ? "" : "primary"}" data-use-vm="${esc(m.id)}" ${cur === m.id ? "disabled" : ""}>Usar este</button></div>
+      <div class="row" style="gap:6px">${m.tags.map((t) => `<span class="chip ${/Mejor|Premium|Cine/.test(t) ? "accent" : /Económico|precio/.test(t) ? "good" : /audio/.test(t) ? "info" : ""}">${esc(t)}</span>`).join("")}</div>
+      <div class="muted">${esc(m.use)}</div>
+      <div class="faint small mono">${esc(m.id)}${m.durations.length ? ` · ${esc(m.durations.join("/"))} s` : ""}${m.resolutions.length ? ` · ${esc(m.resolutions.join(", "))}` : ""}${price(m.price) ? ` · ${price(m.price)}` : ""}</div></div>`;
+  $(".m-body", box).innerHTML = `<div class="hint">Todos usan tu misma clave de OpenRouter y se cobran por segundo o por clip según el modelo. Shelton usa el modelo elegido para animar posts y montar reels.</div>
+    <div class="card" style="padding:14px;display:flex;gap:10px;align-items:center"><div class="grow"><b>Automático</b> <span class="chip accent">Recomendado</span>
+      <div class="muted small">Elige solo el mejor disponible (Veo 3.1 → Sora 2 → Seedance → Kling → Wan). Ahora: <span class="mono">${esc(data.auto_pick || "—")}</span></div></div>
+      <button class="btn sm ${cur === "auto" ? "" : "primary"}" data-use-vm="auto" ${cur === "auto" ? "disabled" : ""}>${cur === "auto" ? "En uso" : "Usar automático"}</button></div>
+    ${data.models.map(card).join("") || '<div class="faint">OpenRouter no devolvió modelos de video.</div>'}`;
+  $$("[data-use-vm]", box).forEach((b) => b.onclick = async () => {
+    await api("/api/apis/override", { method: "POST", body: { type: "openrouter_video", config: { model: b.dataset.useVm }, roles: ["video"] } });
+    toast(`Video: <b>${esc(b.dataset.useVm === "auto" ? "automático" : b.dataset.useVm)}</b>`, "good", "🎬"); loadMode(); openVideoModels();
   });
 }
