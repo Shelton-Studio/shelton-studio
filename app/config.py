@@ -16,6 +16,9 @@ class Settings:
     # --- Claude (cerebro de Shelton) ---
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
     CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-5-5")
+    # Plan B: OpenRouter (se usa solo si no hay clave de Anthropic)
+    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+    OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4.5")
 
     # --- Motor de imágenes ---
     # "comfyui" = ComfyUI real (GPU). "mock" = imágenes de prueba sin GPU.

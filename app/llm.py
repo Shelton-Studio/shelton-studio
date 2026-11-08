@@ -4,6 +4,7 @@ import logging
 import time
 
 import anthropic
+import httpx
 
 from app.config import settings
 
@@ -25,6 +26,21 @@ def api_key() -> str:
     from app.connections import first_config
     cfg = first_config("anthropic")
     return (cfg or {}).get("api_key") or settings.ANTHROPIC_API_KEY
+
+
+def openrouter_config() -> tuple[str, str]:
+    """(clave, modelo) de OpenRouter: Conexiones o .env."""
+    from app.connections import first_config
+    cfg = first_config("openrouter") or {}
+    return (cfg.get("api_key") or settings.OPENROUTER_API_KEY,
+            cfg.get("model") or settings.OPENROUTER_MODEL)
+
+
+def provider() -> str:
+    """Anthropic directo si hay clave; si no, OpenRouter si está configurado."""
+    if api_key():
+        return "anthropic"
+    return "openrouter" if openrouter_config()[0] else "anthropic"
 
 
 def client() -> anthropic.AsyncAnthropic:
@@ -61,6 +77,8 @@ async def create(agent: str = "shelton", betas_extra: list[str] | None = None, s
     if oc and "effort" in oc:
         kwargs["output_config"] = {**oc, "effort": registry.effort(agent, oc["effort"])}
     start = time.monotonic()
+    if provider() == "openrouter":
+        return await _create_openrouter(agent, summary, start, kwargs)
     try:
         resp = await client().beta.messages.create(betas=[FALLBACK_BETA, *(betas_extra or [])],
                                                    fallbacks="default", **kwargs)
@@ -84,6 +102,27 @@ async def create(agent: str = "shelton", betas_extra: list[str] | None = None, s
     raise err
 
 
+async def _create_openrouter(agent: str, summary: str, start: float, kwargs: dict):
+    from app import openrouter
+    key, default_model = openrouter_config()
+    # Si la ficha del agente tiene un modelo de OpenRouter ("proveedor/modelo"), se respeta.
+    model = kwargs["model"] if "/" in str(kwargs.get("model", "")) else default_model
+    kwargs["model"] = model
+    try:
+        resp = await openrouter.create(api_key=key, **kwargs)
+    except openrouter.ORError as e:
+        msg = {401: "Clave de OpenRouter inválida (revisa Conexiones o .env)",
+               402: "Sin saldo en OpenRouter: recarga créditos",
+               429: "Límite de OpenRouter alcanzado; reintenta en un momento"}.get(e.status, f"OpenRouter ({e.status}): {e}")
+        _log_run(agent, False, start, model, None, msg, summary)
+        raise LLMError(msg) from e
+    except httpx.HTTPError as e:
+        _log_run(agent, False, start, model, None, str(e), summary)
+        raise LLMError(f"Sin conexión con OpenRouter: {e}") from e
+    _log_run(agent, True, start, model, resp, summary=summary)
+    return resp
+
+
 def text_of(resp) -> str:
     return "".join(b.text for b in resp.content if b.type == "text").strip()
 
@@ -102,8 +141,21 @@ async def json_call(system: str, content, schema: dict, effort: str = "low", max
         raise LLMError("Respuesta de Claude cortada (max_tokens)")
     try:
         return json.loads(text_of(resp))
+    except json.JSONDecodeError:
+        pass
+    from app.openrouter import extract_json
+    try:
+        return extract_json(text_of(resp))
+    except json.JSONDecodeError:
+        pass
+    # Un reintento pidiendo explícitamente el formato (solo hace falta con algunos modelos vía OpenRouter).
+    retry = await create(agent=agent, summary=summary + " (reintento JSON)", system=system + "\n\nResponde SOLO con JSON válido.",
+                         max_tokens=max_tokens, output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
+                         messages=[{"role": "user", "content": content}])
+    try:
+        return extract_json(text_of(retry))
     except json.JSONDecodeError as e:
-        raise LLMError(f"Claude devolvió JSON inválido: {e}") from e
+        raise LLMError(f"El modelo devolvió JSON inválido: {e}") from e
 
 
 def obj(properties: dict, required: list[str] | None = None) -> dict:

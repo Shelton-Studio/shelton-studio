@@ -692,3 +692,23 @@ async def add_audio(pid: str, body: AudioIn):
         return {"id": pipeline.new_audio(pid, body.voice_request, body.script, body.sound_request, body.voice)}
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@router.get("/openrouter/models")
+async def openrouter_models():
+    """Modelos de OpenRouter que sirven para Shelton (ven imágenes y usan herramientas)."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            data = (await c.get("https://openrouter.ai/api/v1/models")).json()["data"]
+    except Exception as e:
+        raise HTTPException(503, f"No se pudo consultar OpenRouter: {e}")
+    out = []
+    for m in data:
+        params = m.get("supported_parameters") or []
+        inputs = (m.get("architecture") or {}).get("input_modalities") or []
+        if "tools" in params and "image" in inputs:
+            p = m.get("pricing") or {}
+            out.append({"id": m["id"], "name": m.get("name", m["id"]), "structured": "structured_outputs" in params,
+                        "price_in": float(p.get("prompt") or 0) * 1e6, "price_out": float(p.get("completion") or 0) * 1e6})
+    return sorted(out, key=lambda x: (not x["id"].startswith("anthropic/"), x["id"]))
