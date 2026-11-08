@@ -713,3 +713,90 @@ async def openrouter_models(kind: str = "brain"):
             out.append({"id": m["id"], "name": m.get("name", m["id"]), "structured": "structured_outputs" in params,
                         "price_in": float(p.get("prompt") or 0) * 1e6, "price_out": float(p.get("completion") or 0) * 1e6})
     return sorted(out, key=lambda x: (not x["id"].startswith("anthropic/"), x["id"]))
+
+
+# ------------------------------------------------------------------ Resumen de APIs (botón "APIs")
+def _mask(v: str) -> str:
+    return ("••••" + v[-4:]) if v else ""
+
+
+@router.get("/apis")
+async def apis_summary():
+    """Todas las APIs en uso: las de la web (Conexiones) y las del .env, con la clave enmascarada.
+    Lo que se guarda en la web tiene prioridad sobre el .env."""
+    from app.llm import provider
+    with session() as s:
+        conns = [public(c) for c in s.query(Connection).order_by(Connection.created_at)]
+    items = []
+    # Cerebro
+    web_brain = {c["type"]: c for c in conns if c["category"] == "brain" and c["enabled"]}
+    active = provider()
+    for t, key, model, name in (("anthropic", settings.ANTHROPIC_API_KEY, settings.CLAUDE_MODEL, "Claude (Anthropic)"),
+                                ("openrouter", settings.OPENROUTER_API_KEY, settings.OPENROUTER_MODEL, "OpenRouter")):
+        if t in web_brain:
+            c = web_brain[t]
+            items.append({"group": "Cerebro", "name": c["name"], "type": t, "source": "web", "id": c["id"],
+                          "key": c["config"].get("api_key", ""), "model": c["config"].get("model") or model,
+                          "active": active == t, "last_test": c["last_test"]})
+        elif key:
+            items.append({"group": "Cerebro", "name": name, "type": t, "source": ".env", "key": _mask(key),
+                          "model": model, "active": active == t})
+    # Motor de imagen y video
+    engine_conns = [c for c in conns if c["category"] == "engine"]
+    for c in engine_conns:
+        items.append({"group": "Imagen y video", "name": c["name"], "type": c["type"], "source": "web", "id": c["id"],
+                      "key": c["config"].get("api_key", "") or c["config"].get("url", ""),
+                      "model": c["config"].get("model", ""), "roles": c["roles"], "active": c["enabled"],
+                      "last_test": c["last_test"]})
+    eng = settings.IMAGE_ENGINE
+    desc = {"openrouter": f"OpenRouter · {settings.OPENROUTER_IMAGE_MODEL}", "mock": "Simulado (modo demo)",
+            "comfyui": f"ComfyUI en {settings.COMFYUI_URL}"}.get(eng, eng)
+    items.append({"group": "Imagen y video", "name": "Motor por defecto", "type": "openrouter_image" if eng == "openrouter" else eng,
+                  "source": ".env", "model": desc, "active": True,
+                  "note": "Se usa cuando ninguna conexión de la web tiene asignado el rol."})
+    # Voz, publicación y avisos
+    for c in conns:
+        if c["category"] in ("voice", "publisher", "webhook"):
+            group = {"voice": "Voz", "publisher": "Publicación", "webhook": "Avisos (webhooks)"}[c["category"]]
+            items.append({"group": group, "name": c["name"], "type": c["type"], "source": "web", "id": c["id"],
+                          "key": c["config"].get("api_key") or c["config"].get("bot_token") or c["config"].get("url", ""),
+                          "model": c["config"].get("chat_id") or c["config"].get("model", ""), "active": c["enabled"],
+                          "last_test": c["last_test"]})
+    if not any(c["category"] == "voice" for c in conns):
+        items.append({"group": "Voz", "name": "Voz local (Chatterbox)", "type": "local_tts", "source": ".env",
+                      "model": settings.TTS_URL, "active": True})
+    if settings.TELEGRAM_BOT_TOKEN and not any(c["type"] == "telegram" for c in conns):
+        items.append({"group": "Publicación", "name": "Telegram", "type": "telegram", "source": ".env",
+                      "key": _mask(settings.TELEGRAM_BOT_TOKEN), "model": settings.TELEGRAM_CHAT_ID, "active": True})
+    return items
+
+
+class EnvOverrideIn(BaseModel):
+    type: str
+    config: dict
+    roles: list[str] = []
+
+
+@router.post("/apis/override")
+async def override_env(body: EnvOverrideIn):
+    """Cambiar desde la web algo que venía del .env: crea una conexión que tiene prioridad (el .env no se toca)."""
+    if body.type not in TYPES:
+        raise HTTPException(400, "Tipo desconocido")
+    cfg = {k: v for k, v in body.config.items() if isinstance(v, str) and v.strip() and not v.startswith("••••")}
+    with session() as s:
+        existing = s.query(Connection).filter(Connection.type == body.type).first()
+        if existing:
+            existing.config = merge_config(existing.config, cfg)
+            existing.enabled = True
+            if body.roles:
+                existing.roles = body.roles
+            c = existing
+        else:
+            c = Connection(type=body.type, name=TYPES[body.type]["name"], config=cfg,
+                           roles=[r for r in body.roles if r in ENGINE_ROLES])
+            s.add(c)
+        s.flush()
+        out = public(c)
+    reset_cache()
+    events.invalidate_hooks()
+    return out

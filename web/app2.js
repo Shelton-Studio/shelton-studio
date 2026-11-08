@@ -259,7 +259,7 @@ VIEWS.conexiones = async (el) => {
   $$("[data-edit]").forEach((b) => b.onclick = () => connForm(null, conns.find((c) => c.id === b.dataset.edit)));
   $$("[data-del]").forEach((b) => b.onclick = async () => { if (confirm("¿Eliminar esta conexión?")) { await api(`/api/connections/${b.dataset.del}`, { method: "DELETE" }); route(); } });
 };
-function connForm(type, conn) {
+function connForm(type, conn, after) {
   type = type || conn.type; const t = S.connTypes.types[type], cfg = conn?.config || {};
   const box = modal(`${conn ? "Editar" : "Nueva"} conexión · ${esc(t.name)}`, `${t.help ? `<div class="hint">${esc(t.help)}</div>` : ""}
     <label class="f">Nombre<input id="cn" value="${esc(conn?.name || t.name)}"></label>
@@ -277,7 +277,8 @@ function connForm(type, conn) {
     const missing = t.fields.filter((f) => f.required && !config[f.key]); if (missing.length) return toast("Falta: " + esc(missing.map((f) => f.label).join(", ")), "bad");
     const body = { type, name: $("#cn").value, config, roles: $$(".checks input[value]:checked", box).map((i) => i.value).filter((v) => S.connTypes.engine_roles.includes(v)), enabled: $("#cen").checked };
     const c = conn ? await api(`/api/connections/${conn.id}`, { method: "PUT", body }) : await api("/api/connections", { method: "POST", body });
-    closeModal(); const r = await api(`/api/connections/${c.id}/test`, { method: "POST" }); toast(esc(r.message), r.ok ? "good" : "bad"); S.engines = null; route();
+    closeModal(); const r = await api(`/api/connections/${c.id}/test`, { method: "POST" }); toast(esc(r.message), r.ok ? "good" : "bad"); S.engines = null;
+    if (after) after(); else route();
   };
 }
 
@@ -363,3 +364,55 @@ VIEWS.ajustes = async (el) => {
   };
   $("#rs").onclick = status; status();
 };
+
+// ------------------------------------------------------------------ BOTÓN "APIs": ver y cambiar claves y modelos
+async function openApis() {
+  const [items, types, conns] = await Promise.all([api("/api/apis"), api("/api/connection-types"), api("/api/connections")]);
+  S.connTypes = types;
+  const groups = [...new Set(items.map((i) => i.group))];
+  const row = (it, n) => `<div class="card" style="padding:14px;display:flex;gap:12px;align-items:center">
+    <div class="grow"><div class="row" style="gap:8px"><b>${esc(it.name)}</b>
+      <span class="chip ${it.source === "web" ? "accent" : ""}" title="${it.source === "web" ? "Guardada en la web (tiene prioridad)" : "Viene del archivo .env del servidor"}">${it.source === "web" ? "web" : ".env"}</span>
+      ${it.active ? '<span class="chip good">En uso</span>' : '<span class="chip">Apagada</span>'}</div>
+      <div class="muted small" style="margin-top:4px">${it.model ? `<span class="mono">${esc(it.model)}</span>` : ""}${it.key ? ` · clave <span class="mono">${esc(it.key)}</span>` : ""}${it.roles?.length ? ` · ${esc(it.roles.join(", "))}` : ""}</div>
+      ${it.note ? `<div class="faint small">${esc(it.note)}</div>` : ""}
+      ${it.last_test?.message ? `<div class="small" style="color:${it.last_test.ok ? "#86efac" : "#fca5a5"}">${it.last_test.ok ? "✔" : "✖"} ${esc(it.last_test.message)}</div>` : ""}</div>
+    <div class="row" style="gap:6px">${S.connTypes.types[it.type] ? `<button class="btn sm" data-edit-api="${n}">${icon("edit", 14)} Cambiar</button>` : ""}
+      ${it.id ? `<button class="btn sm" data-test-api="${esc(it.id)}">Probar</button><button class="btn sm ghost" data-tog-api="${esc(it.id)}">${it.active ? "Apagar" : "Encender"}</button>` : ""}</div></div>`;
+  const box = modal(`${icon("key", 18)} APIs conectadas`,
+    `<div class="hint">Aquí ves todo lo que Shelton usa. Las claves se muestran solo con sus últimos 4 caracteres. Si cambias algo que viene del <b>.env</b>, se guarda en la web y tiene prioridad (el archivo no se toca).</div>` +
+    groups.map((g) => `<div class="small muted" style="font-weight:700;margin-top:6px">${esc(g)}</div>` + items.map((it, n) => it.group === g ? row(it, n) : "").join("")).join(""),
+    `<button class="btn" onclick="closeModal();go('conexiones')">${icon("plus", 16)} Agregar otra API</button>`, true);
+  const reopen = () => openApis();
+  $$("[data-edit-api]", box).forEach((b) => b.onclick = () => {
+    const it = items[+b.dataset.editApi];
+    if (it.id) return connForm(null, conns.find((c) => c.id === it.id), reopen);
+    // Viene del .env: formulario simple que crea una conexión con prioridad
+    const t = S.connTypes.types[it.type];
+    const m = modal(`Cambiar · ${esc(it.name)}`, `${t.help ? `<div class="hint">${esc(t.help)}</div>` : ""}
+      ${t.fields.map((f) => `<label class="f">${esc(f.label)}<input data-ok="${f.key}" type="${f.kind === "secret" ? "password" : "text"}"
+        placeholder="${esc(f.kind === "secret" ? "Deja vacío para mantener la clave actual" : (it.model && f.key === "model" ? it.model : f.placeholder || ""))}"></label>`).join("")}
+      <div class="hint">Se guarda solo en este servidor. Para volver al .env, apaga o borra esta API después.</div>`,
+      `<button class="btn ghost" id="cancel-env">Cancelar</button><button class="btn primary" id="save-env">Guardar y probar</button>`);
+    if (it.type === "openrouter" || it.type === "openrouter_image") {
+      const inp = $('[data-ok="model"]', m), dl = document.createElement("datalist");
+      dl.id = "or-env-models"; inp.setAttribute("list", "or-env-models"); m.append(dl);
+      api(`/api/openrouter/models?kind=${it.type === "openrouter" ? "brain" : "image"}`).then((ms) => dl.innerHTML = ms.map((x) => `<option value="${esc(x.id)}">${esc(x.name)} · $${x.price_in.toFixed(2)}/$${x.price_out.toFixed(2)} por millón</option>`).join("")).catch(() => {});
+    }
+    $("#cancel-env", m).onclick = reopen;
+    $("#save-env", m).onclick = async () => {
+      const config = {}; $$("[data-ok]", m).forEach((i) => { if (i.value.trim()) config[i.dataset.ok] = i.value.trim(); });
+      if (!Object.keys(config).length) return toast("No cambiaste nada", "");
+      const roles = it.type === "openrouter_image" ? ["generate", "edit", "subject"] : [];
+      const c = await api("/api/apis/override", { method: "POST", body: { type: it.type, config, roles } });
+      const r = await api(`/api/connections/${c.id}/test`, { method: "POST" });
+      toast(esc(r.message), r.ok ? "good" : "bad"); S.engines = null; reopen(); pollHealth();
+    };
+  });
+  $$("[data-test-api]", box).forEach((b) => b.onclick = async () => { b.disabled = true; b.textContent = "Probando…"; const r = await api(`/api/connections/${b.dataset.testApi}/test`, { method: "POST" }); toast(esc(r.message), r.ok ? "good" : "bad"); reopen(); });
+  $$("[data-tog-api]", box).forEach((b) => b.onclick = async () => {
+    const c = conns.find((x) => x.id === b.dataset.togApi);
+    await api(`/api/connections/${c.id}`, { method: "PUT", body: { type: c.type, name: c.name, config: c.config, roles: c.roles, enabled: !c.enabled } });
+    S.engines = null; reopen(); pollHealth();
+  });
+}
