@@ -180,7 +180,11 @@ def studio_context(engine: str) -> str:
                  f"piloto automático: {b.autopilot_daily}/día")
         bank = ", ".join(f"{x.name} ({x.kind})" for x in subs) or "vacío"
     label = next((c["label"] for c in engine_choices() if c["id"] == engine), "Automático")
-    return f"[Estado del estudio — {brand}. Banco de modelos: {bank}. Motor de imagen de esta conversación: {label}.]"
+    from app.engines import MODES, infra_mode
+    mode = MODES[infra_mode()]
+    return (f"[Estado del estudio — {brand}. Banco de modelos: {bank}. Motor de imagen de esta conversación: {label}. "
+            f"Switch de herramientas: {mode} (Local = solo máquinas propias; Nube = solo APIs en la nube). "
+            f"Si una herramienta falta en este modo, explícale al usuario que la conecte en el botón APIs o cambie el switch.]")
 
 
 # ------------------------------------------------------------------ Ejecución de herramientas
@@ -204,8 +208,25 @@ async def _wait_and_report(ids: list[str], emit, text: str) -> list:
     return _posts_result(ids)
 
 
+async def _announce(emit, role: str, engine: str | None = None) -> None:
+    """Antes de producir, avisa en qué modo trabaja y con qué modelo (elegido automáticamente si es «auto»)."""
+    from app.engines import describe_role
+    from app.voice import voice_label
+    if role == "voice":
+        label = f"🎙️ Modo audio · {voice_label()}"
+    else:
+        label = {"video": "🎬 Modo video", "generate": "🖼️ Modo imagen"}[role] + " · " + await describe_role(role, engine)
+    await emit({"type": "status", "text": label})
+    await emit({"type": "mode_tag", "text": label})
+
+
 async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
     conv_id, engine = ctx["conv_id"], ctx["engine"] or None
+    if name in ("create_reel", "make_video", "make_reel") or (
+            name == "create_posts" and any(p.get("format") == "video" for p in args.get("posts", []))):
+        await _announce(emit, "video", None)
+    elif name in ("add_voice", "add_sound"):
+        await _announce(emit, "voice")
 
     if name == "create_posts":
         ids = []

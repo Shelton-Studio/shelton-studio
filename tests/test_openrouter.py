@@ -138,13 +138,53 @@ def test_openrouter_image_engine():
         asyncio.run(eng.edit(buf.getvalue(), "fondo de playa", 1))
         parts = seen[-1]["messages"][0]["content"]
         assert parts[1]["type"] == "image_url" and "Edit the attached image" in parts[0]["text"]
+        assert get_engine("video", "openrouter").name == "openrouter_video"   # ahora OpenRouter también hace video
         try:
-            get_engine("video", "openrouter")
+            get_engine("sound", "openrouter")
         except ValueError as e:
-            assert "no genera video" in str(e)
+            assert "sonido" in str(e)
         else:
-            raise AssertionError("OpenRouter no debe aceptar video")
+            raise AssertionError("OpenRouter no hace efectos de sonido")
         from app.engines import engine_choices
         assert any(c["id"] == "openrouter" for c in engine_choices())
     finally:
         OpenRouterImageEngine.transport = None
+
+
+def test_local_cloud_switch():
+    from app.db import Connection, session
+    from app.engines import get_engine, reset_cache
+    from app.api import mode_routes
+
+    def set_mode(m):
+        from app.db import get_or_create_brand
+        with session() as s:
+            get_or_create_brand(s).infra_mode = m
+        reset_cache()
+    with session() as s:
+        fal = Connection(type="fal", name="fal", config={"api_key": "k"}, roles=["video"])
+        s.add(fal)
+        s.flush()
+        fal_id = fal.id
+    try:
+        set_mode("cloud")
+        assert get_engine("generate").name == "openrouter_image"     # imagen con OpenRouter
+        assert get_engine("video").name == "fal"                      # video con fal.ai
+        try:
+            get_engine("sound")
+        except ValueError as e:
+            assert "Modo Nube" in str(e)
+        r = {x["role"]: x for x in mode_routes("cloud")}
+        assert r["video"]["ok"] and not r["video"]["local"]
+        # En modo demo el sonido cae al simulado; en un servidor real daría "Modo Nube: falta…"
+        assert r["sound"]["tool"].startswith("Simulado") or not r["sound"]["ok"]
+        set_mode("local")
+        assert get_engine("video").name in ("mock", "comfyui")         # nunca la nube
+        assert get_engine("generate").name in ("mock", "comfyui")
+        assert all(x["local"] for x in mode_routes("local") if x["role"] != "brain")
+        set_mode("auto")
+        assert get_engine("video").name == "fal"
+    finally:
+        with session() as s:
+            s.delete(s.get(Connection, fal_id))
+        set_mode("auto")

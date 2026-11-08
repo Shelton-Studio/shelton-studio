@@ -74,14 +74,62 @@ def _build(kind: str, cfg: dict) -> ImageEngine:
     return CLOUD_ENGINES[kind](cfg)
 
 
+MODES = {"auto": "Auto", "local": "Local", "cloud": "Nube"}
+
+
+def infra_mode() -> str:
+    """Switch global: local (solo tus máquinas), cloud (solo APIs en la nube) o auto (lo que haya, local primero)."""
+    from app.db import get_or_create_brand, session
+    with session() as s:
+        m = (get_or_create_brand(s).infra_mode or "auto").lower()
+    return m if m in MODES else "auto"
+
+
+def _routed(role: str, mode: str):
+    """Elige el motor para un rol según el switch. Devuelve (clave_cache, tipo, config)."""
+    from app.connections import list_enabled
+    from app.llm import openrouter_config
+    conns = [c for c in list_enabled("engine") if role in (c.roles or [])]
+    if mode == "local":
+        local = [c for c in conns if c.type == "comfyui"]
+        if local:
+            c = min(local, key=lambda c: busy(c.config.get("url", c.id)))
+            return f"conn:{c.id}:{c.config}", "comfyui", c.config
+        if settings.IMAGE_ENGINE == "mock":
+            return "mock", "mock", {}
+        return "default", "comfyui", {}
+    # nube
+    cloud = [c for c in conns if c.type != "comfyui"]
+    if cloud:
+        c = cloud[0]
+        return f"conn:{c.id}:{c.config}", c.type, c.config
+    if role in ("generate", "edit", "subject") and openrouter_config()[0]:
+        return "openrouter", "openrouter_image", {}
+    if role == "video" and openrouter_config()[0]:
+        return "openrouter_video", "openrouter_video", {}
+    if settings.IMAGE_ENGINE == "mock":
+        return "mock", "mock", {}
+    need = {"video": "un motor de video en la nube (fal.ai o Replicate) con el rol «Video»",
+            "sound": "un motor de sonido en la nube (o cambia a Local para usar Stable Audio en tu GPU)"}.get(
+        role, "una clave de OpenRouter o una API de imagen")
+    raise ValueError(f"Modo Nube: falta {need}. Agrégalo en el botón APIs.")
+
+
 def get_engine(role: str = "generate", choice: str | None = None) -> ImageEngine:
     from app.connections import engine_for_role, list_enabled
 
+    mode = infra_mode() if not choice else "auto"
+    if mode in ("local", "cloud"):
+        key, kind, cfg = _routed(role, mode)
+        if key not in _cache:
+            _cache[key] = _build(kind, cfg)
+        return _cache[key]
+
     if choice == "openrouter" or (settings.IMAGE_ENGINE == "openrouter" and not choice and not engine_for_role(role)):
-        # Imágenes con OpenRouter usando la clave del cerebro (sin GPU).
-        if role in ("video", "sound"):
-            raise ValueError("OpenRouter no genera video ni sonido: usa la GPU (ComfyUI) o una conexión fal.ai")
-        key, kind, cfg = "openrouter", "openrouter_image", {}
+        # Imagen y video con OpenRouter usando la clave del cerebro (sin GPU).
+        if role == "sound":
+            raise ValueError("OpenRouter no genera efectos de sonido: usa la GPU (Stable Audio) o cambia el switch a Local")
+        key, kind, cfg = ("openrouter_video", "openrouter_video", {}) if role == "video" else ("openrouter", "openrouter_image", {})
     elif settings.IMAGE_ENGINE == "mock" and not (choice or "").startswith("conn:") and not engine_for_role(role):
         key, kind, cfg = "mock", "mock", {}
     elif choice and choice.startswith("conn:"):
@@ -134,3 +182,36 @@ def engine_choices() -> list[dict]:
 
 def reset_cache() -> None:
     _cache.clear()
+
+
+def engine_label(engine, role: str = "generate") -> str:
+    """Nombre legible del modelo que usa un motor (para las etiquetas de cada post)."""
+    from app.config import settings
+    n = getattr(engine, "name", "?")
+    cfg = getattr(engine, "cfg", {}) or {}
+    if n == "mock":
+        return "Simulado (demo)"
+    if n == "openrouter_image":
+        return cfg.get("model") or settings.OPENROUTER_IMAGE_MODEL
+    if n == "openrouter_video":
+        return getattr(engine, "last_model", None) or cfg.get("model") or settings.OPENROUTER_VIDEO_MODEL
+    if n == "comfyui":
+        if role == "video":
+            return VIDEO_INFO.get(getattr(engine, "video_preset", ""), ("Wan 2.2",))[0]
+        wf = getattr(engine, "workflows", {}).get("edit" if role == "edit" else "subject" if role == "subject" else "generate", "")
+        return {"z_image_turbo.json": "Z-Image Turbo", "qwen_image.json": "Qwen-Image", "z_image_turbo_gguf.json": "Z-Image GGUF",
+                "qwen_image_edit.json": "Qwen-Image-Edit", "qwen_subject.json": "Qwen-Image-Edit (referencias)"}.get(wf, wf or "ComfyUI")
+    if n == "fal":
+        return "fal.ai · " + (cfg.get("model_video") if role == "video" else cfg.get("model_generate") or "por defecto")
+    return n
+
+
+async def describe_role(role: str, choice: str | None = None) -> str:
+    """Qué modelo se usaría ahora para un rol (en 'auto' de OpenRouter, consulta cuál es el mejor disponible)."""
+    try:
+        e = get_engine(role, choice)
+        if hasattr(e, "_pick"):
+            return (await e._pick())["id"]
+        return engine_label(e, role)
+    except Exception as err:
+        return f"sin motor ({err})"

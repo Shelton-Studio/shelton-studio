@@ -800,3 +800,141 @@ async def override_env(body: EnvOverrideIn):
     reset_cache()
     events.invalidate_hooks()
     return out
+
+
+# ------------------------------------------------------------------ Switch Local / Auto / Nube
+def _describe(kind: str, cfg: dict) -> str:
+    from app.engines.comfy import VIDEO_PRESETS
+    if kind == "mock":
+        return "Simulado (demo)"
+    if kind == "comfyui":
+        return f"ComfyUI · {cfg.get('url') or settings.COMFYUI_URL}"
+    if kind == "openrouter_image":
+        return f"OpenRouter · {cfg.get('model') or settings.OPENROUTER_IMAGE_MODEL}"
+    if kind == "fal":
+        return f"fal.ai · {cfg.get('model_video') or cfg.get('model_generate') or 'por defecto'}"
+    if kind == "openrouter_video":
+        m = cfg.get("model") or settings.OPENROUTER_VIDEO_MODEL
+        return f"OpenRouter · {'el mejor disponible (auto)' if m == 'auto' else m}"
+    return TYPES.get(kind, {}).get("name", kind)
+
+
+def mode_routes(mode: str) -> list[dict]:
+    """Qué herramienta usaría cada parte con este modo (sin generar nada)."""
+    from app.connections import engine_for_role, list_enabled
+    from app.engines import _routed
+    from app.llm import openrouter_config, provider
+    out = []
+    labels = {"generate": "Imagen", "edit": "Edición", "video": "Video", "sound": "Sonido"}
+    for role, label in labels.items():
+        try:
+            if mode in ("local", "cloud"):
+                _, kind, cfg = _routed(role, mode)
+            else:
+                conn = engine_for_role(role)
+                if conn:
+                    kind, cfg = conn.type, conn.config
+                elif settings.IMAGE_ENGINE == "openrouter" and role not in ("video", "sound") and openrouter_config()[0]:
+                    kind, cfg = "openrouter_image", {}
+                elif settings.IMAGE_ENGINE == "openrouter" and role == "video" and openrouter_config()[0]:
+                    kind, cfg = "openrouter_video", {}
+                elif settings.IMAGE_ENGINE == "openrouter" and role == "sound":
+                    raise ValueError("Falta: efectos de sonido necesitan la GPU (Stable Audio). Cambia a Local cuando la conectes")
+                else:
+                    kind, cfg = ("mock" if settings.IMAGE_ENGINE == "mock" else "comfyui"), {}
+            local = kind in ("comfyui", "mock")
+            out.append({"role": role, "label": label, "ok": True, "tool": _describe(kind, cfg), "local": local})
+        except ValueError as e:
+            out.append({"role": role, "label": label, "ok": False, "tool": str(e), "local": mode == "local"})
+    voices = list_enabled("voice")
+    if mode == "local":
+        voices = [c for c in voices if c.type == "local_tts"]
+    elif mode == "cloud":
+        voices = [c for c in voices if c.type != "local_tts"]
+    if voices:
+        out.append({"role": "voice", "label": "Voz", "ok": True, "tool": voices[0].name, "local": voices[0].type == "local_tts"})
+    elif mode == "cloud" and settings.IMAGE_ENGINE != "mock":
+        out.append({"role": "voice", "label": "Voz", "ok": False, "tool": "Falta: conecta ElevenLabs u otra voz en el botón APIs", "local": False})
+    else:
+        out.append({"role": "voice", "label": "Voz", "ok": True, "tool": f"Voz local · {settings.TTS_URL}", "local": True})
+    brain = "OpenRouter" if provider() == "openrouter" else "Claude (Anthropic)"
+    out.insert(0, {"role": "brain", "label": "Cerebro", "ok": True, "tool": brain, "local": False})
+    return out
+
+
+@router.get("/mode")
+async def get_mode():
+    from app.engines import MODES, infra_mode
+    mode = infra_mode()
+    return {"mode": mode, "label": MODES[mode], "routes": mode_routes(mode)}
+
+
+class ModeIn(BaseModel):
+    mode: str
+
+
+@router.put("/mode")
+async def set_mode(body: ModeIn):
+    from app.engines import MODES
+    if body.mode not in MODES:
+        raise HTTPException(400, "Modo inválido (auto, local o cloud)")
+    with session() as s:
+        get_or_create_brand(s).infra_mode = body.mode
+    reset_cache()
+    events.publish({"type": "mode", "mode": body.mode})
+    return await get_mode()
+
+
+# ------------------------------------------------------------------ Catálogo de modelos de video (OpenRouter)
+VIDEO_TAGS = [
+    # (palabra clave en el id, etiquetas, para qué sirve)
+    ("veo-3", ["Mejor calidad", "Con audio", "Cine"], "Realismo de cine con sonido nativo (voces, ambiente). La opción más completa."),
+    ("sora-2-pro", ["Física realista", "Con audio", "Premium"], "Escenas complejas, movimiento y física muy creíbles. Caro."),
+    ("sora-2", ["Física realista", "Con audio"], "Buen realismo y sonido a menor precio que Sora 2 Pro."),
+    ("seedance", ["Personajes consistentes", "Movimiento fluido", "Buen precio"], "Ideal para reels con personas: mantiene la cara y el estilo."),
+    ("kling", ["Personas", "Cámara dinámica", "Reels"], "Muy usado en redes: gente, baile, moda, movimientos de cámara."),
+    ("wan", ["Económico", "Imagen a video"], "Barato y estable para animar fotos; base open-source."),
+    ("omni", ["Rápido", "Versátil"], "Rápido para pruebas y variaciones; texto o imagen a video."),
+    ("heygen", ["Avatar que habla", "Presentador"], "Una persona hablando a cámara (tipo presentador o UGC)."),
+    ("hailuo", ["Movimiento expresivo"], "Acción y expresiones marcadas."),
+    ("runway", ["Creativo", "Cine"], "Estética cinematográfica y estilos creativos."),
+    ("luma", ["Creativo"], "Movimientos suaves y estéticos."),
+]
+
+
+def _video_info(m: dict) -> dict:
+    mid = str(m.get("id", ""))
+    low = mid.lower()
+    tags, use = ["Video"], "Generación de video."
+    for key, t, u in VIDEO_TAGS:
+        if key in low:
+            tags, use = t, u
+            break
+    price = m.get("pricing") or {}
+    return {"id": mid, "name": m.get("name") or mid, "tags": tags, "use": use,
+            "durations": m.get("supported_durations") or m.get("durations") or [],
+            "resolutions": m.get("supported_resolutions") or m.get("resolutions") or [],
+            "aspect_ratios": m.get("supported_aspect_ratios") or m.get("aspect_ratios") or [],
+            "price": price, "description": (m.get("description") or "")[:240]}
+
+
+@router.get("/video-models")
+async def video_models():
+    """Modelos de video de OpenRouter, ordenados del mejor al más simple, con etiquetas de uso."""
+    from app.engines.cloud import OpenRouterVideoEngine
+    eng = OpenRouterVideoEngine({})
+    try:
+        models = await eng.list_models()
+    except Exception as e:
+        raise HTTPException(503, f"No se pudo consultar OpenRouter: {e}")
+    rank = {k: i for i, k in enumerate(OpenRouterVideoEngine.PREFERENCE)}
+    def order(m):
+        low = str(m.get("id", "")).lower()
+        return min([rank[k] for k in rank if k in low] or [99])
+    current = None
+    with session() as s:
+        c = s.query(Connection).filter(Connection.type == "openrouter_video", Connection.enabled.is_(True)).first()
+        current = (c.config or {}).get("model") if c else None
+    auto = (await eng._pick())["id"] if models else None
+    return {"current": current or settings.OPENROUTER_VIDEO_MODEL, "auto_pick": auto,
+            "models": [_video_info(m) for m in sorted(models, key=order)]}

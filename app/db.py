@@ -39,6 +39,7 @@ class Brand(Base):
     scout_every_hours: Mapped[int] = mapped_column(Integer, default=12)  # 0 = scout apagado
     scout_last: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     learning_mode: Mapped[str] = mapped_column(String, default="auto")  # auto | approve | off
+    infra_mode: Mapped[str] = mapped_column(String, default="auto")     # auto | local | cloud (switch de herramientas)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
@@ -71,6 +72,7 @@ class Post(Base):
     video_path: Mapped[str] = mapped_column(String, default="")           # MP4 final (video/reel)
     duration: Mapped[float] = mapped_column(Float, default=0)
     voiceover: Mapped[str] = mapped_column(Text, default="")              # guion locutado
+    made_with: Mapped[dict] = mapped_column(JSON, default=dict)           # modelo usado: {"image": ..., "video": ..., "voice": ...}
     audio_path: Mapped[str] = mapped_column(String, default="")           # pista de voz/sonido
     idea: Mapped[str] = mapped_column(Text, default="")
     platform: Mapped[str] = mapped_column(String, default="instagram_feed")

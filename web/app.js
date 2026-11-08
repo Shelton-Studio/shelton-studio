@@ -131,6 +131,7 @@ function connectEvents() {
       if (ev.post.status !== "generating") S.progress.delete(ev.post.id);
       const prev = S.posts.get(ev.post.id);
       refreshPost(ev.post);
+      if (window.agentAsk) agentAsk(ev.post, prev);
       if (ev.post.status === "failed" && prev?.status !== "failed") note(`Falló un post: ${esc(ev.post.error || ev.post.idea)}`, "bad", `galeria`);
       if (!prev && location.hash.startsWith("#/galeria") && galleryMatches(ev.post)) $("#grid")?.prepend(tile(ev.post, true));
       updateCounts();
@@ -142,6 +143,7 @@ function connectEvents() {
       if (ev.approval.status === "pending") { note(`Nueva aprobación: ${esc(ev.approval.title)}`, "warn", "aprobaciones"); toast(`<b>Aprobación pendiente</b><br>${esc(ev.approval.title)}`, "warn", "🛂", `<button class="btn sm primary" onclick="go('aprobaciones')">Revisar</button>`); }
       updateCounts();
     } else if (ev.type === "findings" && ev.new) {
+      if (window.agentAskFindings) agentAskFindings(ev.new);
       note(`El scout encontró ${ev.new} novedades`, "", "tendencias"); toast(`🔭 El scout encontró <b>${ev.new}</b> tendencias/herramientas nuevas.`, "", "🔭", `<button class="btn sm" onclick="go('tendencias')">Ver</button>`); updateCounts();
     } else if (ev.type === "audit") {
       note(`Revisión del equipo: ${ev.issues} problema(s)`, ev.issues ? "warn" : "good", "memoria");
@@ -187,6 +189,7 @@ async function pollHealth() {
     $("#local-dot").className = "dot " + (ok ? "ok" : h.engine?.ok || h.claude ? "warn" : "bad");
     $("#local-text").textContent = h.engine?.engine === "mock" ? "Demo" : "Local";
     $("#local-pill").title = `Claude: ${h.claude ? "OK" : "falta clave"} · Motor: ${h.engine?.ok ? "OK" : (h.engine?.error || "revisar")}`;
+    loadMode();
   } catch { $("#local-dot").className = "dot bad"; }
 }
 $("#local-pill").onclick = () => go("ajustes");
@@ -327,7 +330,8 @@ VIEWS.chat = async (el, convId) => {
       <select id="agent-sel" title="Con quién hablas">${S.agents.map((a) => `<option value="${a.key}" ${a.key === S.chatAgent ? "selected" : ""}>${esc(a.name)}</option>`).join("")}</select>
       <div class="grow"></div><span class="muted small">Motor</span>
       <select id="engine-sel" title="Motor de imagen de esta conversación">${S.engines.image.map((e) => `<option value="${esc(e.id)}">${esc(e.label)}${e.local ? "" : " ☁"}</option>`).join("")}</select>
-      <button class="icon-btn" id="engine-help" title="¿Qué motor elijo?">?</button></div>
+      <button class="icon-btn" id="engine-help" title="¿Qué motor elijo?">?</button>
+      <button class="btn sm" id="video-models" title="Elegir el modelo de video (Veo, Sora, Seedance, Kling, Wan…)">🎬 Video</button></div>
       <div class="msgs" id="msgs"></div>
       <form class="composer" id="composer"><div class="composer-box"><div class="attachments" id="attachments"></div>
         <textarea id="input" rows="1" placeholder="Pídele a ${esc(agentName(S.chatAgent))} lo que quieras…"></textarea>
@@ -337,6 +341,7 @@ VIEWS.chat = async (el, convId) => {
   $("#agent-sel").onchange = (e) => { S.chatAgent = e.target.value; S.conv = null; go("chat"); route(); };
   $("#engine-sel").onchange = (e) => { S.chatEngine = e.target.value; toast(`Motor: <b>${esc(e.target.selectedOptions[0].text)}</b>. Se aplica desde tu próximo mensaje.`, "good", "🎛️"); };
   $("#engine-help").onclick = engineHelp;
+  $("#video-models").onclick = () => openVideoModels();
   $("#new-chat").onclick = () => { S.conv = null; S.chatEngine = ""; go("chat"); route(); };
   $("#th-search").oninput = () => renderThreads($("#th-search").value);
   const input = $("#input");
@@ -426,6 +431,7 @@ async function sendMessage() {
         if (ev.type === "conversation") { if (S.conv !== ev.id) { S.conv = ev.id; history.replaceState(null, "", `#/chat/${ev.id}`); renderThreads(); } }
         else if (ev.type === "status") step(ev.text);
         else if (ev.type === "posts") { const fresh = ev.ids.filter((x) => !shown.has(x)); fresh.forEach((x) => shown.add(x)); if (fresh.length) body.append(thumbs(fresh)); }
+        else if (ev.type === "mode_tag") { const t = document.createElement("div"); t.innerHTML = `<span class="chip accent" style="font-size:13px;padding:5px 12px">${esc(ev.text)}</span>`; body.insertBefore(t.firstChild, steps); }
         else if (ev.type === "engine") { S.chatEngine = ev.id; $("#engine-sel").value = ev.id; step("Motor de imagen cambiado"); }
         else if (ev.type === "learned") { const d = document.createElement("div"); d.innerHTML = learnedBanner(ev, false); body.append(d.firstChild); }
         else if (ev.type === "subjects_changed") step("Banco de modelos actualizado");
@@ -453,7 +459,9 @@ function tileHTML(p, selectable) {
   const img = p.image_url && !busy ? `<div class="img" style="background-image:url('${esc(p.image_url)}')">${media ? `<span class="media-tag">${media}${p.duration ? ` · ${Math.round(p.duration)}s` : ""}${p.audio_url ? " · 🔊" : ""}</span>` : ""}</div>`
     : `<div class="img">${busy ? `<div><div class="spinner"></div>${esc(prog || STATUS[p.status][0])}</div>` : esc(p.error || STATUS[p.status]?.[0] || p.status)}</div>`;
   const judge = p.status === "ready" && p.qa_score && !p.qa_passed ? `<span class="chip bad" title="El juez la reprobó; decides tú">Juez ✖</span>` : "";
-  return `${selectable ? '<div class="check"></div>' : ""}${img}<div class="meta">${chip(p.status)}${judge}<span class="idea">${esc(p.platform_name)} · ${esc(p.idea)}</span>${p.qa_score ? `<span class="score ${scoreCls(p.qa_score)}">${Math.round(p.qa_score)}</span>` : ""}</div>`;
+  const mw = p.made_with || {}, short = (s) => String(s || "").split("/").pop();
+  const mtag = mw.video ? `🎬 ${short(mw.video)}` : mw.image ? `🖼️ ${short(mw.image)}` : "";
+  return `${selectable ? '<div class="check"></div>' : ""}${mtag ? `<span class="model-tag" title="${esc(Object.entries(mw).map(([k, v]) => `${k}: ${v}`).join(" · "))}">${esc(mtag)}</span>` : ""}${img}<div class="meta">${chip(p.status)}${judge}<span class="idea">${esc(p.platform_name)} · ${esc(p.idea)}</span>${p.qa_score ? `<span class="score ${scoreCls(p.qa_score)}">${Math.round(p.qa_score)}</span>` : ""}</div>`;
 }
 function refreshPost(p) {
   const prev = S.posts.get(p.id);
@@ -530,9 +538,11 @@ async function openPost(id, refetch = true, keepScroll = false) {
   const media = busy ? `<div class="tile"><div class="img" style="aspect-ratio:4/5"><div><div class="spinner"></div>${esc(S.progress.get(id) || STATUS[p.status][0])}</div></div></div>`
     : isVid ? `<video class="media-main" src="${esc(p.video_url)}" poster="${esc(p.image_url)}" controls playsinline loop></video>`
     : p.image_url ? `<img class="media-main" src="${esc(p.image_url)}" alt="${esc(p.alt_text)}">` : `<div class="qa-box">${esc(p.error || "Sin imagen")}</div>`;
+  const MW = { image: "🖼️ Imagen", edit: "✏️ Edición", video: "🎬 Video", voice: "🎙️ Voz", sound: "🔊 Sonido" };
+  const madeWith = Object.entries(p.made_with || {}).map(([k, v]) => `<span class="chip ${k === "video" ? "accent" : k === "voice" || k === "sound" ? "info" : ""}">${MW[k] || esc(k)}: ${esc(v)}</span>`).join("");
   d.innerHTML = `<div class="d-head">${chip(p.status)}<span class="muted small">${esc(p.platform_name)} · ${p.width}×${p.height}${p.duration ? ` · ${p.duration.toFixed(1)} s` : ""}</span>
     ${p.qa_score ? `<span class="score ${scoreCls(p.qa_score)}">Juez ${Math.round(p.qa_score)}/100</span>` : ""}<div class="grow"></div><button class="icon-btn" id="d-x">${icon("x")}</button></div>
-  <div class="d-body">${media}
+  <div class="d-body">${madeWith ? `<div class="row" style="gap:6px">${madeWith}</div>` : ""}${media}
     ${versions.length > 1 ? `<div class="d-sec"><h4>Versiones (nada se borra)</h4><div class="versions">${versions.map((v) => `<img src="${esc(v.image_url)}" data-v="${v.id}" class="${v.id === id ? "cur" : ""}" title="${esc(STATUS[v.status]?.[0])} · ${esc(v.media_type)}">`).join("")}</div></div>` : ""}
     <div class="row"><button class="btn good" id="d-ok">${icon("check", 17)} Aprobar</button><button class="btn bad" id="d-no">Rechazar</button>
       <select id="d-target" style="width:auto">${targets.map((t) => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join("") || '<option value="">Sin destinos (ver Conexiones)</option>'}</select>
@@ -573,10 +583,36 @@ async function openPost(id, refetch = true, keepScroll = false) {
   $("#d-del").onclick = run(async () => { if (!confirm("¿Eliminar este post? Esta acción es tuya, no del juez.")) return; await api(`/api/posts/${id}`, { method: "DELETE" }); closeDrawer(); $$(`.tile[data-id="${id}"]`).forEach((t) => t.remove()); }, "");
 }
 
+// ------------------------------------------------------------------ Switch Local / Auto / Nube
+async function loadMode() {
+  try { S.mode = await api("/api/mode"); } catch { return; }
+  $$("#mode-seg button").forEach((b) => b.classList.toggle("on", b.dataset.mode === S.mode.mode));
+  const missing = S.mode.routes.filter((r) => !r.ok);
+  $("#mode-info").innerHTML = missing.length ? `<span style="color:var(--warn);font-weight:800">!</span>` : "?";
+  $("#mode-info").title = missing.length ? `Faltan herramientas en este modo: ${missing.map((r) => r.label).join(", ")}` : "¿Qué herramienta usa cada parte?";
+}
+async function setMode(mode) {
+  S.mode = await api("/api/mode", { method: "PUT", body: { mode } });
+  S.engines = null;
+  await loadMode();
+  const missing = S.mode.routes.filter((r) => !r.ok);
+  toast(`Modo <b>${esc(S.mode.label)}</b>${missing.length ? `. Faltan: ${esc(missing.map((r) => r.label).join(", "))}` : ". Todo listo."}`, missing.length ? "warn" : "good", mode === "cloud" ? "☁️" : mode === "local" ? "🖥️" : "🔀",
+    `<button class="btn sm" onclick="showModeRoutes()">Ver detalle</button>`);
+}
+function showModeRoutes() {
+  const m = S.mode; if (!m) return;
+  modal(`Herramientas · modo ${esc(m.label)}`, `<div class="hint">${{ local: "Todo corre en tus máquinas (ComfyUI con tu GPU y el servidor de voz). Sin costo por imagen o clip.", cloud: "Todo corre con APIs en la nube (OpenRouter, fal.ai, ElevenLabs). Sin GPU, cobra por uso.", auto: "Usa lo que esté conectado, priorizando lo local." }[m.mode]} El cerebro (Shelton y sus agentes) siempre usa tu clave de Claude u OpenRouter.</div>
+    ${m.routes.map((r) => `<div class="card" style="padding:12px;display:flex;gap:12px;align-items:center"><span class="dot ${r.ok ? "ok" : "bad"}"></span><b style="width:90px">${esc(r.label)}</b><div class="grow ${r.ok ? "" : ""}" style="color:${r.ok ? "inherit" : "#fca5a5"}">${esc(r.tool)}</div>${r.ok ? `<span class="chip ${r.local ? "good" : "info"}">${r.local ? "Local" : "Nube"}</span>` : ""}</div>`).join("")}`,
+    `<button class="btn" onclick="closeModal();openApis()">${icon("key", 16)} Abrir APIs</button>`);
+}
+
 // ------------------------------------------------------------------ Inicio de la app
 (async function init() {
   $("#i-search").innerHTML = icon("search", 18); $("#i-bell").innerHTML = icon("bell", 20); $("#i-key").innerHTML = icon("key", 16);
   $("#apis-btn").onclick = () => openApis();
+  $$("#mode-seg button").forEach((b) => b.onclick = () => setMode(b.dataset.mode));
+  $("#mode-info").onclick = () => showModeRoutes();
+  loadMode();
   renderRail();
   [S.wl, S.platforms, S.agents] = await Promise.all([api("/api/whitelabel"), api("/api/platforms"), api("/api/agents")]);
   applyWL();
