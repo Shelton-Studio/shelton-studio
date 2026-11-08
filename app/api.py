@@ -695,8 +695,8 @@ async def add_audio(pid: str, body: AudioIn):
 
 
 @router.get("/openrouter/models")
-async def openrouter_models():
-    """Modelos de OpenRouter que sirven para Shelton (ven imágenes y usan herramientas)."""
+async def openrouter_models(kind: str = "brain"):
+    """Modelos de OpenRouter: kind=brain (ven imágenes y usan herramientas) o kind=image (generan imágenes)."""
     import httpx
     try:
         async with httpx.AsyncClient(timeout=20) as c:
@@ -707,7 +707,8 @@ async def openrouter_models():
     for m in data:
         params = m.get("supported_parameters") or []
         inputs = (m.get("architecture") or {}).get("input_modalities") or []
-        if "tools" in params and "image" in inputs:
+        outputs = (m.get("architecture") or {}).get("output_modalities") or []
+        if (kind == "image" and "image" in outputs) or (kind != "image" and "tools" in params and "image" in inputs):
             p = m.get("pricing") or {}
             out.append({"id": m["id"], "name": m.get("name", m["id"]), "structured": "structured_outputs" in params,
                         "price_in": float(p.get("prompt") or 0) * 1e6, "price_out": float(p.get("completion") or 0) * 1e6})

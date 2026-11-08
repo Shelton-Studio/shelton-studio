@@ -35,6 +35,11 @@ How to write the prompt:
 - One dense paragraph in English, natural language (not tag lists), 60-160 words.
 - Order: subject and action -> setting -> composition and camera (shot type, lens, angle) -> lighting -> mood, color palette -> texture and realism cues.
 - Be concrete: age range, clothing, materials, time of day, real-world props. Describe one clear focal point.
+- Photo realism (default, unless another style is requested): it must look like a real photo taken by a person, never
+  "AI-looking". Ask for natural skin texture with pores and small imperfections, real hair strands, believable hands,
+  true-to-life light and shadows, slight film grain, real lens (e.g. "35mm, f/1.8, shallow depth of field" or
+  "iPhone candid photo"), everyday imperfect backgrounds. Avoid words that cause the plastic AI look ("perfect",
+  "flawless", "hyper-detailed", "8k", "masterpiece").
 - Composition must suit the target format (vertical formats: subject centered, room at top and bottom for UI overlays).
 - The model renders text well: only include on-image text when the idea asks for it, with the exact words in double quotes, short (max ~6 words).
 - Style: if the idea names a style (painting, cartoon, 3D, cinematic, vintage photo...), commit to it fully and name

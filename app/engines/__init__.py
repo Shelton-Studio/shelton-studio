@@ -77,7 +77,12 @@ def _build(kind: str, cfg: dict) -> ImageEngine:
 def get_engine(role: str = "generate", choice: str | None = None) -> ImageEngine:
     from app.connections import engine_for_role, list_enabled
 
-    if settings.IMAGE_ENGINE == "mock" and not (choice or "").startswith("conn:"):
+    if choice == "openrouter" or (settings.IMAGE_ENGINE == "openrouter" and not choice and not engine_for_role(role)):
+        # Imágenes con OpenRouter usando la clave del cerebro (sin GPU).
+        if role in ("video", "sound"):
+            raise ValueError("OpenRouter no genera video ni sonido: usa la GPU (ComfyUI) o una conexión fal.ai")
+        key, kind, cfg = "openrouter", "openrouter_image", {}
+    elif settings.IMAGE_ENGINE == "mock" and not (choice or "").startswith("conn:") and not engine_for_role(role):
         key, kind, cfg = "mock", "mock", {}
     elif choice and choice.startswith("conn:"):
         conn = next((c for c in list_enabled("engine") if c.id == choice[5:]), None)
@@ -113,6 +118,12 @@ def engine_choices() -> list[dict]:
     from app.connections import TYPES, list_enabled
     out = [{"id": "", "label": "Automático", "description": "Lo que tengas asignado en Conexiones o en .env.", "local": True}]
     out += [{"id": k, "label": v[0], "description": v[1], "local": True} for k, v in PRESET_INFO.items()]
+    from app.llm import openrouter_config
+    if openrouter_config()[0]:
+        out.append({"id": "openrouter", "label": f"OpenRouter · {settings.OPENROUTER_IMAGE_MODEL}",
+                    "description": "Imágenes en la nube con tu clave de OpenRouter (sin GPU). Cobra por imagen. "
+                                   "Cambia el modelo en .env (OPENROUTER_IMAGE_MODEL) o agrega otra conexión «OpenRouter (imagen)».",
+                    "local": False})
     for c in list_enabled("engine"):
         local = c.type == "comfyui"
         out.append({"id": f"conn:{c.id}", "label": f"{c.name or TYPES[c.type]['name']}",

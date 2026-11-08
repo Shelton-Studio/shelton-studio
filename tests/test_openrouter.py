@@ -108,3 +108,43 @@ def test_clear_errors():
         assert "saldo" in str(e).lower()
     else:
         raise AssertionError("debía fallar")
+
+
+def test_openrouter_image_engine():
+    import base64
+    import io as _io
+
+    from PIL import Image
+
+    from app.engines import get_engine
+    from app.engines.cloud import OpenRouterImageEngine
+    buf = _io.BytesIO()
+    Image.new("RGB", (8, 8), "red").save(buf, "PNG")
+    data_url = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    seen = []
+
+    def handler(request: httpx.Request):
+        b = json.loads(request.content)
+        seen.append(b)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "listo", "images": [
+            {"type": "image_url", "image_url": {"url": data_url}}]}}]})
+    OpenRouterImageEngine.transport = httpx.MockTransport(handler)
+    try:
+        eng = get_engine("generate", "openrouter")
+        out = asyncio.run(eng.generate("un café con luz de mañana", 1080, 1920, 1))
+        assert out == buf.getvalue()
+        assert seen[-1]["modalities"] == ["image", "text"] and seen[-1]["image_config"]["aspect_ratio"] == "9:16"
+        assert seen[-1]["model"] == settings.OPENROUTER_IMAGE_MODEL
+        asyncio.run(eng.edit(buf.getvalue(), "fondo de playa", 1))
+        parts = seen[-1]["messages"][0]["content"]
+        assert parts[1]["type"] == "image_url" and "Edit the attached image" in parts[0]["text"]
+        try:
+            get_engine("video", "openrouter")
+        except ValueError as e:
+            assert "no genera video" in str(e)
+        else:
+            raise AssertionError("OpenRouter no debe aceptar video")
+        from app.engines import engine_choices
+        assert any(c["id"] == "openrouter" for c in engine_choices())
+    finally:
+        OpenRouterImageEngine.transport = None

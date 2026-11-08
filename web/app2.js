@@ -267,10 +267,10 @@ function connForm(type, conn) {
     ${t.category === "engine" ? `<div class="f small muted" style="font-weight:500">Usar esta conexión para:</div><div class="checks">${S.connTypes.engine_roles.map((r) => `<label><input type="checkbox" value="${r}" ${conn?.roles?.includes(r) ? "checked" : ""}> ${{ generate: "Generar imágenes", edit: "Editar", subject: "Escenas con modelos del banco", video: "Video", sound: "Efectos de sonido" }[r]}</label>`).join("")}</div><div class="hint">Si varias GPUs tienen el mismo rol, Shelton reparte el trabajo a la más libre.</div>` : ""}
     <label class="checks"><label><input type="checkbox" id="cen" ${conn?.enabled === false ? "" : "checked"}> Activa</label></label>`,
     `<button class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn primary" id="csave">Guardar y probar</button>`);
-  if (type === "openrouter") {
+  if (type === "openrouter" || type === "openrouter_image") {
     const inp = $('[data-k="model"]', box), dl = document.createElement("datalist");
     dl.id = "or-models"; inp.setAttribute("list", "or-models"); box.append(dl);
-    api("/api/openrouter/models").then((ms) => { dl.innerHTML = ms.map((m) => `<option value="${esc(m.id)}">${esc(m.name)} · $${m.price_in.toFixed(2)}/$${m.price_out.toFixed(2)} por millón${m.structured ? "" : " · sin JSON nativo"}</option>`).join(""); }).catch(() => {});
+    api(`/api/openrouter/models?kind=${type === "openrouter" ? "brain" : "image"}`).then((ms) => { dl.innerHTML = ms.map((m) => `<option value="${esc(m.id)}">${esc(m.name)} · $${m.price_in.toFixed(2)}/$${m.price_out.toFixed(2)} por millón${m.structured ? "" : " · sin JSON nativo"}</option>`).join(""); }).catch(() => {});
   }
   $("#csave", box).onclick = async () => {
     const config = {}; $$("[data-k]", box).forEach((i) => { if (i.value.trim()) config[i.dataset.k] = i.value.trim(); });

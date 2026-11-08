@@ -63,7 +63,8 @@ PY
     echo "  Pega tu clave de OpenRouter (no se verá al escribir). Enter para dejarla para después:"
     KEY_OR=$(ask -s); echo
   fi
-  ENGINE="${IMAGE_ENGINE:-mock}"
+  # Con clave de OpenRouter: imágenes reales por OpenRouter. Sin clave: simuladas hasta conectar la GPU.
+  if [ -n "${IMAGE_ENGINE:-}" ]; then ENGINE="$IMAGE_ENGINE"; elif [ -n "$KEY_OR" ]; then ENGINE=openrouter; else ENGINE=mock; fi
   cp .env.example .env
   HOST="$HOST" PORT="$PORT" KEY_OR="$KEY_OR" KEY_AN="$KEY_AN" ENGINE="$ENGINE" venv/bin/python - <<'PY'
 import os, re
@@ -84,6 +85,11 @@ PY
   [ -n "$KEY_OR$KEY_AN" ] && ok "Clave guardada solo en $DIR/.env" || echo "  ⚠ Sin clave: agrégala luego en la web (Conexiones → Cerebro) o en $DIR/.env"
 else
   ok "Se conserva tu .env actual"
+  # Si hay clave de OpenRouter y el motor estaba en "simulado", pasa a imágenes reales con OpenRouter.
+  if grep -qE '^IMAGE_ENGINE=mock' .env && grep -qE '^OPENROUTER_API_KEY=.+' .env && [ "${KEEP_MOCK:-}" != "1" ]; then
+    sed -i 's/^IMAGE_ENGINE=mock/IMAGE_ENGINE=openrouter/' .env
+    ok "Motor de imagen: OpenRouter (imágenes reales; el video sigue esperando la GPU)"
+  fi
 fi
 HOST=$(grep -E '^APP_HOST=' .env | cut -d= -f2); PORT=$(grep -E '^APP_PORT=' .env | cut -d= -f2)
 

@@ -239,5 +239,66 @@ class HttpEngine(_Base):
                                  "aspect_ratio": _ratio(width, height) if width else "1:1"})
 
 
-CLOUD_ENGINES = {"fal": FalEngine, "replicate": ReplicateEngine, "openai_images": OpenAIImagesEngine,
+# ------------------------------------------------------------------ OpenRouter (imagen)
+class OpenRouterImageEngine(_Base):
+    """Modelos de imagen de OpenRouter (Gemini "Nano Banana", GPT Image, etc.) con la misma clave del cerebro.
+    Genera, edita y crea escenas con referencias (manda las fotos junto al pedido)."""
+    name = "openrouter_image"
+    URL = "https://openrouter.ai/api/v1/chat/completions"
+    transport = None  # las pruebas inyectan un transporte simulado
+
+    def _key(self) -> str:
+        if self.cfg.get("api_key"):
+            return self.cfg["api_key"]
+        from app.llm import openrouter_config
+        key = openrouter_config()[0]
+        if not key:
+            raise RuntimeError("Falta la clave de OpenRouter (Conexiones → Cerebro o .env)")
+        return key
+
+    async def _run(self, prompt: str, images: list[bytes], width: int, height: int) -> bytes:
+        from app.config import settings
+        model = self.cfg.get("model") or settings.OPENROUTER_IMAGE_MODEL
+        parts = [{"type": "image_url", "image_url": {"url": _data_uri(i)}} for i in images[:3]]
+        ratio = _ratio(width, height) if width and height else None
+        text = prompt + (f"\n\nAspect ratio {ratio}, high detail, no watermark." if ratio else "")
+        body = {"model": model, "modalities": ["image", "text"],
+                "messages": [{"role": "user", "content": [{"type": "text", "text": text}, *parts]}]}
+        if ratio:
+            body["image_config"] = {"aspect_ratio": ratio}
+        async with httpx.AsyncClient(timeout=300, transport=self.transport) as c:
+            r = await c.post(self.URL, json=body, headers={"Authorization": f"Bearer {self._key()}",
+                                                           "X-Title": "Shelton Studio"})
+        if r.status_code >= 400:
+            raise RuntimeError(f"OpenRouter imagen {r.status_code}: {r.text[:300]}")
+        msg = r.json()["choices"][0]["message"]
+        urls = [im.get("image_url", {}).get("url") for im in msg.get("images") or []]
+        if not urls and isinstance(msg.get("content"), list):
+            urls = [p.get("image_url", {}).get("url") for p in msg["content"] if p.get("type") == "image_url"]
+        urls = [u for u in urls if u]
+        if not urls:
+            raise RuntimeError(f"El modelo {model} no devolvió imagen: {str(msg.get('content'))[:200]}")
+        return await _fetch(urls[0])
+
+    STYLE_WORDS = ("painting", "oil", "watercolor", "illustration", "anime", "cartoon", "3d", "render", "sketch",
+                   "drawing", "pixel", "comic", "vector", "pintura", "óleo", "acuarela", "ilustración", "dibujo")
+    REALISM = (" Ultra-realistic photograph indistinguishable from a real photo: natural skin texture with pores and "
+               "small imperfections, real hair strands, true-to-life light and shadows, subtle film grain, real camera "
+               "lens and depth of field. No plastic skin, no AI look, no oversaturation, no text or watermark.")
+
+    def _realistic(self, prompt: str) -> str:
+        p = prompt.lower()
+        return prompt if any(w in p for w in self.STYLE_WORDS) else prompt + self.REALISM
+
+    async def generate(self, prompt, width, height, seed, on_progress: Progress = None) -> bytes:
+        return await self._run(self._realistic(prompt), [], width, height)
+
+    async def _edit_many(self, images, prompt, width, height, seed) -> bytes:
+        prompt = self._realistic(prompt) + " Keep everything not mentioned exactly as in the original."
+        prefix = ("Edit the attached image: " if len(images) == 1 and not width else
+                  "Create a new image keeping the identity of the subjects in the attached references: ")
+        return await self._run(prefix + prompt, images, width, height)
+
+
+CLOUD_ENGINES = {"openrouter_image": OpenRouterImageEngine, "fal": FalEngine, "replicate": ReplicateEngine, "openai_images": OpenAIImagesEngine,
                  "gemini_image": GeminiImageEngine, "http_engine": HttpEngine}
