@@ -36,6 +36,7 @@ const ICONS = {
   wave: '<path d="M2 12h2M6 8v8M10 4v16M14 7v10M18 10v4M22 12h0"/>', sparkle: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/>',
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>', download: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>', plus: '<path d="M12 5v14M5 12h14"/>',
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>', trash: '<path d="M3 6h18M8 6V4h8v2M6 6l1 15h10l1-15"/>',
+  zap2: '<path d="M13 2 3 14h9l-1 8 10-12h-9z"/>',
   key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/>',
   refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>', eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>',
 };
@@ -67,14 +68,14 @@ const when = (iso) => {
 const scoreCls = (s) => (s >= 85 ? "hi" : s >= 70 ? "mid" : "lo");
 const STATUS = { queued: ["En cola", ""], generating: ["Generando", "accent"], ready: ["Para revisar", "warn"], approved: ["Aprobado", "good"], published: ["Publicado", "info"], failed: ["Falló", "bad"], rejected: ["Rechazado", "bad"] };
 const chip = (st) => `<span class="chip ${STATUS[st]?.[1] || ""}">${STATUS[st]?.[0] || esc(st)}</span>`;
-const agentName = (k) => S.agents.find((a) => a.key === k)?.name || k;
-const agentColor = (k) => S.agents.find((a) => a.key === k)?.color || "#8b5cf6";
+const agentName = (k) => S.agents.find((a) => a.key === k)?.name || (S.team || []).find((a) => a.key === k)?.name || k;
+const agentColor = (k) => S.agents.find((a) => a.key === k)?.color || (S.team || []).find((a) => a.key === k)?.color || "#8b5cf6";
 const avatar = (k, sm) => `<div class="avatar ${sm ? "sm" : ""}" style="background:linear-gradient(140deg, ${agentColor(k)}, #4c1d95)">${esc((agentName(k) || "?")[0])}</div>`;
 function empty(ico, text, extra = "") { return `<div class="empty"><div class="em-ico">${ico}</div><div>${text}</div>${extra}</div>`; }
 
 // ------------------------------------------------------------------ Navegación
 const NAV = [
-  ["inicio", "home", "Inicio"], ["chat", "chat", "Chat"], ["tareas", "tasks", "Tareas"], ["aprobaciones", "approve", "Aprobaciones", "approvals"], "-",
+  ["inicio", "home", "Inicio"], ["envivo", "zap", "En vivo", "working"], ["chat", "chat", "Chat"], ["tareas", "tasks", "Tareas"], ["aprobaciones", "approve", "Aprobaciones", "approvals"], "-",
   ["galeria", "gallery", "Galería", "review"], ["campanas", "rocket", "Campañas"], ["banco", "users", "Banco de modelos"], ["tendencias", "trend", "Tendencias", "findings"], ["voces", "mic", "Voces"], "-",
   ["agentes", "bot", "Agentes"], ["memoria", "brain", "Memoria", "memory"], "-",
   ["conexiones", "plug", "Conexiones"], ["flujos", "flow", "Flujos"], ["actividad", "pulse", "Actividad"], ["marca", "tag", "Marca"], ["ajustes", "gear", "Ajustes"],
@@ -137,6 +138,10 @@ function connectEvents() {
       updateCounts();
     } else if (ev.type === "progress") {
       S.progress.set(ev.id, ev.text); const p = S.posts.get(ev.id); if (p) refreshPost(p);
+    } else if (ev.type === "working") {
+      S.working = ev.active; if (window.renderWorking) renderWorking();
+    } else if (ev.type === "run") {
+      if (window.onRunLogged) onRunLogged();
     } else if (ev.type === "learned") {
       learnedBanner(ev, true);
     } else if (ev.type === "approval") {
@@ -606,6 +611,20 @@ function showModeRoutes() {
     `<button class="btn" onclick="closeModal();openApis()">${icon("key", 16)} Abrir APIs</button>`);
 }
 
+// ------------------------------------------------------------------ Quién trabaja ahora (barra superior)
+function elapsed(iso) { const s = Math.max(0, Math.floor((Date.now() - new Date(iso)) / 1000)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`; }
+function renderWorking() {
+  const w = S.working || [], pill = $("#working-pill"); if (!pill) return;
+  const agents = [...new Set(w.map((x) => x.agent))];
+  pill.classList.toggle("busy", w.length > 0);
+  pill.innerHTML = w.length
+    ? `<span class="stack">${agents.slice(0, 4).map((a) => avatar(a, true)).join("")}</span><span><b>${agents.length}</b> trabajando</span>`
+    : `<span class="dot"></span><span>Equipo en reposo</span>`;
+  pill.title = w.length ? w.map((x) => `${agentName(x.agent)}: ${x.task}`).join("\n") : "Nadie trabajando ahora";
+  $$('[data-count="working"]').forEach((e) => e.textContent = agents.length || "");
+  if (location.hash.startsWith("#/envivo") && window.renderLiveCards) renderLiveCards();
+}
+
 // ------------------------------------------------------------------ Inicio de la app
 (async function init() {
   $("#i-search").innerHTML = icon("search", 18); $("#i-bell").innerHTML = icon("bell", 20); $("#i-key").innerHTML = icon("key", 16);
@@ -613,6 +632,9 @@ function showModeRoutes() {
   $$("#mode-seg button").forEach((b) => b.onclick = () => setMode(b.dataset.mode));
   $("#mode-info").onclick = () => showModeRoutes();
   loadMode();
+  $("#working-pill").onclick = () => go("envivo");
+  api("/api/working").then((w) => { S.team = w.team; S.working = w.active; renderWorking(); }).catch(() => {});
+  setInterval(() => $$("[data-since]").forEach((e) => e.textContent = elapsed(e.dataset.since)), 1000);
   renderRail();
   [S.wl, S.platforms, S.agents] = await Promise.all([api("/api/whitelabel"), api("/api/platforms"), api("/api/agents")]);
   applyWL();

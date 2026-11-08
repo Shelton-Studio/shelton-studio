@@ -213,6 +213,22 @@ table.t tr:hover td { background: rgba(255, 255, 255, .015); }
 .tile .meta .idea { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
 .tile .model-tag { position: absolute; top: 9px; right: 9px; z-index: 2; max-width: 70%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   background: rgba(0, 0, 0, .65); backdrop-filter: blur(6px); border-radius: 8px; padding: 3px 8px; font-size: 11px; font-weight: 600; color: #fff; }
+/* Quién trabaja ahora */
+.working-pill { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px 0 8px; border-radius: 99px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--muted); cursor: pointer; font-size: 13px; white-space: nowrap; }
+.working-pill .dot { margin-left: 4px; }
+.working-pill.busy { color: var(--text); border-color: rgba(139, 92, 246, .55); box-shadow: 0 0 0 3px var(--accent-soft), 0 0 22px var(--accent-glow); animation: glow 2s ease-in-out infinite; }
+.working-pill .stack { display: flex; }
+.working-pill .stack .avatar { width: 24px; height: 24px; font-size: 11px; border: 2px solid var(--bg); margin-left: -6px; }
+.working-pill .stack .avatar:first-child { margin-left: 0; }
+@keyframes glow { 50% { box-shadow: 0 0 0 3px var(--accent-soft), 0 0 8px var(--accent-glow); } }
+.live-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.live-card { display: grid; gap: 8px; padding: 14px; border-radius: 16px; background: var(--panel); border: 1px solid var(--line); transition: all .3s; opacity: .62; }
+.live-card.on { opacity: 1; border-color: rgba(139, 92, 246, .6); box-shadow: 0 0 0 1px rgba(139, 92, 246, .35), 0 10px 30px rgba(139, 92, 246, .18);
+  background: linear-gradient(160deg, rgba(139, 92, 246, .14), var(--panel)); }
+.live-card .lc-top { display: flex; gap: 10px; align-items: center; }
+.live-card .task { font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+.live-card .pulse { width: 9px; height: 9px; border-radius: 50%; background: var(--good); box-shadow: 0 0 10px var(--good); animation: pulse 1s infinite; }
 /* Banners de los subagentes (preguntas y recomendaciones) */
 .asks { position: fixed; right: 20px; bottom: 20px; z-index: 48; display: grid; gap: 10px; width: min(400px, calc(100vw - 40px)); }
 .ask { display: grid; gap: 10px; padding: 14px 16px; border-radius: 16px; background: linear-gradient(160deg, var(--panel-3), var(--panel));

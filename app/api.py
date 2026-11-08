@@ -157,7 +157,9 @@ async def runs(agent: str | None = None, limit: int = 100, failed: bool = False)
             q = q.filter(AgentRun.agent == agent)
         if failed:
             q = q.filter(AgentRun.ok.is_(False))
-        return [{"id": r.id, "agent": r.agent, "agent_name": registry.AGENTS.get(r.agent, {}).get("name", r.agent),
+        from app.working import ENGINE_NAMES
+        return [{"id": r.id, "agent": r.agent,
+                 "agent_name": registry.AGENTS.get(r.agent, {}).get("name") or ENGINE_NAMES.get(r.agent, r.agent),
                  "ok": r.ok, "tokens": r.input_tokens + r.output_tokens, "cost": round(_cost(r.model, r.input_tokens, r.output_tokens), 5),
                  "ms": r.duration_ms, "model": r.model, "summary": r.summary, "error": r.error,
                  "created_at": r.created_at.isoformat() + "Z"} for r in q.limit(min(limit, 500))]
@@ -938,3 +940,17 @@ async def video_models():
     auto = (await eng._pick())["id"] if models else None
     return {"current": current or settings.OPENROUTER_VIDEO_MODEL, "auto_pick": auto,
             "models": [_video_info(m) for m in sorted(models, key=order)]}
+
+
+# ------------------------------------------------------------------ En vivo: quién trabaja ahora
+@router.get("/working")
+async def working_now():
+    """Agentes y motores trabajando en este momento, más la cola y los últimos registros."""
+    from app import working
+    from app.working import ENGINE_NAMES
+    active = working.snapshot()
+    team = [{"key": k, **{x: v[x] for x in ("name", "role", "color")}} for k, v in registry.AGENTS.items()]
+    team += [{"key": k, "name": n, "role": "Genera con el modelo elegido (local o nube)", "color": "#64748b"}
+             for k, n in ENGINE_NAMES.items()]
+    return {"active": active, "count": len(active), "agents_busy": len({a["agent"] for a in active}),
+            "team": team, "queue": pipeline.queue_stats()}

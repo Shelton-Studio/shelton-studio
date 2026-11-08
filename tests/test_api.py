@@ -397,3 +397,10 @@ def test_apis_panel_and_env_override(srv):
     web = [i for i in items if i.get("id") == c["id"]]
     assert web and web[0]["source"] == "web" and web[0]["key"] == "••••1234"
     srv.delete(f"/api/connections/{c['id']}")
+
+
+def test_live_panel(srv):
+    w = srv.get("/api/working").json()
+    assert w["count"] == 0 and any(t["key"] == "motor_imagen" for t in w["team"]) and any(t["key"] == "shelton" for t in w["team"])
+    runs = srv.get("/api/runs?limit=300").json()
+    assert any(r["agent"] == "motor_imagen" and r["agent_name"] == "Motor de imagen" for r in runs)

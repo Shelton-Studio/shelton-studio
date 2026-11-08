@@ -14,7 +14,17 @@ async def _call(key: str, content, schema: dict, effort: str = "low", max_tokens
     """Llama al subagente `key` con el prompt de su ficha y registra la ejecución a su nombre."""
     text = content if isinstance(content, str) else " ".join(b.get("text", "") for b in content if b.get("type") == "text")
     return await json_call(registry.prompt(key), content, schema, effort=effort, max_tokens=max_tokens,
-                           agent=key, summary=text.strip().splitlines()[-1][:200] if text.strip() else "")
+                           agent=key, summary=_summary(text))
+
+
+def _summary(text: str) -> str:
+    """Resumen legible de la tarea para el registro (la idea del post, sin etiquetas técnicas)."""
+    lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
+    for prefix in ("Content idea:", "User request:", "Sound request:", "Subject name:", "Brief:"):
+        for ln in lines:
+            if ln.startswith(prefix):
+                return ln[len(prefix):].strip()[:200]
+    return (lines[-1] if lines else "")[:200]
 
 
 def brand_context(b: Brand | None) -> str:

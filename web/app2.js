@@ -419,6 +419,50 @@ async function openApis() {
   });
 }
 
+// ------------------------------------------------------------------ EN VIVO: quién trabaja y registro de todo
+VIEWS.envivo = async (el) => {
+  const w = await api("/api/working");
+  S.team = w.team; S.working = w.active;
+  const filter = localStorage.getItem("live-filter") || "";
+  el.innerHTML = pageHead("⚡", "En vivo", "Quién del equipo está trabajando ahora, en qué y con qué modelo. Abajo, el registro de todo lo que hicieron.",
+    `<a class="btn" href="#/actividad">${icon("pulse", 16)} Registro completo</a>`) +
+    `<div class="card" style="display:flex;gap:18px;align-items:center;margin-bottom:16px" id="live-summary"></div>
+    <div class="live-grid" id="live-cards"></div>
+    <div class="section-title">Registro <span class="muted small" style="font-weight:400">· se actualiza solo</span><div class="grow"></div>
+      <select id="live-filter" style="width:220px"><option value="">Todo el equipo</option>${w.team.map((t) => `<option value="${t.key}" ${t.key === filter ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select></div>
+    <div class="card" style="padding:6px 12px"><table class="t"><thead><tr><th></th><th>Quién</th><th>Qué hizo</th><th>Modelo</th><th>Tiempo</th><th>Cuándo</th></tr></thead><tbody id="live-log"></tbody></table></div>`;
+  $("#live-filter").onchange = (e) => { localStorage.setItem("live-filter", e.target.value); loadLiveLog(); };
+  renderLiveCards(); loadLiveLog();
+};
+function renderLiveCards() {
+  const cards = $("#live-cards"); if (!cards) return;
+  const w = S.working || [], team = S.team || [];
+  const byAgent = {}; w.forEach((x) => (byAgent[x.agent] ||= []).push(x));
+  const sorted = [...team].sort((a, b) => (byAgent[b.key] ? 1 : 0) - (byAgent[a.key] ? 1 : 0));
+  cards.innerHTML = sorted.map((t) => {
+    const jobs = byAgent[t.key] || [];
+    return `<div class="live-card ${jobs.length ? "on" : ""}"><div class="lc-top">${avatar(t.key, true)}<b class="grow ellipsis">${esc(t.name)}</b>
+      ${jobs.length ? `<span class="pulse"></span><span class="chip good">${jobs.length > 1 ? jobs.length + " tareas" : "Trabajando"}</span>` : '<span class="chip">En espera</span>'}</div>
+      ${jobs.length ? jobs.map((j) => `<div class="task">▸ ${esc(j.task || "pensando")}${j.model ? ` · <span class="mono">${esc(String(j.model).split("/").pop())}</span>` : ""} · <span data-since="${esc(j.since)}">${elapsed(j.since)}</span>${j.post_id ? ` · <a href="javascript:openPost('${esc(j.post_id)}')">ver</a>` : ""}</div>`).join("")
+        : `<div class="task faint">${esc(t.role)}</div>`}</div>`;
+  }).join("");
+  const agents = Object.keys(byAgent);
+  $("#live-summary").innerHTML = `<div class="k-value" style="font-size:38px;font-weight:800">${agents.length}</div>
+    <div class="grow"><b>${agents.length ? `${agents.length === 1 ? "agente trabajando" : "agentes trabajando"} · ${w.length} ${w.length === 1 ? "tarea" : "tareas"} en curso` : "Equipo en reposo"}</b>
+    <div class="muted small">${agents.length ? agents.map((a) => esc(agentName(a))).join(", ") : "Pídele algo a Shelton y verás al equipo moverse aquí."}</div></div>`;
+}
+async function loadLiveLog() {
+  const body = $("#live-log"); if (!body) return;
+  const f = localStorage.getItem("live-filter") || "";
+  const runs = await api(`/api/runs?limit=60${f ? "&agent=" + f : ""}`).catch(() => []);
+  body.innerHTML = runs.map((r) => `<tr><td>${r.ok ? "✅" : "⚠️"}</td><td><div class="row" style="gap:8px">${avatar(r.agent, true)}${esc(r.agent_name)}</div></td>
+    <td>${esc(r.summary || "—")}${r.error ? `<div class="small" style="color:#fca5a5">${esc(r.error)}</div>` : ""}</td>
+    <td class="faint small mono">${esc(String(r.model || "").split("/").pop())}</td><td class="muted">${(r.ms / 1000).toFixed(1)}s</td>
+    <td class="muted" title="${esc(new Date(r.created_at).toLocaleString("es-ES"))}">${esc(new Date(r.created_at).toLocaleTimeString("es-ES"))}</td></tr>`).join("")
+    || '<tr><td colspan="6" class="muted">Sin registros todavía.</td></tr>';
+}
+window.onRunLogged = () => { if (location.hash.startsWith("#/envivo")) { clearTimeout(onRunLogged.t); onRunLogged.t = setTimeout(loadLiveLog, 600); } };
+
 // ------------------------------------------------------------------ Banners de los subagentes: preguntan y recomiendan
 // Reglas locales (no gastan tokens). Solo proponen: nada se hace sin tu clic.
 const ASKED = new Set();
