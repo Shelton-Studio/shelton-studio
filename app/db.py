@@ -264,6 +264,17 @@ class Finding(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
 
 
+class User(Base):
+    """Personas que entran a la web (login). La contraseña se guarda solo como hash (scrypt)."""
+    __tablename__ = "users"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_id)
+    username: Mapped[str] = mapped_column(String, unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String)
+    role: Mapped[str] = mapped_column(String, default="admin")      # admin | editor
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    last_login: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class Feedback(Base):
     """Decisiones humanas (aprobar, rechazar, elegir otro intento, pedir cambios, editar textos).
     Shelton las revisa y aprende de ellas."""

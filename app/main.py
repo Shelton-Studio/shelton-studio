@@ -52,6 +52,9 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Shelton", lifespan=lifespan)
+from app.auth_routes import guard as _auth_guard, router as auth_router  # noqa: E402
+app.middleware("http")(_auth_guard)
+app.include_router(auth_router)
 app.include_router(panel_router)
 from app.api_extra import router as extra_router  # noqa: E402
 app.include_router(extra_router)

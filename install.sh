@@ -36,6 +36,8 @@ say "Instalando dependencias (1-2 minutos la primera vez)"
 [ -x venv/bin/python ] || { rm -rf venv; python3 -m venv venv; }
 venv/bin/pip install -q --upgrade pip >/dev/null
 venv/bin/pip install -q -r requirements.txt
+# Las redes cambian seguido: yt-dlp (el que baja videos por link) siempre a su última versión
+venv/bin/pip install -q -U yt-dlp >/dev/null 2>&1 || true
 ok "Listo"
 
 if [ ! -f .env ]; then
@@ -93,6 +95,31 @@ else
 fi
 HOST=$(grep -E '^APP_HOST=' .env | cut -d= -f2); PORT=$(grep -E '^APP_PORT=' .env | cut -d= -f2)
 
+say "Acceso a la web (usuario y contraseña)"
+ADMIN_MSG=""
+if venv/bin/python -m app.auth list 2>/dev/null | grep -q .; then
+  ok "Ya hay usuarios creados (se conservan). Olvidaste la clave: venv/bin/python -m app.auth reset-password"
+else
+  echo "  Crea tu usuario admin para entrar a Shelton."
+  echo -n "  Usuario [admin]: "; ADMIN_USER=$(ask); ADMIN_USER="${ADMIN_USER:-admin}"
+  echo "  Contraseña (mín. 10 caracteres, no se verá al escribir). Enter = generar una segura:"
+  ADMIN_PW=$(ask -s); echo
+  if [ -n "$ADMIN_PW" ]; then
+    echo "  Repítela:"; ADMIN_PW2=$(ask -s); echo
+    [ "$ADMIN_PW" = "$ADMIN_PW2" ] || die "Las contraseñas no coinciden. Vuelve a correr el instalador."
+  fi
+  OUT=$(SHELTON_ADMIN_USER="$ADMIN_USER" SHELTON_ADMIN_PASSWORD="$ADMIN_PW" venv/bin/python -m app.auth ensure-admin) \
+    || die "No se pudo crear el usuario: $OUT"
+  GEN=$(echo "$OUT" | awk '/^CREATED/{print $3}'); ADMIN_USER=$(echo "$OUT" | awk '/^CREATED/{print $2}')
+  ok "Usuario admin creado: ${ADMIN_USER}"
+  if [ -n "$GEN" ]; then
+    ADMIN_MSG="  Usuario: ${ADMIN_USER}   Contraseña: ${GEN}   ← guárdala (se muestra solo esta vez)"
+  else
+    ADMIN_MSG="  Usuario: ${ADMIN_USER}   (con la contraseña que escribiste)"
+  fi
+  unset ADMIN_PW ADMIN_PW2
+fi
+
 say "Arrancando como servicio"
 if command -v systemctl >/dev/null && [ "$(id -u)" = "0" ] && [ -d /run/systemd/system ]; then
   cat > "/etc/systemd/system/${SERVICE}.service" <<UNIT
@@ -129,6 +156,7 @@ for _ in $(seq 1 90); do
     say "¡Listo!"
     echo "  Abre:    http://${HOST}:${PORT}"
     echo "  Cerebro: ${BRAIN}"
+    [ -n "$ADMIN_MSG" ] && echo "$ADMIN_MSG"
     echo "  Logs:    journalctl -u ${SERVICE} -f   (o ${DIR}/shelton.log)"
     echo "  Actualizar más adelante: vuelve a correr este mismo comando."
     exit 0

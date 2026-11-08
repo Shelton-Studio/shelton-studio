@@ -141,10 +141,19 @@ async def from_url(url: str, conversation_id: str | None = None, reuse: bool = T
         raise
     except Exception as e:  # noqa: BLE001
         msg = str(e)
-        if "login" in msg.lower() or "private" in msg.lower() or "cookies" in msg.lower():
-            raise ValueError("Esa red pide iniciar sesión para bajar este video. Descárgalo desde la app y súbelo "
-                             "aquí como archivo (📎).") from e
-        raise ValueError(f"No pude bajar el video de ese link: {msg[-300:]}") from e
+        low = msg.lower()
+        log.warning("No se pudo bajar %s: %s", url, msg)
+        upload = (" Solución segura: en la app de la red toca «Compartir → Guardar video», y súbelo aquí con 📎 "
+                  "(en el chat o en Copiar videos): el resto (escenas, audio y recrear con tu modelo) sigue igual.")
+        if "login" in low or "private" in low or "cookies" in low:
+            raise ValueError("Esa red pide iniciar sesión para bajar este video." + upload) from e
+        if "unavailable" in low or "not available" in low or "removed" in low or "404" in low:
+            raise ValueError("Ese video no está disponible (borrado, privado o bloqueado en el país del servidor)."
+                             + upload) from e
+        if any(w in low for w in ("403", "blocked", "captcha", "unexpected response", "challenge", "impersonat")):
+            raise ValueError("La red bloqueó la descarga desde el servidor (TikTok y otras suelen bloquear a los "
+                             "servidores en la nube)." + upload + f" Detalle técnico: {msg[-200:]}") from e
+        raise ValueError(f"No pude bajar el video de ese link." + upload + f" Detalle técnico: {msg[-300:]}") from e
     return await ingest(path, url, title, conversation_id, rid)
 
 
