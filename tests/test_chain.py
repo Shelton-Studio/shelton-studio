@@ -112,8 +112,11 @@ class FakeChief:
             self.scripted = False
             res = content[0]
             body = res["content"] if isinstance(res["content"], str) else res["content"][0].get("text", "")
-            return SimpleNamespace(stop_reason="end_turn", content=[block(type="text",
-                                   text=("ERROR: " if res.get("is_error") else "OK: ") + body[:2000])])
+            text = ("ERROR: " if res.get("is_error") else "OK: ") + body[:2000]
+            if res.get("tool_use_id", "").startswith("d"):
+                text = ("Listo (modo demo): el equipo hizo 2 posts con tu idea. Ábrelos para ver la nota del juez, "
+                        "editar el texto, animarlos o ponerles voz. Con tu GPU y tu clave de Claude salen reales.")
+            return SimpleNamespace(stop_reason="end_turn", content=[block(type="text", text=text)])
         txt = next((b["text"] for b in reversed(content) if b.get("type") == "text"), "")
         if txt.startswith("TOOL "):
             self.scripted = True
@@ -121,7 +124,17 @@ class FakeChief:
             return SimpleNamespace(stop_reason="tool_use", content=[block(type="tool_use", id=f"s{id(txt)}",
                                    name=name, input=_json.loads(args or "{}"))])
         if txt and not txt.startswith("crea a Valentina"):
-            return SimpleNamespace(stop_reason="end_turn", content=[block(type="text", text="Hola, soy Shelton.")])
+            tools = {t.get("name") for t in kw.get("tools", [])}
+            if "create_posts" not in tools:  # chat directo con un subagente
+                return SimpleNamespace(stop_reason="end_turn", content=[block(type="text",
+                                       text="(Modo demo) Con tu clave de Claude te respondería de verdad.")])
+            # Modo demo: cualquier pedido arranca la cadena con 2 posts sobre lo que escribiste.
+            self.scripted = True
+            platform = "tiktok" if "tiktok" in txt.lower() else "instagram_feed"
+            return SimpleNamespace(stop_reason="tool_use", content=[
+                block(type="thinking", thinking="Modo demo: encargo 2 posts al equipo", signature="x"),
+                block(type="tool_use", id=f"d{id(txt)}", name="create_posts", input={"posts": [
+                    {"idea": txt[:300], "platform": platform}, {"idea": txt[:300] + " (variante)", "platform": platform}]})])
         self.calls += 1
         if self.calls == 1:
             return SimpleNamespace(stop_reason="tool_use", content=[

@@ -373,3 +373,11 @@ def test_training_memory_contradictions(srv):
 def test_research_tool(srv):
     out = tool(srv, pytest.conv, "research_web", {"question": "autos exóticos 2026"})
     assert out.startswith("OK") and "Informe" in out
+
+
+def test_demo_free_text_runs_chain(srv):
+    events, _ = chat(srv, "posts para instagram de una mujer alta con vestido rojo en la ciudad")
+    msg = next(e for e in events if e["type"] == "message")
+    assert "modo demo" in msg["text"] and len(msg["post_ids"]) == 2, msg
+    for pid in msg["post_ids"]:
+        assert wait_post(srv, pid)["status"] == "ready"
