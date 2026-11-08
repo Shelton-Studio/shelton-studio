@@ -510,4 +510,5 @@ def _normalize(data: bytes) -> bytes:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app.main:app", host=settings.APP_HOST, port=settings.APP_PORT)
+    # Al reiniciar (actualizar), no esperar a que se cierren los navegadores conectados al canal en vivo
+    uvicorn.run("app.main:app", host=settings.APP_HOST, port=settings.APP_PORT, timeout_graceful_shutdown=5)
