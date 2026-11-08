@@ -126,6 +126,21 @@ def _update_post(post_id: str, **fields) -> dict:
     return data
 
 
+def reference_images(subjects, limit: int = 3) -> list[bytes]:
+    """Fotos de referencia para mantener la identidad: hasta 3 en total.
+    Un solo modelo -> sus 3 mejores fotos (distintos ángulos); varios -> la principal de cada uno primero."""
+    lists = [[r for r in (s.references or []) if Path(r).exists()] for s in subjects]
+    lists = [lst for lst in lists if lst]
+    picked: list[str] = []
+    depth = 0
+    while len(picked) < limit and any(depth < len(lst) for lst in lists):
+        for lst in lists:
+            if depth < len(lst) and len(picked) < limit:
+                picked.append(lst[depth])
+        depth += 1
+    return [Path(p).read_bytes() for p in picked]
+
+
 def _mark(post_id: str, kind: str, label: str) -> None:
     """Guarda qué modelo hizo cada parte del post (se muestra como etiqueta)."""
     with session() as s:
@@ -157,7 +172,7 @@ async def _create_post(post_id: str, payload: dict) -> None:
     platform = get_platform(post.platform)
     width, height = generation_size(platform.aspect)
     choice = payload.get("engine") or None
-    refs = [Path(s.references[0]).read_bytes() for s in subjects if s.references]
+    refs = reference_images(subjects)
     engine = get_engine("subject" if refs else "generate", choice)
     from app.engines import engine_label
     _mark(post_id, "image", engine_label(engine, "subject" if refs else "generate"))
@@ -601,6 +616,41 @@ def use_subject_alternative(subject_id: str, index: int) -> dict:
         refs = list(sub.references or [])
         sub.alternatives = ([refs[0]] if refs else []) + alts
         sub.references = [chosen, *refs[1:]]
+        data = subject_dict(sub)
+    events.publish({"type": "subject", "subject": data})
+    return data
+
+
+async def create_subject_from_photos(name: str, image_paths: list[str], kind: str = "auto", notes: str = "") -> dict:
+    """Banco de fotos -> modelo. El Analista mira todas, escribe la ficha de identidad y detecta el tipo.
+    Si ya existe un modelo con ese nombre, se le agregan las fotos y se rehace la ficha."""
+    from app import working
+    paths = [p for p in image_paths if p and Path(p).exists()]
+    if not paths:
+        raise ValueError("No llegó ninguna foto válida")
+    found, _ = find_subjects([name])
+    with session() as s:
+        if found:
+            sub = s.get(Subject, found[0])
+            sub.references = [*(sub.references or []), *[p for p in paths if p not in (sub.references or [])]]
+        else:
+            sub = Subject(name=name.strip(), kind=kind if kind != "auto" else "other", notes=notes, references=paths)
+            s.add(sub)
+        s.flush()
+        sid, all_refs = sub.id, list(sub.references)
+    events.publish({"type": "subject_progress", "id": sid, "text": f"Analizando {len(all_refs)} fotos"})
+    with working.track("subject_analyst", f"Creando el modelo {name} desde {len(paths)} fotos"):
+        info = await sp.describe_subject_photos(all_refs, name, kind, notes)
+    with session() as s:
+        sub = s.get(Subject, sid)
+        sub.description = info["description"]
+        if kind == "auto" or not sub.kind or sub.kind == "other":
+            sub.kind = info.get("kind") or sub.kind
+        best = int(info.get("best_photo") or 1) - 1
+        refs = list(sub.references or [])
+        if 0 < best < len(refs):  # la mejor foto pasa a ser la principal
+            refs.insert(0, refs.pop(best))
+            sub.references = refs
         data = subject_dict(sub)
     events.publish({"type": "subject", "subject": data})
     return data

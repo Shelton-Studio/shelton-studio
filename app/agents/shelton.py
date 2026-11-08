@@ -50,6 +50,9 @@ Cómo trabajas:
 - Motor de imagen: si el usuario pide cambiar de modelo/motor o pregunta cuáles hay, usa image_engines y
   set_image_engine, y explícale en 1-2 líneas la diferencia (velocidad, calidad, costo) y que también puede
   cambiarlo con el selector "Motor" arriba del chat.
+- Banco de fotos: si el usuario sube o pega varias fotos de lo mismo (un carro, una persona, una flor, un paisaje)
+  y pide crear el modelo, usa create_subject_from_photos con TODAS las fotos. Si no dio nombre, pregúntalo una vez.
+  Después ofrece hacer contenido con ese modelo: se usarán sus fotos como referencia para mantener la identidad.
 - Voz y sonido: add_voice pone locución (el usuario puede pedir grave, aguda, femenina, sensual, adulta, anciana,
   robotizada, épica...) y add_sound efectos (motor rugiendo, moto, olas...). Para un reel con voz: create_reel y luego
   add_voice sobre el reel. Si un modelo del banco tiene voz propia, se usa sola.
@@ -151,6 +154,13 @@ TOOLS = [
            "request": {"type": "string", "description": "Cómo es: rasgos, estilo, edad, color, detalles, personalidad"}},
           ["name", "kind", "request"]),
     _tool("list_subjects", "Lista el banco de modelos (nombre, tipo, descripción).", {}, []),
+    _tool("create_subject_from_photos", "Crea (o amplía) un modelo del banco a partir de VARIAS fotos del mismo carro, "
+          "persona, flor, producto o paisaje que subió el usuario. Úsala cuando el usuario sube o pega fotos y pide "
+          "'créame este modelo', 'guárdalo como modelo', etc. Pasa TODAS las fotos subidas (sus post_id).",
+          {"name": {"type": "string", "description": "Nombre del modelo (pregúntalo si no lo dijo)"},
+           "post_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+           "kind": {"type": "string", "enum": ["auto", *SUBJECT_KINDS], "description": "auto = detectarlo"},
+           "notes": {"type": "string", "description": "Lo que el usuario contó del modelo"}}, ["name", "post_ids"]),
     _tool("add_subject_reference", "Usa la imagen de un post (o una foto subida por el usuario) como referencia de un "
           "modelo del banco. Si el modelo no existe, lo crea a partir de esa imagen.",
           {"subject_name": {"type": "string"}, "post_id": {"type": "string"},
@@ -363,6 +373,22 @@ async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
             rows = [{k: d[k] for k in ("id", "name", "kind", "description", "notes")} | {"photos": len(d["references"])}
                     for d in (subject_dict(x) for x in s.query(Subject).order_by(Subject.name))]
         return json.dumps(rows, ensure_ascii=False) if rows else "El banco de modelos está vacío."
+
+    if name == "create_subject_from_photos":
+        paths = []
+        with session() as s:
+            for pid in args["post_ids"]:
+                p = s.get(Post, pid)
+                if p and (p.raw_path or p.image_path):
+                    paths.append(p.raw_path or p.image_path)
+        if not paths:
+            raise ValueError("No encontré las fotos subidas; pide al usuario que las adjunte con el clip 📎")
+        await emit({"type": "status", "text": f"Analista revisando {len(paths)} fotos para crear a {args['name']}…"})
+        data = await pipeline.create_subject_from_photos(args["name"], paths, args.get("kind", "auto"), args.get("notes", ""))
+        await emit({"type": "subjects_changed"})
+        out = [{"type": "text", "text": json.dumps({k: data[k] for k in ("id", "name", "kind", "description")} |
+                                                   {"photos": len(data["references"])}, ensure_ascii=False)}]
+        return out
 
     if name == "add_subject_reference":
         with session() as s:

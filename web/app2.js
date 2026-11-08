@@ -89,15 +89,25 @@ VIEWS.banco = async (el) => {
       `<div class="card" style="grid-column:1/-1">${empty("👥", "El banco está vacío. Crea tu primer personaje, auto, nave o lugar.")}</div>`}</div>`;
   $("#new-sub").onclick = () => {
     const box = modal("Nuevo modelo del banco", `<div class="row"><label class="f grow">Nombre<input id="sn" placeholder="Valentina, Mustang Rojo, Nave Aurora…"></label>
-      <label class="f" style="width:200px">Tipo<select id="sk">${Object.entries(KINDS).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select></label></div>
+      <label class="f" style="width:200px">Tipo<select id="sk"><option value="auto">Detectar solo (con fotos)</option>${Object.entries(KINDS).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select></label></div>
       <label class="f">Cómo es<textarea id="sr" rows="3" placeholder="26 años, pelo rizado castaño, ojos verdes, estilo urbano… / deportivo rojo, llantas negras… / acuarela suave, pastel…"></textarea></label>
-      <label class="f">…o sube tus fotos de referencia (la primera se analiza)<input type="file" id="sp" accept="image/*" multiple></label>
+      <label class="f">…o sube tu banco de fotos (varias del mismo carro, persona, flor o paisaje: distintos ángulos y luces)<input type="file" id="sp" accept="image/*" multiple></label>
+      <div class="hint">Con 3 a 10 fotos el parecido es mucho mejor. El Analista las mira todas, escribe la ficha de identidad y elige la mejor como principal.</div>
       <div class="row"><label class="f grow">Muestra de su voz (opcional, 5-15 s)<input type="file" id="sv" accept="audio/*"></label><label class="f grow">Cómo suena<input id="sst" placeholder="grave, cálida, acento neutro"></label></div>`,
       `<button class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn primary" id="ss">Guardar en el banco</button>`);
     $("#ss", box).onclick = async () => {
       const files = [...$("#sp").files]; if (!$("#sn").value.trim()) return toast("Ponle un nombre", "bad");
       try {
-        const { id } = await api("/api/subjects", { method: "POST", body: { name: $("#sn").value, kind: $("#sk").value, request: $("#sr").value, generate: !files.length } });
+        if (files.length) {
+          // Banco de fotos -> modelo (análisis de todas las fotos y tipo detectado)
+          $("#ss", box).disabled = true; $("#ss", box).textContent = `Analizando ${files.length} fotos…`;
+          const fd = new FormData(); files.forEach((f) => fd.append("files", f));
+          fd.append("name", $("#sn").value); fd.append("kind", $("#sk").value); fd.append("notes", $("#sr").value);
+          const sub = await api("/api/subjects/from-photos", { method: "POST", body: fd });
+          if ($("#sv").files[0] || $("#sst").value) { const fv = new FormData(); if ($("#sv").files[0]) fv.append("file", $("#sv").files[0]); await api(`/api/subjects/${sub.id}/voice?style=${encodeURIComponent($("#sst").value)}`, { method: "POST", body: fv }); }
+          closeModal(); toast(`<b>${esc(sub.name)}</b> creado con ${sub.references.length} fotos (${esc(KINDS[sub.kind] || sub.kind)}). Ya puedes pedir contenido con su nombre.`, "good", "👤"); return route();
+        }
+        const { id } = await api("/api/subjects", { method: "POST", body: { name: $("#sn").value, kind: $("#sk").value === "auto" ? "person" : $("#sk").value, request: $("#sr").value, generate: true } });
         for (const [i, f] of files.entries()) { const fd = new FormData(); fd.append("file", f); fd.append("describe", i === 0 ? "true" : "false"); await api(`/api/subjects/${id}/photos`, { method: "POST", body: fd }); }
         if ($("#sv").files[0] || $("#sst").value) { const fd = new FormData(); if ($("#sv").files[0]) fd.append("file", $("#sv").files[0]); await api(`/api/subjects/${id}/voice?style=${encodeURIComponent($("#sst").value)}`, { method: "POST", body: fd }); }
         closeModal(); toast(files.length ? "Guardado con tus fotos" : "El diseñador está creando su imagen de referencia…", "good", "👤"); route();
