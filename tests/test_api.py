@@ -381,3 +381,19 @@ def test_demo_free_text_runs_chain(srv):
     assert "modo demo" in msg["text"] and len(msg["post_ids"]) == 2, msg
     for pid in msg["post_ids"]:
         assert wait_post(srv, pid)["status"] == "ready"
+
+
+def test_apis_panel_and_env_override(srv):
+    items = srv.get("/api/apis").json()
+    assert any(i["name"] == "Motor por defecto" and i["source"] == ".env" for i in items)
+    c = srv.post("/api/apis/override", json={"type": "openrouter_image", "config": {"model": "google/gemini-2.5-flash-image",
+                                                                                  "api_key": "sk-or-abcd1234"},
+                                             "roles": ["generate"]}).json()
+    assert c["config"]["api_key"] == "••••1234" and c["roles"] == ["generate"]
+    # Volver a guardar sin clave conserva la anterior
+    c2 = srv.post("/api/apis/override", json={"type": "openrouter_image", "config": {"model": "otro/modelo", "api_key": "••••1234"}}).json()
+    assert c2["id"] == c["id"] and c2["config"]["api_key"] == "••••1234" and c2["config"]["model"] == "otro/modelo"
+    items = srv.get("/api/apis").json()
+    web = [i for i in items if i.get("id") == c["id"]]
+    assert web and web[0]["source"] == "web" and web[0]["key"] == "••••1234"
+    srv.delete(f"/api/connections/{c['id']}")

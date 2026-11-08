@@ -36,6 +36,7 @@ const ICONS = {
   wave: '<path d="M2 12h2M6 8v8M10 4v16M14 7v10M18 10v4M22 12h0"/>', sparkle: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/>',
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>', download: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>', plus: '<path d="M12 5v14M5 12h14"/>',
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>', trash: '<path d="M3 6h18M8 6V4h8v2M6 6l1 15h10l1-15"/>',
+  key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/>',
   refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>', eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>',
 };
 const icon = (n, s = 20) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[n] || ""}</svg>`;
@@ -574,7 +575,8 @@ async function openPost(id, refetch = true, keepScroll = false) {
 
 // ------------------------------------------------------------------ Inicio de la app
 (async function init() {
-  $("#i-search").innerHTML = icon("search", 18); $("#i-bell").innerHTML = icon("bell", 20);
+  $("#i-search").innerHTML = icon("search", 18); $("#i-bell").innerHTML = icon("bell", 20); $("#i-key").innerHTML = icon("key", 16);
+  $("#apis-btn").onclick = () => openApis();
   renderRail();
   [S.wl, S.platforms, S.agents] = await Promise.all([api("/api/whitelabel"), api("/api/platforms"), api("/api/agents")]);
   applyWL();
