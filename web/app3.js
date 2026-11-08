@@ -133,7 +133,15 @@ function linkHint(input, box) {
   const sites = [...new Set(links.map((l) => l.site))].join(", ");
   h.innerHTML = `🎞️ <b>Link de ${esc(sites)} detectado.</b> Shelton lo baja, guarda su audio, lo desarma por escenas y lo recrea con tu modelo. Dile qué quieres: «igual con Valentina», «algo parecido de noche», «solo el audio»…`;
 }
-async function attachFile(f) {
+// Adjuntos todavía subiendo/analizando: el mensaje espera a que terminen (así el video siempre viaja con el mensaje)
+S.pendingAtt = new Set();
+function attachFile(f) {
+  const job = attachFileNow(f);
+  S.pendingAtt.add(job);
+  job.finally(() => S.pendingAtt.delete(job));
+  return job;
+}
+async function attachFileNow(f) {
   const kind = /^audio\//.test(f.type) || /\.(wav|mp3|m4a|ogg|flac)$/i.test(f.name) ? "audio" : /^video\//.test(f.type) || /\.(mp4|mov|webm|m4v)$/i.test(f.name) ? "reference" : "image";
   const box = $("#attachments");
   if (kind === "image") {
@@ -142,7 +150,7 @@ async function attachFile(f) {
     catch (err) { toast(esc(err.message), "bad"); }
     return;
   }
-  const chip = document.createElement("span"); chip.className = "att-chip"; chip.innerHTML = `<span class="spinner sm"></span> ${kind === "audio" ? "Subiendo audio" : "Analizando video"}: ${esc(f.name)}…`;
+  const chip = document.createElement("span"); chip.className = "att-chip"; chip.innerHTML = `<span class="spinner sm"></span> ${kind === "audio" ? "Subiendo audio" : "Analizando video (escenas y audio, ~30 s)"}: ${esc(f.name)}…`;
   box.append(chip);
   const fd = new FormData(); fd.append("file", f);
   try {
@@ -150,13 +158,19 @@ async function attachFile(f) {
     S.attach = S.attach || []; S.attach.push({ kind, id: r.id });
     chip.innerHTML = kind === "audio" ? `🎵 ${esc(r.name)} · ${Math.round(r.duration)} s` : `🎞️ ${esc(r.title || f.name)} · ${r.frames.length} escenas${r.audio_id ? " · 🎵 audio guardado" : ""}`;
     if (kind === "reference" && !$("#input").value) $("#input").value = "Hazme algo igual a este video con mi modelo ";
-  } catch (err) { chip.remove(); toast(esc(err.message), "bad"); }
+  } catch (err) { chip.remove(); toast(`No pude ${kind === "audio" ? "guardar el audio" : "analizar el video"} «${esc(f.name)}»: ${esc(err.message)}`, "bad"); }
 }
 
 // Respuesta en voz alta si la orden fue por voz
 const _send = sendMessage;
 window.sendMessage = sendMessage = async function () {
   const spoken = S.spoken; S.spoken = false;
+  if (S.pendingAtt.size) {
+    if (S.waitingAtt) return;
+    S.waitingAtt = true; $("#send").disabled = true;
+    const t = toast("Termino de analizar el video y envío tu mensaje con él…", "", "🎞️");
+    try { await Promise.allSettled([...S.pendingAtt]); } finally { S.waitingAtt = false; $("#send") && ($("#send").disabled = false); t.remove(); }
+  }
   $(".composer-box .link-hint")?.remove();
   await _send();
   if (spoken) { const last = $$("#msgs .msg.bot .bubble"); const t = last[last.length - 1]?.textContent; if (t) Voice.say(t); }
@@ -331,6 +345,19 @@ const Bot = window.Bot = {
   },
 };
 setTimeout(() => Bot.mount(), 600);
+// En el chat, el robot se sube para no tapar el botón Enviar
+// Solo si de verdad lo tapa (pantallas angostas); en pantallas anchas se queda donde está
+function markRoute() {
+  const body = document.body, send = $("#send"), face = $("#b-face");
+  body.classList.remove("route-chat");
+  if (!send || !face) return;
+  const a = send.getBoundingClientRect(), b = face.getBoundingClientRect(), pad = 8;
+  const overlap = a.left < b.right + pad && b.left < a.right + pad && a.top < b.bottom + pad && b.top < a.bottom + pad;
+  body.classList.toggle("route-chat", overlap);
+}
+window.addEventListener("hashchange", () => setTimeout(markRoute, 400));
+window.addEventListener("resize", () => { clearTimeout(markRoute.t); markRoute.t = setTimeout(markRoute, 150); });
+setTimeout(markRoute, 1200);
 
 // ------------------------------------------------------------------ AUDIOS (biblioteca)
 VIEWS.audios = async (el) => {

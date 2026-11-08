@@ -153,6 +153,23 @@ sudo systemctl status shelton-studio
 journalctl -u shelton-studio -n 100 --no-pager
 ```
 
+### Acceso con usuario y contraseña
+
+- La web tiene login (pantalla animada con tu marca blanca).
+- **Crear el admin:**
+  - La primera vez que corres el instalador te pide el usuario y la contraseña (no se ve al escribir). Si dejas la contraseña vacía, genera una segura y la muestra una sola vez.
+  - Las contraseñas se guardan solo como hash, nunca en `.env`.
+- **Sesión:** queda guardada en el navegador y se renueva sola mientras la uses. Si desmarcas «Mantener la sesión iniciada», se cierra al cerrar el navegador.
+- **Menú de usuario** (arriba a la derecha): cambiar contraseña, usuarios (admin y editor) y Salir.
+- **Seguridad:** 5 intentos fallidos bloquean ese usuario 5 minutos, y cambiar la contraseña cierra las otras sesiones.
+- **Olvidaste la contraseña:** en el servidor, dentro de `~/shelton-studio`:
+
+  ```bash
+  venv/bin/python -m app.auth reset-password admin
+  ```
+
+- **Sin usuarios** (modo demo), la web queda abierta.
+
 ### Shelton mini, voz, audios y copiar videos
 
 - **Shelton mini** (el robot de abajo a la derecha):
@@ -187,6 +204,7 @@ journalctl -u shelton-studio -n 100 --no-pager
 - **Audios**: sube WAV/MP3 (o un video y se guarda su audio) en **Audios** o con 📎 en el chat. Shelton se los pone a cualquier post ("ponle el audio *Tema verano* al reel de Valentina"). Desde la ficha de un video puedes guardar su audio en la biblioteca.
 - **Copiar videos**:
   - Pega el link de un TikTok, Reel o Short (o sube el video) y pide "hazme algo igual con mi modelo".
+  - Algunas redes (sobre todo TikTok) bloquean las descargas desde servidores en la nube. Si pasa, Shelton te dice el motivo: descarga el video en la app («Compartir → Guardar video») y súbelo con 📎. Si lo envías mientras se analiza, el mensaje espera y sale con el video.
   - El Analista de videos lo desarma escena por escena y guarda su audio.
   - Cada escena se recrea con tu modelo del banco: mismo fondo, encuadre y movimiento, con otra cara. Luego se monta el reel, con el audio original si quieres.
   - También puedes **pegar el link directo en el chat** (o en Shelton mini) de cualquier red: TikTok, Instagram, YouTube, X, Facebook, Pinterest, Threads, Kwai… Shelton lo detecta solo. Si ese link ya se analizó, lo reutiliza.

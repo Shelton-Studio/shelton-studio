@@ -10,7 +10,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 os.environ["IMAGE_ENGINE"] = "mock"
-os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="shelton_test_")
+if not os.environ.get("SHELTON_KEEP_DATA_DIR"):
+    os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="shelton_test_")
 os.environ.pop("DATABASE_URL", None)
 os.environ["QA_MAX_RETRIES"] = "1"
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))

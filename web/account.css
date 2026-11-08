@@ -1,0 +1,30 @@
+/* Cuenta: usuario arriba, menú y salida animada */
+.user-chip { display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px 4px 4px; border-radius: 99px; border: 1px solid var(--line);
+  background: var(--panel); cursor: pointer; transition: border-color .2s, box-shadow .2s; }
+.user-chip:hover { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.u-av { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 13px; color: #fff; flex: none;
+  background: conic-gradient(from 200deg, var(--accent), var(--accent-2), #f472b6, var(--accent)); box-shadow: 0 0 0 2px var(--bg); }
+.u-av.lg { width: 40px; height: 40px; font-size: 17px; }
+.u-name { font-weight: 600; font-size: 13px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-menu { width: 270px; padding: 8px; display: grid; gap: 2px; animation: b-in .18s ease-out; }
+.um-head { display: flex; gap: 10px; align-items: center; padding: 8px 8px 12px; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
+.um-item { display: flex; gap: 10px; align-items: center; width: 100%; padding: 10px; border: 0; border-radius: 10px; background: none; cursor: pointer; text-align: left; }
+.um-item:hover { background: var(--panel-3); }
+.um-item.danger { color: #fca5a5; }
+.um-item.danger:hover { background: var(--bad-soft); }
+.bye { position: fixed; inset: 0; z-index: 200; display: grid; place-items: center;
+  background: radial-gradient(circle at 50% 45%, rgba(139, 92, 246, .35), rgba(7, 6, 13, .96) 60%);
+  backdrop-filter: blur(6px); animation: bye-in .35s ease-out both; }
+.bye-in { display: grid; gap: 10px; justify-items: center; text-align: center; font-size: 18px; }
+.bye-in span { color: var(--muted); font-size: 14px; }
+.bye-logo { width: 84px; height: 84px; border-radius: 28px; display: grid; place-items: center; font-size: 38px; font-weight: 800; color: #fff; overflow: hidden;
+  background: linear-gradient(140deg, var(--accent), #4c1d95); box-shadow: 0 18px 50px var(--accent-glow); animation: bye-logo .9s cubic-bezier(.7, 0, .3, 1) both; }
+.bye-logo img { width: 100%; height: 100%; object-fit: cover; }
+@keyframes bye-in { from { opacity: 0; } }
+@keyframes bye-logo { 0% { transform: scale(.6) rotate(-12deg); opacity: 0; } 60% { transform: scale(1.08) rotate(3deg); opacity: 1; } 100% { transform: scale(1); } }
+@media (max-width: 720px) { .u-name { display: none; } .user-chip { padding: 3px; } }
+
+/* En el chat, Shelton mini sube para no tapar el botón Enviar */
+body.route-chat .buddy { bottom: 150px; }
+body.route-chat .asks { bottom: 240px; }
+@media (max-width: 720px) { body.route-chat .buddy { bottom: 170px; } }
