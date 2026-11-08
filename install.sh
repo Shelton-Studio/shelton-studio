@@ -106,13 +106,16 @@ WorkingDirectory=${DIR}
 ExecStart=${DIR}/venv/bin/python -m app.main
 Restart=always
 RestartSec=5
+TimeoutStopSec=15
+KillMode=mixed
 
 [Install]
 WantedBy=multi-user.target
 UNIT
   systemctl daemon-reload
   systemctl enable -q "${SERVICE}"
-  systemctl restart "${SERVICE}"
+  echo "  (reiniciando: puede tardar hasta ~20 s si hay navegadores abiertos)"
+  timeout 40 systemctl restart "${SERVICE}" || { systemctl kill -s KILL "${SERVICE}" 2>/dev/null; sleep 2; systemctl restart "${SERVICE}"; }
   ok "Servicio ${SERVICE} activo (se reinicia solo)"
 else
   pkill -f "${DIR}/venv/bin/python -m app.main" 2>/dev/null || true
@@ -120,7 +123,7 @@ else
   ok "Corriendo en segundo plano (log: ${DIR}/shelton.log)"
 fi
 
-for _ in $(seq 1 40); do
+for _ in $(seq 1 90); do
   if curl -fsS "http://${HOST}:${PORT}/api/health" >/dev/null 2>&1; then
     BRAIN=$(curl -fsS "http://${HOST}:${PORT}/api/health" | venv/bin/python -c "import json,sys;h=json.load(sys.stdin);print(('OpenRouter' if h.get('provider')=='openrouter' else 'Anthropic')+' · '+h.get('model','')+('' if h.get('claude') else ' (SIN CLAVE)'))")
     say "¡Listo!"
