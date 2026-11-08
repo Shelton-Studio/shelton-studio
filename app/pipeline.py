@@ -10,6 +10,7 @@ import logging
 import random
 import shutil
 import traceback
+from datetime import datetime
 from pathlib import Path
 
 from app import events
@@ -57,6 +58,49 @@ def queue_stats() -> dict:
         ready_today = s.query(Post).filter(Post.created_at >= today,
                                            Post.status.in_(["ready", "approved", "published"])).count()
     return {"pending": pending, "running": running, "ready_today": ready_today, "workers": len(_workers)}
+
+
+JOB_NAMES = {"create": "imagen", "edit": "edición", "subject": "modelo del banco", "video": "video", "reel": "montaje de reel",
+             "audio": "voz/sonido", "track": "audio de biblioteca"}
+DEFAULT_SECONDS = {"create": 60, "edit": 45, "subject": 90, "video": 180, "reel": 40, "audio": 40, "track": 15}
+
+
+def capacity() -> dict:
+    """Con qué cuenta el estudio ahora: trabajadores, GPUs/nube, cola y cuánto tarda cada cosa (según el historial)."""
+    from app.connections import list_enabled
+    from app.engines import busy, infra_mode
+    from app.llm import openrouter_config
+    from datetime import timedelta
+    with session() as s:
+        done = (s.query(Job).filter(Job.status == "done", Job.started_at.isnot(None))
+                .order_by(Job.updated_at.desc()).limit(300).all())
+        samples: dict[str, list[float]] = {}
+        for j in done:
+            secs = (j.updated_at - j.started_at).total_seconds()
+            if 0 < secs < 4 * 3600:
+                samples.setdefault(j.kind, []).append(secs)
+        pending = [j.kind for j in s.query(Job).filter(Job.status == "pending")]
+        running = [(j.kind, j.post_id, j.started_at) for j in s.query(Job).filter(Job.status == "running")]
+        day = now() - timedelta(hours=24)
+        made_24h = s.query(Post).filter(Post.created_at >= day, Post.status.in_(["ready", "approved", "published"])).count()
+    avg = {k: round(sorted(v)[len(v) // 2]) for k, v in samples.items()}   # mediana
+    per = {k: avg.get(k, DEFAULT_SECONDS.get(k, 60)) for k in JOB_NAMES}
+    workers = max(1, settings.WORKERS)
+    gpus = [{"name": c.name, "url": c.config.get("url", ""), "busy": busy(c.config.get("url", c.id))}
+            for c in list_enabled("engine") if c.type == "comfyui"]
+    cloud = bool(openrouter_config()[0]) or any(c.type != "comfyui" for c in list_enabled("engine"))
+    lanes = workers if cloud and infra_mode() != "local" else max(1, min(workers, len(gpus) or 1))
+    queue_seconds = sum(per.get(k, 60) for k in pending) + sum(
+        max(0, per.get(k, 60) - ((now() - st).total_seconds() if st else 0)) for k, _, st in running)
+    eta = round(queue_seconds / lanes)
+    return {"mode": infra_mode(), "workers": workers, "parallel_lanes": lanes, "gpus": gpus, "cloud": cloud,
+            "pending": len(pending), "running": len(running), "made_last_24h": made_24h,
+            "seconds_per_job": {JOB_NAMES[k]: v for k, v in per.items()},
+            "measured": sorted(JOB_NAMES[k] for k in avg if k in JOB_NAMES),
+            "queue_eta_seconds": eta,
+            "posts_per_hour_estimate": round(3600 / max(1, per["create"]) * lanes),
+            "note": ("Con la nube, varias cosas corren a la vez (un trabajo por trabajador). En local, cada GPU hace "
+                     "una cosa por vez y los demás esperan en la cola.")}
 
 
 async def start_workers() -> None:
@@ -138,10 +182,11 @@ async def _run_job(job_id: str) -> None:
         if not job or job.status not in ("pending", "running"):
             return
         job.status = "running"
+        job.started_at = now()
         kind, target, payload = job.kind, job.post_id, dict(job.payload or {})
 
     handler = {"create": _create_post, "edit": _edit_post, "subject": _create_subject,
-               "video": _video_post, "reel": _reel_post, "audio": _audio_post}[kind]
+               "video": _video_post, "reel": _reel_post, "audio": _audio_post, "track": _track_post}[kind]
     try:
         await handler(target, payload)
         status, error = "done", ""
@@ -216,7 +261,25 @@ async def _create_post(post_id: str, payload: dict) -> None:
     platform = get_platform(post.platform)
     width, height = generation_size(platform.aspect)
     choice = payload.get("engine") or None
-    refs = reference_images(subjects)
+    base = payload.get("base_image") or ""
+    base_note = ""
+    if base and Path(base).exists():
+        # Recrear un cuadro de un video de referencia (TikTok/Reel): ese cuadro va como imagen 1
+        refs = [Path(base).read_bytes(), *reference_images(subjects, 2)]
+        if payload.get("base_mode") == "similar":
+            base_note = ("Image 1 is a frame of a reference video. Use it as inspiration only: same idea, vibe, framing "
+                         "type and color mood, but a NEW, original scene.")
+        else:
+            base_note = ("Image 1 is a frame of a reference video. Recreate image 1 as faithfully as possible: SAME "
+                         "background and location, framing, camera angle, pose, outfit, lighting and colors.")
+        if subjects:
+            base_note += (" Replace the main person/subject of image 1 with the recurring subject from the other images "
+                          "(keep THEIR face and identity, not the one in image 1). Do not copy the identity of the "
+                          "person in image 1.")
+        if payload.get("changes"):
+            base_note += f" Requested changes: {payload['changes']}."
+    else:
+        refs = reference_images(subjects)
     engine = get_engine("subject" if refs else "generate", choice)
     from app.engines import engine_label
     _mark(post_id, "image", engine_label(engine, "subject" if refs else "generate"))
@@ -226,7 +289,7 @@ async def _create_post(post_id: str, payload: dict) -> None:
     for attempt in range(1, 2 + max(0, settings.QA_MAX_RETRIES)):
         _update_post(post_id, status="generating", attempts=attempt, error="")
         events.publish({"type": "progress", "id": post_id, "text": f"Director creativo (intento {attempt})"})
-        ad = await sp.art_direct(post.idea, platform, brand, feedback, subjects)
+        ad = await sp.art_direct(post.idea, platform, brand, feedback, subjects, base_note, 2 if base_note else 3)
         seed = random.randint(1, 2**31 - 1)
 
         step = _progress(post_id, f"Generando imagen (intento {attempt})")
@@ -527,6 +590,78 @@ def new_audio(parent_id: str, voice_request: str = "", script: str = "", sound_r
     return pid
 
 
+async def _track_post(post_id: str, payload: dict) -> None:
+    """Pone un audio de la biblioteca (WAV/MP3 subido o sacado de un video) sobre un post de imagen o video."""
+    from app import video as vid
+    from app import voice as vc
+    post, _, _ = _load(post_id)
+    with session() as s:
+        parent = s.get(Post, post.parent_id)
+        src_video, src_image = parent.video_path, parent.image_path
+        caption, hashtags, alt = parent.caption, parent.hashtags, parent.alt_text
+        score, passed = parent.qa_score, parent.qa_passed
+    platform = get_platform(post.platform)
+    _update_post(post_id, status="generating", media_type="video", caption=caption, hashtags=hashtags, alt_text=alt)
+    track = payload["audio_path"]
+    if not Path(track).exists():
+        raise RuntimeError("El audio ya no está en la biblioteca")
+    _mark(post_id, "audio", payload.get("audio_name") or Path(track).name)
+    start = float(payload.get("start") or 0)
+    vol = float(payload.get("volume") or 1.0)
+    mix = str(settings.media_dir / f"{post_id}_mix.wav")
+    events.publish({"type": "progress", "id": post_id, "text": "Preparando el audio"})
+    if src_video:
+        length = await asyncio.to_thread(vid.duration, src_video)
+        keep = payload.get("mode") == "mix" and await asyncio.to_thread(vc.has_audio, src_video)
+        if keep:   # el audio nuevo de fondo, sin tapar la voz/sonido que ya tiene el video
+            await asyncio.to_thread(vid._run, ["-i", src_video, "-ss", f"{start:.2f}", "-i", track, "-filter_complex",
+                                               f"[1:a]volume={0.35 * vol:.2f}[b];[0:a][b]amix=inputs=2:duration=first:normalize=0,loudnorm=I=-14",
+                                               "-t", f"{length:.2f}", "-ar", "44100", mix])
+        else:
+            await asyncio.to_thread(vid._run, ["-ss", f"{start:.2f}", "-i", track, "-t", f"{length:.2f}",
+                                               "-af", f"volume={vol:.2f},afade=t=out:st={max(0, length - 0.6):.2f}:d=0.6,loudnorm=I=-14",
+                                               "-ar", "44100", mix])
+    else:
+        seconds = float(payload.get("seconds") or 0) or min(30.0, await asyncio.to_thread(vid.duration, track))
+        await asyncio.to_thread(vid._run, ["-ss", f"{start:.2f}", "-i", track, "-t", f"{seconds:.2f}",
+                                           "-af", f"volume={vol:.2f},afade=t=out:st={max(0, seconds - 0.6):.2f}:d=0.6,loudnorm=I=-14",
+                                           "-ar", "44100", mix])
+    out = str(settings.media_dir / f"{post_id}.mp4")
+    events.publish({"type": "progress", "id": post_id, "text": "Mezclando audio y video"})
+    if src_video:
+        await asyncio.to_thread(vc.mux, src_video, mix, out)
+    else:
+        await asyncio.to_thread(vc.still_to_video, src_image, mix, out, *_dims(platform, src_image))
+    poster = await asyncio.to_thread(vid.frame_at, out, str(settings.media_dir / f"{post_id}_poster.jpg"), "0.3")
+    _update_post(post_id, status="ready", video_path=out, audio_path=mix, image_path=poster,
+                 duration=await asyncio.to_thread(vid.duration, out), width=_dims(platform, src_image)[0],
+                 height=_dims(platform, src_image)[1], qa_score=score, qa_passed=passed,
+                 qa_notes="Audio de la biblioteca agregado. Escúchalo antes de aprobar. Si es música de otra persona, "
+                          "revisa que tengas derecho a usarla fuera de la plataforma original.")
+
+
+def new_audio_track(parent_id: str, audio_id: str, mode: str = "replace", start: float = 0, volume: float = 1.0,
+                    conversation_id=None) -> str:
+    """Post nuevo = el post original con un audio de la biblioteca (el original se conserva)."""
+    from app import audio_lib
+    a = audio_lib.get(audio_id)
+    with session() as s:
+        parent = s.get(Post, parent_id)
+        if not parent or not (parent.image_path or parent.video_path):
+            raise ValueError(f"El post {parent_id} no existe o no tiene imagen/video todavía")
+        p = Post(idea=parent.idea, platform=parent.platform, brand_id=parent.brand_id, parent_id=parent.id,
+                 campaign_id=parent.campaign_id, conversation_id=conversation_id or parent.conversation_id,
+                 subject_ids=parent.subject_ids, media_type="video", status="queued", prompt=parent.prompt,
+                 reel_id=None)
+        s.add(p)
+        s.flush()
+        pid, data = p.id, post_dict(p)
+    events.publish({"type": "post", "post": data})
+    enqueue("track", pid, {"audio_path": a["path"], "audio_name": a["name"], "mode": mode, "start": start,
+                           "volume": volume})
+    return pid
+
+
 def use_alternative(post_id: str, index: int) -> dict:
     """La persona elige un intento que el juez puntuó más bajo. El actual pasa a ser alternativa (nada se pierde)."""
     with session() as s:
@@ -726,7 +861,8 @@ async def add_subject_reference(subject_id: str, image_path: str, describe: bool
 # ============================================================ Crear posts y campañas
 def new_post(idea: str, platform: str, *, brand_id=None, campaign_id=None, conversation_id=None,
              subject_ids=None, caption_notes: str = "", engine: str | None = None, media: str = "image",
-             motion: str = "", video_engine: str | None = None) -> str:
+             motion: str = "", video_engine: str | None = None, base_image: str = "", base_mode: str = "same",
+             changes: str = "") -> str:
     with session() as s:
         brand_id = brand_id or get_or_create_brand(s).id
         p = Post(idea=idea, platform=get_platform(platform).key, brand_id=brand_id, campaign_id=campaign_id,
@@ -737,7 +873,8 @@ def new_post(idea: str, platform: str, *, brand_id=None, campaign_id=None, conve
         pid, data = p.id, post_dict(p)
     events.publish({"type": "post", "post": data})
     enqueue("create", pid, {"caption_notes": caption_notes, "engine": engine or "", "media": media,
-                            "motion": motion, "video_engine": video_engine or ""})
+                            "motion": motion, "video_engine": video_engine or "", "base_image": base_image,
+                            "base_mode": base_mode, "changes": changes})
     return pid
 
 
@@ -893,6 +1030,55 @@ async def scout_loop() -> None:
         except Exception:
             log.exception("scout loop")
         await asyncio.sleep(600)
+
+
+# ============================================================ Revisión de la red (Shelton mini + scouts, cada 2 h)
+def _review_path() -> Path:
+    return settings.DATA_DIR / "network_review.json"
+
+
+def last_review() -> dict:
+    p = _review_path()
+    try:
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+async def run_network_review() -> dict:
+    """Sale a la red con el scout de tendencias y el de tools (lo de afuera para traerlo acá) y recalcula la mejor
+    hora para publicar de cada modelo con lo de adentro y lo de afuera."""
+    from app import timing
+    started = now()
+    events.publish({"type": "network_review", "status": "running"})
+    with session() as s:
+        get_or_create_brand(s).scout_last = started   # el scout de siempre no repite este trabajo
+    found = await run_scout()
+    try:
+        t = await timing.refresh()
+        timing_ok, summary = True, t.get("summary", "")
+    except Exception as e:  # noqa: BLE001
+        log.warning("mejor hora para publicar falló: %s", e)
+        timing_ok, summary = False, str(e)[:200]
+    out = {"at": started.isoformat() + "Z", "findings": found, "timing": timing_ok, "summary": summary,
+           "every_hours": settings.NETWORK_REVIEW_HOURS}
+    _review_path().write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    events.publish({"type": "network_review", "status": "done", **out})
+    return out
+
+
+async def network_loop() -> None:
+    await asyncio.sleep(90)   # deja arrancar tranquilo al servidor
+    while True:
+        try:
+            every = settings.NETWORK_REVIEW_HOURS
+            last = last_review().get("at")
+            due = every > 0 and (not last or (now() - datetime.fromisoformat(last.rstrip("Z"))).total_seconds() >= every * 3600)
+            if due:
+                await run_network_review()
+        except Exception:
+            log.exception("revisión de la red")
+        await asyncio.sleep(300)
 
 
 # ============================================================ Aprendizaje continuo

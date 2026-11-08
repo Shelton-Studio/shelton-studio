@@ -113,6 +113,7 @@ class Job(Base):
     error: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)   # para estimar tiempos
 
 
 class Campaign(Base):

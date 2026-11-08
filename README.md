@@ -153,6 +153,43 @@ sudo systemctl status shelton-studio
 journalctl -u shelton-studio -n 100 --no-pager
 ```
 
+### Shelton mini, voz, audios y copiar videos
+
+- **Shelton mini** (el robot de abajo a la derecha):
+  - Tócalo y dile lo que quieres, escribiendo o hablando (🎙️).
+  - Trabaja en paralelo mientras lo demás se procesa. Si le pides varias cosas seguidas, cada una va en su propia conversación.
+  - Sugiere cómo aprovechar el tiempo: otro modelo, más fotos del mismo, revisar la galería…
+  - Si le hablaste, te contesta en voz alta, como Siri.
+  - Es el mismo Shelton, con todas sus herramientas, en una conversación paralela.
+  - Muestra **en vivo** qué procesos están corriendo: qué agente o motor, con qué modelo y desde hace cuánto. También muestra lo que está en cola, una línea de actividad de la última hora, los trabajos listos y los errores.
+- **Revisión de la red cada 2 horas**:
+  - Shelton mini sale con el scout de tendencias y el de tools a buscar novedades afuera para traerlas acá.
+  - Recalcula la **mejor hora para publicar** por red y por modelo del banco, mezclando lo de adentro (tu historial: qué publicas y qué apruebas de cada modelo) con lo de afuera (investigación web actual).
+  - Se cambia con `NETWORK_REVIEW_HOURS` (0 = apagada). Cada revisión usa búsqueda web, que tiene costo.
+  - La zona horaria se configura con `STUDIO_TIMEZONE`.
+- **Dictado por voz** (botón 🎙️ del chat y de Shelton mini):
+  - Grabas, se transcribe y se envía solo.
+  - Si llegó muy bajo o no se entendió, te lo dice ("habla un poco más alto", "no te entendí bien, ¿lo repites?") y no manda nada.
+  - Transcribe con `faster-whisper` si lo instalas en el servidor (local, gratis) o, si no, con el modelo de audio de OpenRouter (`OPENROUTER_AUDIO_MODEL`).
+  - El navegador solo deja usar el micrófono con **https** o **localhost**. Con Tailscale, publica Shelton en https dentro de tu red privada:
+
+    ```bash
+    sudo tailscale serve --bg 8010
+    ```
+
+    Y abre `https://<nombre-de-la-máquina>.<tu-red>.ts.net`.
+- **Audios**: sube WAV/MP3 (o un video y se guarda su audio) en **Audios** o con 📎 en el chat. Shelton se los pone a cualquier post ("ponle el audio *Tema verano* al reel de Valentina"). Desde la ficha de un video puedes guardar su audio en la biblioteca.
+- **Copiar videos**:
+  - Pega el link de un TikTok, Reel o Short (o sube el video) y pide "hazme algo igual con mi modelo".
+  - El Analista de videos lo desarma escena por escena y guarda su audio.
+  - Cada escena se recrea con tu modelo del banco: mismo fondo, encuadre y movimiento, con otra cara. Luego se monta el reel, con el audio original si quieres.
+  - Usa solo modelos con permiso. Si el audio es música de otra persona, revisa los derechos antes de publicarlo fuera de esa red.
+- **Memoria por modelo**:
+  - Cada modelo del banco tiene su propia memoria (🧠 en el Banco).
+  - Las correcciones ("el lunar va en la mejilla izquierda") se aplican cada vez que se usa ese modelo.
+  - Shelton pasa cada lección, adaptada, a los demás agentes que la necesitan.
+- **Exportar todo** (Ajustes): un ZIP con contenido, banco, audios, voces, memoria, referencias y un respaldo para restaurar. Cada modelo y cada post también se pueden exportar por separado.
+
 ### Mover tus datos a otra máquina
 
 Todo lo tuyo vive en dos lugares:

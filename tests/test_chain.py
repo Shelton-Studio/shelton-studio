@@ -29,6 +29,22 @@ async def fake_json_call(system, content, schema, effort="low", max_tokens=8000,
                 "robot": "robot" in str(content).lower(), "reverb": 0.2, "base_voice": ""}}
     if keys == {"prompt", "negative"}:
         return {"prompt": "aggressive V8 engine revving", "negative": "music"}
+    if keys == {"summary", "platforms", "models", "sources"}:   # mejor hora para publicar
+        names = [x.split(" (")[0] for x in str(content).split("Models: ")[-1].split(", ") if x and x != "none"]
+        return {"summary": "Tarde-noche entre semana.", "sources": ["https://example.com/horarios"],
+                "platforms": [{"platform": "tiktok", "best": "mar-jue 19:00-21:00", "why": "más actividad"}],
+                "models": [{"model": n, "platform": "tiktok", "best": "jue 20:00-22:00", "why": "se aprueba más"} for n in names[:5]]}
+    if "updates" in keys:   # Shelton pasa la lección al equipo
+        hit = "LOGO" in str(content)
+        return {"updates": [{"agent": "judge", "title": "Revisar logos", "content": "Reprueba si se ve el logo."}] if hit else []}
+    if "scenes" in keys and "hook" in keys:   # analista de videos de referencia
+        n = max(1, str(content).count("Frame "))
+        return {"summary": "Chica bailando en una terraza al atardecer", "hook": "Giro en el primer segundo",
+                "style": "cálido, cámara en mano", "audio": "canción en tendencia",
+                "scenes": [{"what": f"woman dancing on a rooftop at sunset, shot {i + 1}", "motion": "spins, handheld"}
+                           for i in range(n)]}
+    if keys == {"text", "clear", "issue"}:   # transcripción de voz
+        return {"text": "hazme tres fotos de Valentina en la playa", "clear": True, "issue": ""}
     if "contradicts" in keys:
         hit = "CONTRADICE" in str(content).split("NEW:")[-1]
         old = str(content).split("[")[1].split("]")[0] if hit and "[" in str(content) else ""

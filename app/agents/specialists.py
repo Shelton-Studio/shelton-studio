@@ -66,11 +66,13 @@ camera, and say to keep their identity (face, hair, body / exact make, shape, co
 unchanged. If a subject is of kind "style", do not put it in the scene: say "in the exact visual style of image N"."""
 
 
-def reference_map(subjects: list[Subject], limit: int = 3) -> list[list[int]]:
-    """Qué números de imagen corresponden a cada modelo (mismo orden que pipeline.reference_images)."""
+def reference_map(subjects: list[Subject], limit: int = 3, offset: int = 0) -> list[list[int]]:
+    """Qué números de imagen corresponden a cada modelo (mismo orden que pipeline.reference_images).
+    offset = imágenes que van antes (por ejemplo, el cuadro del video de referencia es la imagen 1)."""
     counts = [len(s.references or []) for s in subjects]
     out: list[list[int]] = [[] for _ in subjects]
-    n, depth = 0, 0
+    n, depth = offset, 0
+    limit += offset
     while n < limit and any(depth < c for c in counts):
         for i, c in enumerate(counts):
             if depth < c and n < limit:
@@ -80,20 +82,26 @@ def reference_map(subjects: list[Subject], limit: int = 3) -> list[list[int]]:
     return out
 
 
-def subjects_context(subjects: list[Subject]) -> str:
+def subjects_context(subjects: list[Subject], offset: int = 0, limit: int = 3) -> str:
+    from app.agents import training
     rows = []
-    for s, imgs in zip(subjects, reference_map(subjects)):
+    for s, imgs in zip(subjects, reference_map(subjects, limit, offset)):
         where = (f"images {imgs[0]}-{imgs[-1]}" if len(imgs) > 1 else f"image {imgs[0]}") if imgs else "no photo"
         rows.append(f"{where}: {s.name} ({s.kind}) - {s.description}")
+        lessons = training.subject_knowledge(s.id)
+        if lessons:   # lo que el equipo aprendió de ESTE modelo (para no repetir errores)
+            rows.append(f"  Lessons learned for {s.name} (follow them): {lessons}")
     return "\n".join(rows)
 
 
 async def art_direct(idea: str, platform: Platform, brand: Brand | None, feedback: list[str] | None = None,
-                     subjects: list[Subject] | None = None) -> dict:
+                     subjects: list[Subject] | None = None, base_note: str = "", ref_limit: int = 3) -> dict:
     content = (f"{brand_context(brand)}\n\nTarget format: {platform.name} ({platform.aspect})\n"
                f"Content idea: {idea}")
+    if base_note:
+        content += f"\n\n{base_note}"
     if subjects:
-        content += f"\n{SUBJECT_RULES}\n{subjects_context(subjects)}"
+        content += f"\n{SUBJECT_RULES}\n{subjects_context(subjects, 1 if base_note else 0, ref_limit)}"
     if feedback:
         content += "\n\nProblems found in previous attempts (fix them):\n- " + "\n- ".join(feedback)
     return await _call("art_director", content, obj({
@@ -266,6 +274,30 @@ async def direct_video(image_path: str, idea: str, motion_hint: str = "") -> dic
     text = f"Content idea: {idea}" + (f"\nUser's motion request: {motion_hint}" if motion_hint else "")
     return await _call("video_producer", [image_block(image_path, 768), {"type": "text", "text": text}], obj({
         "motion_prompt": {"type": "string"}, "negative": {"type": "string"}}), effort="low")
+
+
+# ---------------------------------------------------------------- Analista de videos de referencia
+VIDEO_ANALYST = registry.register_default("video_analyst", """You analyze a reference short video (TikTok, Reel, Short) that
+the team wants to replicate with its own recurring models. You get several frames in order (with their time) and,
+if available, the title. Describe it so it can be recreated shot by shot: what happens, the person or main subject
+(appearance, outfit, pose, expression — WITHOUT trying to identify who they are), background and location, lighting,
+color grade, camera framing and movement, pace, on-screen text, and why it works (the hook). For each frame write
+`what` (English, a precise visual description of that shot to regenerate it: framing, background, pose, outfit,
+light) and `motion` (English, how it moves over the next seconds: subject action and camera). `summary` and `hook`
+in Spanish. `audio` in Spanish: what the audio seems to be (trending song, voice-over, ambient) if you can tell.""")
+
+
+async def analyze_reference(frames: list[tuple[str, float]], title: str = "", duration: float = 0) -> dict:
+    content = []
+    for i, (path, t) in enumerate(frames[:8], 1):
+        content += [{"type": "text", "text": f"Frame {i} (t={t:.1f}s):"}, image_block(path, 768)]
+    content.append({"type": "text", "text": f"Reference video: {title or 'sin título'} · duration {duration:.1f}s. "
+                                            "Analyze it for recreation."})
+    return await _call("video_analyst", content, obj({
+        "summary": {"type": "string"}, "hook": {"type": "string"}, "style": {"type": "string"},
+        "audio": {"type": "string"},
+        "scenes": {"type": "array", "items": obj({"what": {"type": "string"}, "motion": {"type": "string"}})},
+    }), effort="low")
 
 
 # ---------------------------------------------------------------- Scouts (con búsqueda web)
