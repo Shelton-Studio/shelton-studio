@@ -32,6 +32,7 @@ async def lifespan(_: FastAPI):
     autopilot = asyncio.create_task(pipeline.autopilot_loop())
     scout = asyncio.create_task(pipeline.scout_loop())
     learning = asyncio.create_task(pipeline.learning_loop())
+    network = asyncio.create_task(pipeline.network_loop())
     try:
         health = await get_engine().health()
     except Exception as e:
@@ -46,6 +47,7 @@ async def lifespan(_: FastAPI):
     autopilot.cancel()
     scout.cancel()
     learning.cancel()
+    network.cancel()
     await pipeline.stop_workers()
 
 

@@ -208,3 +208,23 @@ def _png(color: str) -> bytes:
     b = io.BytesIO()
     Image.new("RGB", (64, 64), color).save(b, "PNG")
     return b.getvalue()
+
+
+def test_network_review_best_times_and_live(srv):
+    c = srv
+    assert c.post("/api/network-review").json()["running"]
+    for _ in range(120):
+        b = c.get("/api/buddy").json()
+        if b["review"].get("at"):
+            break
+        time.sleep(0.5)
+    assert b["review"]["at"] and b["review"]["timing"], b["review"]
+    t = c.get("/api/timing").json()
+    assert t["platforms"][0]["best"] and t["models"] and t["sources"] and "subjects" in t["inside"]
+    assert b["timing"]["models"] and b["timing"]["timezone"]
+    # Métricas en vivo para Shelton mini
+    assert len(b["activity"]) == 12 and "jobs_done" in b["last_hour"] and isinstance(b["jobs"], list)
+    ev, _ = chat(c, 'TOOL best_times {"model": "Lucia Ref"}')
+    assert "Lucia Ref" in final(ev)
+    ev, _ = chat(c, "TOOL live_status {}")
+    assert "working_now" in final(ev) and "last_network_review" in final(ev)

@@ -359,4 +359,60 @@ async def buddy():
         tips.append({"text": "Estoy libre ⚡ Puedo trabajar varias cosas a la vez: dime qué modelo abro y qué hacemos.",
                      "kind": "parallel"})
     return {"capacity": cap, "subjects": subjects[:12], "tips": tips[:6], "busy": busy_ideas,
-            "working": working.snapshot() if hasattr(working, "snapshot") else []}
+            "working": working.snapshot(), **live_state(), "timing": _timing_brief(), "review": _review_brief()}
+
+
+def live_state() -> dict:
+    """Lo que está vivo ahora: trabajos en marcha (con su paso actual) y actividad de la última hora (cada 5 min)."""
+    from datetime import timedelta
+    from app.db import AgentRun, Job, now
+    with session() as s:
+        jobs = []
+        for j in s.query(Job).filter(Job.status.in_(["running", "pending"])).order_by(Job.created_at).limit(30):
+            p = s.get(Post, j.post_id)
+            jobs.append({"kind": pipeline.JOB_NAMES.get(j.kind, j.kind), "status": j.status, "post_id": j.post_id,
+                         "idea": (p.idea if p else "")[:80], "media": p.media_type if p else "",
+                         "since": (j.started_at or j.created_at).isoformat() + "Z"})
+        t0 = now() - timedelta(minutes=60)
+        buckets = [0] * 12
+        fails = 0
+        for r in s.query(AgentRun).filter(AgentRun.created_at >= t0):
+            i = min(11, int((r.created_at - t0).total_seconds() // 300))
+            buckets[i] += 1
+            fails += 0 if r.ok else 1
+        done_h = s.query(Job).filter(Job.status == "done", Job.updated_at >= t0).count()
+        failed_h = s.query(Job).filter(Job.status == "failed", Job.updated_at >= t0).count()
+    return {"jobs": jobs, "activity": buckets, "last_hour": {"runs": sum(buckets), "run_errors": fails,
+                                                             "jobs_done": done_h, "jobs_failed": failed_h}}
+
+
+def _timing_brief() -> dict:
+    from app import timing
+    t = timing.load()
+    return {"updated": t.get("updated"), "summary": t.get("summary", ""), "timezone": t.get("timezone") or timing.tz_name(),
+            "platforms": t.get("platforms", [])[:6], "models": t.get("models", [])[:12], "sources": t.get("sources", [])[:6]}
+
+
+def _review_brief() -> dict:
+    r = pipeline.last_review()
+    return {**r, "every_hours": settings.NETWORK_REVIEW_HOURS}
+
+
+# ------------------------------------------------------------------ Revisión de la red y mejor hora para publicar
+@router.get("/timing")
+async def timing_get():
+    from app import timing
+    return {**timing.load(), "inside": timing.inside_stats()}
+
+
+_review_task: asyncio.Task | None = None
+
+
+@router.post("/network-review")
+async def network_review_now():
+    """Lanza ya la revisión de la red (scouts + mejor hora para publicar). Corre en segundo plano."""
+    global _review_task
+    if _review_task and not _review_task.done():
+        return {"running": True}
+    _review_task = asyncio.create_task(pipeline.run_network_review())
+    return {"running": True, "started": True}

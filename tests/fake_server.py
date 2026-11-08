@@ -12,6 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="shelton_demo_"))
+os.environ.setdefault("NETWORK_REVIEW_HOURS", "0")   # en demo la revisión de la red se lanza a mano
 
 import test_chain  # noqa: E402  (configura motor mock + subagentes simulados)
 from fastapi import Request  # noqa: E402

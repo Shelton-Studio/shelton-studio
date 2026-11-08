@@ -10,6 +10,7 @@ import logging
 import random
 import shutil
 import traceback
+from datetime import datetime
 from pathlib import Path
 
 from app import events
@@ -1029,6 +1030,55 @@ async def scout_loop() -> None:
         except Exception:
             log.exception("scout loop")
         await asyncio.sleep(600)
+
+
+# ============================================================ Revisión de la red (Shelton mini + scouts, cada 2 h)
+def _review_path() -> Path:
+    return settings.DATA_DIR / "network_review.json"
+
+
+def last_review() -> dict:
+    p = _review_path()
+    try:
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+async def run_network_review() -> dict:
+    """Sale a la red con el scout de tendencias y el de tools (lo de afuera para traerlo acá) y recalcula la mejor
+    hora para publicar de cada modelo con lo de adentro y lo de afuera."""
+    from app import timing
+    started = now()
+    events.publish({"type": "network_review", "status": "running"})
+    with session() as s:
+        get_or_create_brand(s).scout_last = started   # el scout de siempre no repite este trabajo
+    found = await run_scout()
+    try:
+        t = await timing.refresh()
+        timing_ok, summary = True, t.get("summary", "")
+    except Exception as e:  # noqa: BLE001
+        log.warning("mejor hora para publicar falló: %s", e)
+        timing_ok, summary = False, str(e)[:200]
+    out = {"at": started.isoformat() + "Z", "findings": found, "timing": timing_ok, "summary": summary,
+           "every_hours": settings.NETWORK_REVIEW_HOURS}
+    _review_path().write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    events.publish({"type": "network_review", "status": "done", **out})
+    return out
+
+
+async def network_loop() -> None:
+    await asyncio.sleep(90)   # deja arrancar tranquilo al servidor
+    while True:
+        try:
+            every = settings.NETWORK_REVIEW_HOURS
+            last = last_review().get("at")
+            due = every > 0 and (not last or (now() - datetime.fromisoformat(last.rstrip("Z"))).total_seconds() >= every * 3600)
+            if due:
+                await run_network_review()
+        except Exception:
+            log.exception("revisión de la red")
+        await asyncio.sleep(300)
 
 
 # ============================================================ Aprendizaje continuo

@@ -65,6 +65,10 @@ Cómo trabajas:
   fuera de esa red.
 - Audios: el usuario puede subir WAV/MP3 (llegan con su audio_id). Para ponerlos en un post usa use_audio; para
   guardar el audio de un video, save_audio; para ver los que hay, list_audio.
+- Shelton mini (el robot de la web) eres tú mismo, en una conversación paralela: tiene todas tus herramientas y sabe
+  todo lo que corre (live_status). Responde corto y al grano: confirma qué lanzaste, qué sigue corriendo y cuánto falta.
+- Mejor hora para publicar: usa best_times (por red y por modelo; mezcla el historial del estudio con investigación
+  web y se actualiza cada 2 h). Recomiéndala cuando entregues contenido o pidan publicar/programar.
 - Trabajo en paralelo: puedes lanzar varios pedidos a la vez (varios modelos, reels y fotos). Mira studio_capacity
   para saber cuántos corren a la vez y cuánto tardan, y da tiempos realistas. Mientras algo se procesa, propón
   avanzar con otra cosa (otro modelo, más fotos del mismo, el texto, la voz).
@@ -228,6 +232,11 @@ TOOLS = [
            "scenes": {"type": "array", "items": {"type": "integer"}, "description": "Solo estas escenas (0, 1, 2...). Vacío = todas"},
            "platform": {"type": "string", "enum": ["tiktok", "instagram_story", "instagram_feed", "square", "x"]},
            **_MODEL_PICK}, ["reference_id"]),
+    _tool("best_times", "Mejor hora para publicar por red y por modelo del banco (mezcla tu historial con investigación "
+          "web; se actualiza cada 2 h). refresh=true la recalcula ahora.",
+          {"refresh": {"type": "boolean"}, "model": {"type": "string", "description": "Solo este modelo del banco"}}, []),
+    _tool("live_status", "Qué está vivo AHORA en paralelo: agentes y motores trabajando, trabajos en cola/corriendo "
+          "con su paso, actividad de la última hora y la última revisión de la red.", {}, []),
     _tool("list_audio", "Biblioteca de audios: WAV/MP3 subidos y audios sacados de videos (con id, nombre y duración).", {}, []),
     _tool("use_audio", "Le pone un audio de la biblioteca a un post de imagen o video (crea una versión nueva). "
           "mode='replace' reemplaza el audio; 'mix' lo deja de fondo sin tapar la voz que ya tenga.",
@@ -263,7 +272,13 @@ def _capacity_line() -> str:
     except Exception:  # noqa: BLE001
         return ""
     mins = round(c["queue_eta_seconds"] / 60)
-    return (f"Capacidad: {c['parallel_lanes']} trabajos a la vez, {c['running']} corriendo y {c['pending']} en cola"
+    from app import timing, working
+    live = working.snapshot()
+    live_txt = (" Trabajando ahora en paralelo: " + "; ".join(f"{x['agent']}: {x['task'][:60]}" for x in live[:8]) + ".") if live else ""
+    t = timing.load()
+    best = (" Mejor hora para publicar (" + t.get("timezone", "") + "): " +
+            "; ".join(f"{m['model']} en {m['platform']} {m['best']}" for m in t.get("models", [])[:6]) + ".") if t.get("models") else ""
+    return live_txt + best + (f" Capacidad: {c['parallel_lanes']} trabajos a la vez, {c['running']} corriendo y {c['pending']} en cola"
             f"{f' (se libera en ~{mins} min)' if c['pending'] or c['running'] else ''}; una imagen tarda "
             f"~{c['seconds_per_job']['imagen']} s y un video ~{c['seconds_per_job']['video']} s.")
 
@@ -527,6 +542,22 @@ async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
                 if hasattr(Brand, k):
                     setattr(b, k, v)
         return "Perfil de marca actualizado. " + studio_context(ctx["engine"])
+
+    if name == "best_times":
+        from app import timing
+        data = await timing.refresh() if args.get("refresh") else timing.load()
+        if not data:
+            data = await timing.refresh()
+        if args.get("model"):
+            data = {**data, "models": timing.for_subject(args["model"])}
+        data.pop("inside", None)
+        return json.dumps(data, ensure_ascii=False)[:8000]
+
+    if name == "live_status":
+        from app import working
+        from app.api_extra import _review_brief, live_state
+        return json.dumps({"working_now": working.snapshot(), **live_state(), "capacity": pipeline.capacity(),
+                           "last_network_review": _review_brief()}, ensure_ascii=False, default=str)[:8000]
 
     if name == "studio_capacity":
         return json.dumps(pipeline.capacity(), ensure_ascii=False)

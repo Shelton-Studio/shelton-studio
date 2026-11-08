@@ -160,6 +160,13 @@ journalctl -u shelton-studio -n 100 --no-pager
   - Trabaja en paralelo mientras lo demás se procesa. Si le pides varias cosas seguidas, cada una va en su propia conversación.
   - Sugiere cómo aprovechar el tiempo: otro modelo, más fotos del mismo, revisar la galería…
   - Si le hablaste, te contesta en voz alta, como Siri.
+  - Es el mismo Shelton, con todas sus herramientas, en una conversación paralela.
+  - Muestra **en vivo** qué procesos están corriendo: qué agente o motor, con qué modelo y desde hace cuánto. También muestra lo que está en cola, una línea de actividad de la última hora, los trabajos listos y los errores.
+- **Revisión de la red cada 2 horas**:
+  - Shelton mini sale con el scout de tendencias y el de tools a buscar novedades afuera para traerlas acá.
+  - Recalcula la **mejor hora para publicar** por red y por modelo del banco, mezclando lo de adentro (tu historial: qué publicas y qué apruebas de cada modelo) con lo de afuera (investigación web actual).
+  - Se cambia con `NETWORK_REVIEW_HOURS` (0 = apagada). Cada revisión usa búsqueda web, que tiene costo.
+  - La zona horaria se configura con `STUDIO_TIMEZONE`.
 - **Dictado por voz** (botón 🎙️ del chat y de Shelton mini):
   - Grabas, se transcribe y se envía solo.
   - Si llegó muy bajo o no se entendió, te lo dice ("habla un poco más alto", "no te entendí bien, ¿lo repites?") y no manda nada.

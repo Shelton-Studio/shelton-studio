@@ -11,7 +11,14 @@
 })();
 
 // ------------------------------------------------------------------ Eventos nuevos
+const _renderWorking = renderWorking;
+window.renderWorking = renderWorking = function () { _renderWorking(); if (window.Bot) Bot.renderLive(); };
 window.onExtraEvent = (ev) => {
+  if (ev.type === "network_review") {
+    if (ev.status === "done") toast(`🌐 <b>Revisión de la red lista</b>: ${ev.findings || 0} novedad(es) de los scouts${ev.timing ? " y mejor hora para publicar actualizada" : ""}.`, "good", "🌐", `<button class="btn sm" onclick="Bot.toggle(true)">Ver</button>`);
+    if (window.Bot) Bot.refresh();
+    return;
+  }
   if (ev.type === "team_learned") {
     const msg = `<b>Shelton pasó la lección</b> «${esc(ev.title)}» de ${esc(ev.from)} al equipo: ${ev.agents.map((a) => `<span class="chip ${ev.applied.includes(a) ? "good" : "warn"}">${esc(a)}</span>`).join(" ")}`;
     toast(msg, "good", "🧠"); note(msg, "good", "memoria");
@@ -145,7 +152,7 @@ const BOT_SVG = `<svg viewBox="0 0 100 100" class="bot-svg" aria-hidden="true">
   <path class="b-mouth" d="M41 61 Q50 67 59 61" stroke="#67e8f9" stroke-width="3" fill="none" stroke-linecap="round"/>
   <circle cx="26" cy="74" r="3" fill="#f0abfc" opacity=".7"/><circle cx="74" cy="74" r="3" fill="#f0abfc" opacity=".7"/>
   <defs><linearGradient id="bg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8b5cf6"/><stop offset="1" stop-color="#4c1d95"/></linearGradient></defs></svg>`;
-const Bot = {
+const Bot = window.Bot = {
   data: null, open: false, conv: localStorage.getItem("buddyConv") || null, lastTipKey: "",
   mount() {
     const w = document.createElement("div"); w.className = "buddy"; w.id = "buddy";
@@ -155,6 +162,7 @@ const Bot = {
     document.addEventListener("mousemove", (e) => this.look(e.clientX, e.clientY));
     setInterval(() => this.blink(), 3800);
     this.refresh(); setInterval(() => this.refresh(), 20000);
+    setInterval(() => { if (this.open) api("/api/buddy").then((d) => { this.data = d; this.renderLive(); }).catch(() => {}); }, 5000);
   },
   look(x, y) {
     const f = $("#b-face"); if (!f) return; const r = f.getBoundingClientRect();
@@ -196,13 +204,16 @@ const Bot = {
     if (!p) { p = document.createElement("div"); p.className = "b-panel"; p.id = "b-panel"; $("#buddy").append(p); }
     const mins = Math.max(1, Math.round((cap.queue_eta_seconds || 0) / 60));
     p.innerHTML = `<div class="b-head"><b>Shelton mini</b><span class="chip ${cap.running || cap.pending ? "accent" : "good"}">${cap.running || cap.pending ? `${(cap.running || 0) + (cap.pending || 0)} en marcha · ~${mins} min` : "Libre"}</span><span class="faint small">${cap.parallel_lanes || 1} a la vez</span><div class="grow"></div><button class="icon-btn" id="b-x">${icon("x", 16)}</button></div>
-      <div class="b-greet">👋 Soy <b>Shelton mini</b>. ¿Cómo usamos mejor el tiempo? <b>Escríbeme o háblame</b> (🎙️): dime qué modelo quieres usar, lo buscamos y hacemos contenido mientras sale todo lo demás. Puedes pedirme varias cosas seguidas: las hago en paralelo.</div>
-      ${(d.tips || []).length ? `<div class="b-tips">${d.tips.map((t, i) => `<button class="b-tip" data-tip="${i}">${esc(t.text)}</button>`).join("")}</div>` : ""}
+      <div id="b-live">${this.liveHTML()}</div>
+      <div class="b-greet ${log ? "short" : ""}">👋 Soy <b>Shelton mini</b>. ¿Cómo usamos mejor el tiempo? <b>Escríbeme o háblame</b> (🎙️): dime qué modelo quieres usar, lo buscamos y hacemos contenido mientras sale todo lo demás. Puedes pedirme varias cosas seguidas: las hago en paralelo.</div>
+      ${(d.tips || []).length ? `<div class="b-tips">${d.tips.slice(0, log ? 2 : 4).map((t, i) => `<button class="b-tip" data-tip="${i}">${esc(t.text)}</button>`).join("")}</div>` : ""}
       ${(d.subjects || []).length ? `<div class="faint small">Abrir un modelo:</div><div class="b-models">${d.subjects.map((s) => `<button class="b-model" data-sub="${esc(s.name)}" title="${s.busy ? "Ya está trabajando" : "Crear contenido de " + esc(s.name)}">${s.photo ? `<img src="${esc(s.photo)}">` : "👤"}<span>${esc(s.name)}</span>${s.busy ? '<i class="dot ok"></i>' : ""}</button>`).join("")}</div>` : ""}
+      ${this.timingHTML()}
       <div class="b-log" id="b-log">${log}</div>
       <form class="b-input" id="b-form"><button type="button" class="b-mic" id="b-mic" title="Háblame">${icon("mic", 22)}</button><input id="b-text" placeholder="«Abre a Valentina y hazle 3 fotos en la playa»" autocomplete="off"><button class="btn primary sm">${icon("send", 15)}</button></form>
       <div class="row small" style="gap:8px"><button class="btn ghost sm" id="b-new">Otro chat en paralelo</button><button class="btn ghost sm" id="b-open">Ver esta conversación</button><div class="grow"></div><label class="faint"><input type="checkbox" id="b-say" ${localStorage.getItem("buddySay") !== "0" ? "checked" : ""}> Responder en voz</label></div>`;
     $("#b-x", p).onclick = () => this.toggle(false);
+    if ($("#b-review", p)) $("#b-review", p).onclick = async () => { await api("/api/network-review", { method: "POST" }); toast("Shelton mini y los scouts salieron a revisar la red. Te aviso cuando terminen.", "", "🌐"); };
     $$("[data-tip]", p).forEach((b) => b.onclick = () => {
       const t = d.tips[+b.dataset.tip];
       if (t.route) { this.toggle(false); go(t.route); return; }
@@ -215,9 +226,39 @@ const Bot = {
     $("#b-new", p).onclick = () => { this.conv = null; localStorage.removeItem("buddyConv"); $("#b-log").innerHTML = ""; this.say("Listo, abrí otra conversación en paralelo. ¿Qué modelo usamos?", false); };
     $("#b-open", p).onclick = () => { if (this.conv) { this.toggle(false); go("chat", this.conv); } else toast("Todavía no hablamos en esta conversación"); };
     $("#b-say", p).onchange = (e) => localStorage.setItem("buddySay", e.target.checked ? "1" : "0");
+    this.bindLive();
     if (first) setTimeout(() => $("#b-text")?.focus(), 50);
     $("#b-log").scrollTop = 1e9;
   },
+  // Métricas en vivo: qué procesos están vivos ahora mismo
+  liveHTML() {
+    const d = this.data || {}, act = d.activity || [], lh = d.last_hour || {}, w = S.working || d.working || [], jobs = d.jobs || [];
+    const max = Math.max(1, ...act), W = 120, H = 26;
+    const pts = act.map((v, i) => `${(i * W / Math.max(1, act.length - 1)).toFixed(1)},${(H - 2 - v / max * (H - 4)).toFixed(1)}`).join(" ");
+    const running = jobs.filter((j) => j.status === "running"), pending = jobs.filter((j) => j.status === "pending");
+    const lines = [
+      ...w.map((x) => `<div class="b-line"><span class="b-dot" style="background:${agentColor(x.agent)}"></span><b>${esc(agentName(x.agent))}</b><span class="grow ellipsis muted">${esc(x.task)}</span>${x.model ? `<span class="chip">${esc(String(x.model).split("/").pop())}</span>` : ""}<span class="faint mono" data-since="${esc(x.since)}">${elapsed(x.since)}</span></div>`),
+      ...running.filter((j) => !w.some((x) => x.post_id === j.post_id)).map((j) => `<div class="b-line"><span class="b-dot" style="background:var(--accent-2)"></span><b>${esc(j.kind)}</b><span class="grow ellipsis muted">${esc(S.progress.get(j.post_id) || j.idea)}</span><span class="faint mono" data-since="${esc(j.since)}">${elapsed(j.since)}</span></div>`),
+    ];
+    return `<details class="b-livebox" ${localStorage.getItem("buddyLive") === "0" ? "" : "open"}><summary><span class="b-pulse ${w.length || running.length ? "on" : ""}"></span><b>En vivo</b>
+        <span class="muted small">${w.length} agente(s) · ${running.length} corriendo · ${pending.length} en cola</span><div class="grow"></div>
+        <svg width="${W}" height="${H}" class="b-spark" viewBox="0 0 ${W} ${H}"><polyline points="${pts}" fill="none" stroke="var(--accent-2)" stroke-width="2" stroke-linejoin="round"/></svg></summary>
+      <div class="b-lines">${lines.join("") || '<div class="faint small">Nadie trabajando en este momento.</div>'}</div>
+      <div class="b-stats"><span>Última hora: <b>${lh.runs || 0}</b> llamadas</span><span><b>${lh.jobs_done || 0}</b> trabajos listos</span>${lh.jobs_failed || lh.run_errors ? `<span class="bad-t"><b>${(lh.jobs_failed || 0) + (lh.run_errors || 0)}</b> errores</span>` : ""}</div></details>`;
+  },
+  timingHTML() {
+    const t = (this.data || {}).timing || {}, r = (this.data || {}).review || {};
+    const next = r.at && r.every_hours ? Math.max(0, Math.round((new Date(r.at).getTime() + r.every_hours * 3600e3 - Date.now()) / 60000)) : null;
+    const models = (t.models || []).map((m) => `<div class="b-line"><b>${esc(m.model)}</b><span class="chip">${esc(m.platform)}</span><span class="grow">${esc(m.best)}</span><span class="faint small" title="${esc(m.why)}">ⓘ</span></div>`).join("");
+    const plats = (t.platforms || []).map((m) => `<span class="chip" title="${esc(m.why)}">${esc(m.platform)}: ${esc(m.best)}</span>`).join(" ");
+    return `<details class="b-livebox"><summary><span>🕒</span><b>Mejor hora para publicar</b><span class="muted small">${t.updated ? "actualizado " + when(t.updated.replace(" ", "T")) : "pendiente"}</span></summary>
+      ${t.summary ? `<div class="small">${esc(t.summary)}</div>` : '<div class="faint small">Todavía no hay análisis: sale en la próxima revisión de la red (o toca «Revisar ahora»).</div>'}
+      ${plats ? `<div class="row" style="gap:6px">${plats}</div>` : ""}<div class="b-lines">${models}</div>
+      <div class="row small" style="gap:8px"><span class="faint">🌐 Revisión de la red${r.at ? ` ${when(r.at)}` : ": aún no"}${next !== null ? ` · próxima en ~${next >= 60 ? Math.round(next / 60) + " h" : next + " min"}` : r.every_hours ? ` · cada ${r.every_hours} h` : " · apagada"}</span><div class="grow"></div><button class="btn sm" id="b-review">Revisar ahora</button></div>
+      <div class="faint small">Mezcla tu historial (qué publicas y apruebas de cada modelo) con lo que encuentran los scouts afuera. Zona horaria: ${esc(t.timezone || "")}.</div></details>`;
+  },
+  renderLive() { const box = $("#b-live"); if (box && this.open) { box.innerHTML = this.liveHTML(); this.bindLive(); } },
+  bindLive() { const d = $("#b-live details"); if (d) d.ontoggle = () => localStorage.setItem("buddyLive", d.open ? "1" : "0"); },
   say(text, mine) {
     const l = $("#b-log"); if (!l) return null;
     const m = document.createElement("div"); m.className = "b-msg " + (mine ? "me" : "bot"); m.textContent = text; l.append(m); l.scrollTop = 1e9; return m;
