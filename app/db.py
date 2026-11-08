@@ -72,6 +72,7 @@ class Post(Base):
     video_path: Mapped[str] = mapped_column(String, default="")           # MP4 final (video/reel)
     duration: Mapped[float] = mapped_column(Float, default=0)
     voiceover: Mapped[str] = mapped_column(Text, default="")              # guion locutado
+    reel_id: Mapped[str | None] = mapped_column(String, nullable=True)    # si es una escena de un reel
     made_with: Mapped[dict] = mapped_column(JSON, default=dict)           # modelo usado: {"image": ..., "video": ..., "voice": ...}
     audio_path: Mapped[str] = mapped_column(String, default="")           # pista de voz/sonido
     idea: Mapped[str] = mapped_column(Text, default="")

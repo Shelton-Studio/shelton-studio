@@ -751,7 +751,7 @@ async def apis_summary():
                       "model": c["config"].get("model", ""), "roles": c["roles"], "active": c["enabled"],
                       "last_test": c["last_test"]})
     eng = settings.IMAGE_ENGINE
-    desc = {"openrouter": f"OpenRouter · {settings.OPENROUTER_IMAGE_MODEL}", "mock": "Simulado (modo demo)",
+    desc = {"openrouter": "OpenRouter · " + ("auto (el más realista disponible)" if settings.OPENROUTER_IMAGE_MODEL == "auto" else settings.OPENROUTER_IMAGE_MODEL), "mock": "Simulado (modo demo)",
             "comfyui": f"ComfyUI en {settings.COMFYUI_URL}"}.get(eng, eng)
     items.append({"group": "Imagen y video", "name": "Motor por defecto", "type": "openrouter_image" if eng == "openrouter" else eng,
                   "source": ".env", "model": desc, "active": True,
@@ -954,3 +954,10 @@ async def working_now():
              for k, n in ENGINE_NAMES.items()]
     return {"active": active, "count": len(active), "agents_busy": len({a["agent"] for a in active}),
             "team": team, "queue": pipeline.queue_stats()}
+
+
+@router.get("/models-catalog")
+async def models_catalog():
+    """Todos los modelos de imagen y video que Shelton puede elegir, con etiquetas y el que usa el automático."""
+    from app.model_picker import catalog
+    return await catalog()

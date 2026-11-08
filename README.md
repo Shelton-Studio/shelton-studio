@@ -118,6 +118,76 @@ En Windows: `demo.bat`. Interfaz completa con imágenes y respuestas simuladas, 
 
 ---
 
+## Replicarlo en otro servidor (guía rápida)
+
+1. **Servidor Linux** (Ubuntu/Debian; un droplet sirve). Instala con un solo comando. Volver a correrlo actualiza:
+
+   ```bash
+   bash <(curl -fsSL https://raw.githubusercontent.com/juancamp7777/alligator-AI/main/install.sh)
+   ```
+
+   - Se instala en `~/shelton-studio` sin tocar otras apps (otra carpeta con `SHELTON_DIR=...`).
+   - Elige un puerto libre desde el 8010.
+   - Pide la clave sin mostrarla.
+   - Queda como servicio `shelton-studio`.
+2. **Acceso privado con Tailscale** (recomendado): instala Tailscale en el servidor y en tu equipo. Si el instalador detecta Tailscale, escucha solo en esa red. Abre `http://<ip-tailscale>:<puerto>`.
+3. **Clave de OpenRouter**: con ella funcionan el cerebro, las imágenes y el video en la nube. Va en `.env` o en la web (**APIs** / **Conexiones**). No la pegues en el chat.
+4. **Modelos**:
+   - En **Auto**, Shelton ve todos los modelos de imagen y video disponibles (`/api/models-catalog`) y elige el que más conviene a cada pedido: Nano Banana Pro para máximo realismo, Veo 3.1 para video con audio, uno económico para pruebas…
+   - Si no elige ninguno, se usa el más realista disponible. Puedes fijar uno en **🎬 Video**, en **APIs** o con `OPENROUTER_IMAGE_MODEL` / `OPENROUTER_VIDEO_MODEL` en `.env` (`auto` = el mejor).
+5. **Switch Local / Auto / Nube**:
+   - **Local** usa tus GPUs (ComfyUI, sección 1).
+   - **Nube** usa las APIs.
+   - **Auto** deja que Shelton decida.
+
+   Cada GPU nueva se agrega en **Conexiones → ComfyUI**, y el trabajo se reparte a la menos ocupada.
+6. **Servidor chico**: si la web se pone lenta mientras arma videos, deja `FFMPEG_PARALLEL=1` (por defecto) y `FFMPEG_PRESET=veryfast`.
+
+Comandos útiles:
+
+```bash
+sudo systemctl status shelton-studio
+```
+
+```bash
+journalctl -u shelton-studio -n 100 --no-pager
+```
+
+### Mover tus datos a otra máquina
+
+Todo lo tuyo vive en dos lugares:
+
+- `data/`: base de datos, imágenes, videos, voces, banco de modelos y memoria de los agentes.
+- `.env`: claves y ajustes.
+
+Para migrar:
+
+1. Para el servicio.
+2. Copia `data/` y `.env` a la nueva instalación.
+3. Arranca el servicio otra vez.
+
+```bash
+sudo systemctl stop shelton-studio
+```
+
+```bash
+rsync -a ~/shelton-studio/data ~/shelton-studio/.env usuario@nuevo-servidor:~/shelton-studio/
+```
+
+```bash
+sudo systemctl start shelton-studio
+```
+
+Para una copia de seguridad basta con comprimir esas dos cosas. La memoria de los agentes también está en `data/training/<agente>/` como archivos Markdown con fecha, legibles a mano.
+
+### Trabajar en el código
+
+- Rama por cambio y PR a `main`.
+- Pruebas con `python -m pytest -q tests`: usan un servidor de demo, sin GPU ni claves.
+- Estructura en la sección **Estructura**.
+
+---
+
 ## Formatos
 
 Instagram feed 4:5 (1080×1350) · Story/Reels 9:16 (1080×1920) · TikTok 9:16 · Telegram 4:5 · Facebook 4:5 · X 16:9 · Pinterest 2:3 · Miniatura YouTube 16:9 · Cuadrado 1:1 · **Original** (fotos subidas: sin recortes). Videos en H.264, 30 fps, vertical.

@@ -477,7 +477,8 @@ window.onRunLogged = () => { if (location.hash.startsWith("#/envivo")) { clearTi
 // Reglas locales (no gastan tokens). Solo proponen: nada se hace sin tu clic.
 const ASKED = new Set();
 const asksOn = () => { try { return localStorage.getItem("agent-asks") !== "off"; } catch { return true; } };
-function ask(agent, question, rec, buttons, secs = 25) {
+function ask(agent, question, rec, buttons, secs = 25, postId = null) {
+  if (postId) buttons = [...buttons, { label: "▶ Ver", run: async () => openPost(postId) }];
   if (!asksOn()) return;
   const box = $("#asks"); if (!box) return;
   while (box.children.length >= 3) box.firstElementChild.remove();
@@ -524,12 +525,32 @@ function agentAsk(p, prev) {
     }, 2500);
     return;
   }
+  if (p.reel_id) {
+    // Escena de un reel: avisa el avance (X de N) sin preguntar por voz; la voz se ofrece con el reel completo.
+    api("/api/posts?limit=300").then((r) => {
+      const scenes = r.items.filter((x) => x.reel_id === p.reel_id && x.media_type !== "image");
+      const total = Math.max(scenes.length, 1), done = scenes.filter((x) => ["ready", "approved", "published"].includes(x.status)).length;
+      const left = total - done;
+      ask("video_producer", left > 0
+        ? `🎬 Escena <b>${done} de ${total}</b> lista: «${esc(p.idea.slice(0, 60))}». Faltan ${left}: te aviso cuando esté el <b>reel completo</b>.`
+        : `🎬 Las <b>${total} escenas</b> están listas. Estoy uniendo el reel; te aviso en cuanto puedas reproducirlo.`,
+        "", [], 12, p.id);
+    }).catch(() => {});
+    return;
+  }
+  if (p.media_type === "reel" && !p.audio_url) {
+    return ask("video_producer", `🎉 ¡Tu <b>reel completo</b> está listo! «${esc(p.idea.slice(0, 60))}» · ${Math.round(p.duration || 0)} s`,
+      "reprodúcelo y, si te gusta, ponle voz (los reels con voz retienen más).",
+      [{ label: "▶ Reproducir reel", run: async () => openPost(p.id) },
+       { label: "🎙️ Voz femenina cálida", run: () => api(`/api/posts/${p.id}/audio`, { method: "POST", body: { voice_request: "femenina, cálida, cercana" } }), done: "El Locutor está trabajando…" },
+       { label: "Voz grave", run: () => api(`/api/posts/${p.id}/audio`, { method: "POST", body: { voice_request: "masculina, grave, segura" } }), done: "El Locutor está trabajando…" }], 40);
+  }
   if ((p.media_type === "video" || p.media_type === "reel") && !p.audio_url) {
-    return ask("voice_director", `El ${p.media_type === "reel" ? "reel" : "video"} quedó listo y no tiene voz. ¿Le pongo locución?`,
+    return ask("voice_director", `El ${p.media_type === "reel" ? "reel" : "video"} «${esc(p.idea.slice(0, 50))}» quedó listo y no tiene voz. ¿Le pongo locución?`,
       "voz femenina cálida con un gancho al inicio (los videos con voz retienen más).",
       [{ label: "🎙️ Voz femenina cálida", run: () => api(`/api/posts/${p.id}/audio`, { method: "POST", body: { voice_request: "femenina, cálida, cercana" } }), done: "El Locutor está trabajando…" },
        { label: "Voz grave", run: () => api(`/api/posts/${p.id}/audio`, { method: "POST", body: { voice_request: "masculina, grave, segura" } }), done: "El Locutor está trabajando…" },
-       { label: "Sin voz" }]);
+       { label: "Sin voz" }], 25, p.id);
   }
   if (p.audio_url) {
     return ask("copywriter", `Listo con audio: «${esc(p.idea.slice(0, 60))}». ¿Lo revisas para aprobarlo?`, "revisar el texto y aprobar si te gusta; publicar pasa por Aprobaciones.",

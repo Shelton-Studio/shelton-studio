@@ -19,8 +19,21 @@ except Exception:  # pragma: no cover
     FFMPEG = "ffmpeg"
 
 
+import os as _os
+import threading as _threading
+
+# Como mucho N ffmpeg a la vez: en servidores chicos (droplets) varios a la vez dejan la CPU al 100 %
+# y la web deja de responder. Configurable con FFMPEG_PARALLEL.
+_FFMPEG_SLOTS = _threading.BoundedSemaphore(max(1, int(_os.getenv("FFMPEG_PARALLEL", "1"))))
+# Preset de x264: "veryfast" es mucho más liviano y casi igual de bueno a esta calidad (crf 17).
+_PRESET = _os.getenv("FFMPEG_PRESET", "veryfast")
+
+
 def _run(args: list[str], stdin: bytes | None = None) -> None:
-    p = subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-y", *args], input=stdin, capture_output=True)
+    args = [_PRESET if (a == "slow" and i and args[i - 1] == "-preset") else a for i, a in enumerate(args)]
+    with _FFMPEG_SLOTS:
+        p = subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-threads", "2", *args],
+                           input=stdin, capture_output=True)
     if p.returncode != 0:
         raise RuntimeError(f"ffmpeg: {p.stderr.decode(errors='ignore')[-600:]}")
 
