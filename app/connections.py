@@ -16,6 +16,11 @@ TYPES: dict[str, dict] = {
     # --- cerebro
     "anthropic": {"category": "brain", "name": "Claude (Anthropic)", "fields": [
         F("api_key", "API key", "secret", required=True)]},
+    "openrouter": {"category": "brain", "name": "OpenRouter",
+                   "help": "Plan B si no tienes clave de Anthropic: una sola clave para muchos modelos. Recomendado un modelo "
+                           "de Claude (visión + herramientas). La búsqueda web de los scouts usa la de OpenRouter (cobro aparte).",
+                   "fields": [F("api_key", "API key", "secret", required=True),
+                              F("model", "Modelo", placeholder="anthropic/claude-sonnet-4.5")]},
 
     # --- motores de imagen
     "comfyui": {"category": "engine", "name": "ComfyUI", "help": "Tu GPU local o remota (3050, 3090, servidor). Usa los workflows de app/comfyui/workflows.",

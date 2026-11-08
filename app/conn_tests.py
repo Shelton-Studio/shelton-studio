@@ -110,6 +110,14 @@ async def _gemini(cfg):
     return "Clave de Gemini válida"
 
 
-_TESTS = {"anthropic": _anthropic, "comfyui": _comfyui, "telegram": _telegram, "instagram": _instagram,
+async def _openrouter(cfg):
+    r = (await _get("https://openrouter.ai/api/v1/key", headers={"Authorization": f"Bearer {cfg['api_key']}"})).json()
+    d = r.get("data", {})
+    limit = d.get("limit_remaining")
+    return (f"Clave válida ({d.get('label') or 'OpenRouter'}). Modelo: {cfg.get('model') or 'anthropic/claude-sonnet-4.5'}"
+            + (f". Saldo restante: ${limit:.2f}" if isinstance(limit, (int, float)) else ""))
+
+
+_TESTS = {"anthropic": _anthropic, "openrouter": _openrouter, "comfyui": _comfyui, "telegram": _telegram, "instagram": _instagram,
           "facebook": _facebook, "discord": _discord, "webhook_publisher": _webhook, "event_webhook": _webhook,
           "fal": _fal, "replicate": _replicate, "openai_images": _openai, "gemini_image": _gemini}

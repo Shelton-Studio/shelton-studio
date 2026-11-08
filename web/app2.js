@@ -267,6 +267,11 @@ function connForm(type, conn) {
     ${t.category === "engine" ? `<div class="f small muted" style="font-weight:500">Usar esta conexión para:</div><div class="checks">${S.connTypes.engine_roles.map((r) => `<label><input type="checkbox" value="${r}" ${conn?.roles?.includes(r) ? "checked" : ""}> ${{ generate: "Generar imágenes", edit: "Editar", subject: "Escenas con modelos del banco", video: "Video", sound: "Efectos de sonido" }[r]}</label>`).join("")}</div><div class="hint">Si varias GPUs tienen el mismo rol, Shelton reparte el trabajo a la más libre.</div>` : ""}
     <label class="checks"><label><input type="checkbox" id="cen" ${conn?.enabled === false ? "" : "checked"}> Activa</label></label>`,
     `<button class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn primary" id="csave">Guardar y probar</button>`);
+  if (type === "openrouter") {
+    const inp = $('[data-k="model"]', box), dl = document.createElement("datalist");
+    dl.id = "or-models"; inp.setAttribute("list", "or-models"); box.append(dl);
+    api("/api/openrouter/models").then((ms) => { dl.innerHTML = ms.map((m) => `<option value="${esc(m.id)}">${esc(m.name)} · $${m.price_in.toFixed(2)}/$${m.price_out.toFixed(2)} por millón${m.structured ? "" : " · sin JSON nativo"}</option>`).join(""); }).catch(() => {});
+  }
   $("#csave", box).onclick = async () => {
     const config = {}; $$("[data-k]", box).forEach((i) => { if (i.value.trim()) config[i.dataset.k] = i.value.trim(); });
     const missing = t.fields.filter((f) => f.required && !config[f.key]); if (missing.length) return toast("Falta: " + esc(missing.map((f) => f.label).join(", ")), "bad");
@@ -348,7 +353,7 @@ VIEWS.ajustes = async (el) => {
     $("#sbox").innerHTML = '<div class="spinner"></div>';
     const h = await api("/api/health");
     const li = (ok, t) => `<div class="row" style="gap:10px;align-items:flex-start"><span class="dot ${ok ? "ok" : "bad"}" style="margin-top:6px"></span><div class="grow">${t}</div></div>`;
-    $("#sbox").innerHTML = `<div class="col" style="gap:14px">${li(h.claude, `<b>Claude</b> (${esc(h.model)}) ${h.claude ? "configurado" : "— falta la clave: ponla en .env o en Conexiones → Cerebro"}`)}
+    $("#sbox").innerHTML = `<div class="col" style="gap:14px">${li(h.claude, `<b>Cerebro</b>: ${h.provider === "openrouter" ? "OpenRouter" : "Claude (Anthropic)"} · <span class="mono">${esc(h.model)}</span> ${h.claude ? "" : "— falta la clave: ponla en .env o en Conexiones → Cerebro (Anthropic u OpenRouter)"}`)}
       ${h.engines.map((e) => li(e.ok, `<b>${esc(e.name)}</b> · ${esc(e.engine || "")} ${e.url ? `<span class="mono faint">${esc(e.url)}</span>` : ""}${e.note ? `<div class="faint small">${esc(e.note)}</div>` : ""}${e.error ? `<div class="small" style="color:#fca5a5">${esc(e.error)}</div>` : ""}
         ${(e.devices || []).map((d) => `<div class="faint small">GPU: ${esc(d.name)} · ${d.vram_gb} GB</div>`).join("")}
         ${(e.missing_models || []).length ? `<div class="small" style="margin-top:6px"><b>Modelos que faltan:</b><br>${e.missing_models.map((m) => `<span class="chip warn" style="margin:2px">${esc(m)}</span>`).join("")}</div>` : ""}

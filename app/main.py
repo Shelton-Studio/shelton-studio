@@ -37,8 +37,11 @@ async def lifespan(_: FastAPI):
     except Exception as e:
         health = {"ok": False, "error": str(e)}
     log.info("Motor de imagen: %s", json.dumps(health, ensure_ascii=False))
-    if not settings.ANTHROPIC_API_KEY:
-        log.warning("Falta ANTHROPIC_API_KEY en .env: Shelton no podrá pensar")
+    from app.llm import provider
+    if not settings.ANTHROPIC_API_KEY and not settings.OPENROUTER_API_KEY:
+        log.warning("Falta ANTHROPIC_API_KEY u OPENROUTER_API_KEY en .env (o en Conexiones): Shelton no podrá pensar")
+    else:
+        log.info("Cerebro: %s", provider())
     yield
     autopilot.cancel()
     scout.cancel()
@@ -67,7 +70,7 @@ async def index():
 @app.get("/api/health")
 async def health():
     from app.connections import list_enabled
-    from app.llm import api_key
+    from app.llm import api_key, openrouter_config, provider
     engines = []
     try:
         engines.append({"name": "Motor por defecto", **(await get_engine().health())})
@@ -80,7 +83,10 @@ async def health():
             except Exception as e:
                 engines.append({"name": c.name, "ok": False, "error": str(e)})
     from app import video as vid
-    return {"claude": bool(api_key()), "model": settings.CLAUDE_MODEL, "engine": engines[0], "engines": engines,
+    prov = provider()
+    brain_ok = bool(api_key()) or bool(openrouter_config()[0])
+    model = settings.CLAUDE_MODEL if prov == "anthropic" else openrouter_config()[1]
+    return {"claude": brain_ok, "provider": prov, "model": model, "engine": engines[0], "engines": engines,
             "ffmpeg": bool(vid.FFMPEG), "queue": pipeline.queue_stats(), "local_first": settings.IMAGE_ENGINE != "mock"}
 
 

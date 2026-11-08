@@ -104,6 +104,10 @@ cp .env.example .env
 
 En Windows: doble clic en `start.bat`. Abre http://127.0.0.1:8000
 
+### Cerebro: Anthropic u OpenRouter
+
+Pon `ANTHROPIC_API_KEY` (recomendado) o, si no tienes, `OPENROUTER_API_KEY` + `OPENROUTER_MODEL` (por ejemplo `anthropic/claude-sonnet-4.5`). También se configuran en **Conexiones → Cerebro**, con lista de modelos y botón Probar. Con OpenRouter la búsqueda web de scouts e investigador usa la de OpenRouter (cobro aparte) y el JSON entre agentes se valida y reintenta si hace falta.
+
 ### Modo demo (sin GPU ni API key)
 
 ```bash
