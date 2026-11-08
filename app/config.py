@@ -19,6 +19,8 @@ class Settings:
     # Plan B: OpenRouter (se usa solo si no hay clave de Anthropic)
     OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
     OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4.5")
+    # Imágenes vía OpenRouter (IMAGE_ENGINE=openrouter o elegirlo en el chat)
+    OPENROUTER_IMAGE_MODEL = os.getenv("OPENROUTER_IMAGE_MODEL", "google/gemini-2.5-flash-image")
 
     # --- Motor de imágenes ---
     # "comfyui" = ComfyUI real (GPU). "mock" = imágenes de prueba sin GPU.

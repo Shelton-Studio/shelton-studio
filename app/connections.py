@@ -33,6 +33,11 @@ TYPES: dict[str, dict] = {
                            F("video_preset", "Perfil de video (cinema / fast)", placeholder="cinema"),
                            F("gen_unet", "Modelo de generación (opcional)", placeholder="z_image_turbo_bf16.safetensors"),
                            F("gen_scale", "Escala de resolución", placeholder="1.0")]},
+    "openrouter_image": {"category": "engine", "name": "OpenRouter (imagen)",
+                         "help": "Modelos de imagen de OpenRouter (Gemini Nano Banana, GPT Image...). Usa la clave del cerebro si no pones otra. "
+                                 "Sirve para generar, editar y escenas con modelos del banco. No hace video.",
+                         "fields": [F("model", "Modelo de imagen", placeholder="google/gemini-2.5-flash-image"),
+                                    F("api_key", "API key (opcional)", "secret")]},
     "fal": {"category": "engine", "name": "fal.ai", "help": "Modelos en la nube (FLUX, Qwen-Image, Seedream...). Pon el id del endpoint de fal.",
             "fields": [F("api_key", "API key", "secret", required=True),
                        F("model_generate", "Endpoint generar", placeholder="fal-ai/qwen-image"),

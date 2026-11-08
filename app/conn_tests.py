@@ -118,6 +118,16 @@ async def _openrouter(cfg):
             + (f". Saldo restante: ${limit:.2f}" if isinstance(limit, (int, float)) else ""))
 
 
-_TESTS = {"anthropic": _anthropic, "openrouter": _openrouter, "comfyui": _comfyui, "telegram": _telegram, "instagram": _instagram,
+async def _openrouter_image(cfg):
+    from app.config import settings
+    from app.llm import openrouter_config
+    key = cfg.get("api_key") or openrouter_config()[0]
+    if not key:
+        raise RuntimeError("Sin clave: ponla aquí o en Conexiones → Cerebro (OpenRouter)")
+    msg = await _openrouter({"api_key": key, "model": cfg.get("model") or settings.OPENROUTER_IMAGE_MODEL})
+    return msg.replace("Modelo:", "Modelo de imagen:")
+
+
+_TESTS = {"anthropic": _anthropic, "openrouter": _openrouter, "openrouter_image": _openrouter_image, "comfyui": _comfyui, "telegram": _telegram, "instagram": _instagram,
           "facebook": _facebook, "discord": _discord, "webhook_publisher": _webhook, "event_webhook": _webhook,
           "fal": _fal, "replicate": _replicate, "openai_images": _openai, "gemini_image": _gemini}
