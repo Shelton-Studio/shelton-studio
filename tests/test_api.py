@@ -404,3 +404,11 @@ def test_live_panel(srv):
     assert w["count"] == 0 and any(t["key"] == "motor_imagen" for t in w["team"]) and any(t["key"] == "shelton" for t in w["team"])
     runs = srv.get("/api/runs?limit=300").json()
     assert any(r["agent"] == "motor_imagen" and r["agent_name"] == "Motor de imagen" for r in runs)
+
+
+def test_reel_scenes_linked(srv):
+    items = srv.get("/api/posts?limit=200").json()["items"]
+    reels = [p for p in items if p["media_type"] == "reel"]
+    assert reels
+    scenes = [p for p in items if p.get("reel_id") in {r["id"] for r in reels}]
+    assert scenes and all(s["media_type"] in ("video", "image") for s in scenes)

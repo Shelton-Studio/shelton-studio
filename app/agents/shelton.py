@@ -265,6 +265,12 @@ async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
         if missing:
             await emit({"type": "status", "text": f"No encontré en el banco: {', '.join(missing)}"})
         rid = pipeline.new_reel_from_scenes(args["scenes"], args["idea"], args.get("platform", "tiktok"), sids, conv_id, engine)
+        with session() as s:
+            scene_ids = [p.id for p in s.query(Post).filter(Post.reel_id == rid).order_by(Post.created_at)]
+        await emit({"type": "posts", "ids": [rid]})
+        if scene_ids:
+            await emit({"type": "status", "text": f"Escenas del reel ({len(scene_ids)}): cada una se puede ver apenas termina 👇"})
+            await emit({"type": "posts", "ids": scene_ids})
         return await _wait_and_report([rid], emit, f"Cadena de reel en marcha: {len(args['scenes'])} escenas…")
 
     if name == "make_video":

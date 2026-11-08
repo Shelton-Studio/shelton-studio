@@ -67,6 +67,46 @@ async def start_workers() -> None:
             _queue.put_nowait(job.id)
     for i in range(max(1, settings.WORKERS)):
         _workers.append(asyncio.create_task(_worker(i)))
+    asyncio.create_task(resume_reels())
+
+
+async def resume_reels() -> None:
+    """Si Shelton se reinició (por ejemplo al actualizar) con un reel a medio montar, lo termina."""
+    with session() as s:
+        reels = s.query(Post).filter(Post.media_type == "reel", Post.status.in_(["queued", "generating"])).all()
+        pending = []
+        for r in reels:
+            if s.query(Job).filter(Job.post_id == r.id, Job.kind == "reel").first():
+                continue  # su montaje ya está en la cola
+            scenes = s.query(Post).filter(Post.reel_id == r.id).order_by(Post.created_at).all()
+            pending.append((r.id, r.conversation_id, [(p.id, p.media_type, p.status, p.parent_id) for p in scenes]))
+    for rid, conv, scenes in pending:
+        _done.setdefault(rid, asyncio.Event())
+        animated_parents = {parent for _, media, _, parent in scenes if media == "video" and parent}
+        clip_ids, wait_ids = [], []
+        for pid, media, status, _ in scenes:
+            if media == "image":
+                if pid in animated_parents:
+                    continue  # ya tiene su escena en video
+                pid = new_video(pid, "", conv)
+                with session() as s:
+                    if v := s.get(Post, pid):
+                        v.reel_id = rid
+                status = "queued"
+            clip_ids.append(pid)
+            if status in ("queued", "generating"):
+                wait_ids.append(pid)
+        if not clip_ids:
+            _update_post(rid, status="failed", error="El reel se interrumpió y no tiene escenas para retomar")
+            _done[rid].set()
+            continue
+        log.info("Retomando el reel %s (%s escenas, %s pendientes)", rid, len(clip_ids), len(wait_ids))
+
+        async def finish(rid=rid, clip_ids=clip_ids, wait_ids=wait_ids):
+            if wait_ids:
+                await wait_for(wait_ids, timeout=7200)
+            enqueue("reel", rid, {"clip_ids": clip_ids})
+        asyncio.create_task(finish())
 
 
 async def stop_workers() -> None:
@@ -346,6 +386,8 @@ def new_reel(source_ids: list[str], idea: str = "", conversation_id=None, platfo
                     subject_ids=sorted({x for p in sources for x in (p.subject_ids or [])}))
         s.add(reel)
         s.flush()
+        for p in sources:  # las escenas quedan vinculadas a su reel
+            p.reel_id = reel.id
         rid, data = reel.id, post_dict(reel)
         needs = [(p.id, p.media_type, bool(p.video_path)) for p in sources]
     events.publish({"type": "post", "post": data})
@@ -358,7 +400,11 @@ def new_reel(source_ids: list[str], idea: str = "", conversation_id=None, platfo
                 if media in ("video", "reel") or has_video:
                     clip_ids.append(pid)
                 else:
-                    clip_ids.append(new_video(pid, "", conversation_id, engine))
+                    vid_id = new_video(pid, "", conversation_id, engine)
+                    with session() as s:
+                        if v := s.get(Post, vid_id):
+                            v.reel_id = rid
+                    clip_ids.append(vid_id)
             _update_post(rid, status="generating")
             await wait_for(clip_ids, timeout=7200)
             enqueue("reel", rid, {"clip_ids": clip_ids})
