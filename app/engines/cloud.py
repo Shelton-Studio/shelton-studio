@@ -256,9 +256,41 @@ class OpenRouterImageEngine(_Base):
             raise RuntimeError("Falta la clave de OpenRouter (Conexiones → Cerebro o .env)")
         return key
 
-    async def _run(self, prompt: str, images: list[bytes], width: int, height: int) -> bytes:
+    # Fotorrealismo primero: Nano Banana Pro (Gemini 3 Pro Image) > Nano Banana 2.x > GPT Image > Gemini 2.5 Flash Image
+    PREFERENCE = ("gemini-3-pro-image", "nano-banana-pro", "gemini-3.1-pro-image", "nano-banana-2.1", "nano-banana-2",
+                  "gemini-3.1-flash-image", "gemini-3-flash-image", "gpt-image-2", "gpt-image", "riverflow",
+                  "gemini-2.5-flash-image")
+    _models_cache: list | None = None
+
+    async def list_models(self) -> list[dict]:
+        """Modelos de OpenRouter que generan imágenes (lista pública)."""
+        if OpenRouterImageEngine._models_cache is None:
+            async with httpx.AsyncClient(timeout=30, transport=self.transport) as c:
+                r = await c.get("https://openrouter.ai/api/v1/models", params={"output_modalities": "image"})
+            data = r.json().get("data", []) if r.status_code < 400 else []
+            OpenRouterImageEngine._models_cache = [
+                m for m in data if "image" in ((m.get("architecture") or {}).get("output_modalities") or [])]
+        return OpenRouterImageEngine._models_cache
+
+    async def resolve_model(self) -> str:
         from app.config import settings
-        model = self.cfg.get("model") or settings.OPENROUTER_IMAGE_MODEL
+        wanted = self.cfg.get("model") or settings.OPENROUTER_IMAGE_MODEL
+        if wanted and wanted != "auto":
+            return wanted
+        try:
+            models = await self.list_models()
+        except Exception:
+            models = []
+        ids = [str(m.get("id", "")) for m in models]
+        for pref in self.PREFERENCE:
+            hits = [i for i in ids if pref in i.lower()]
+            if hits:
+                return sorted(hits, key=lambda i: ("preview" in i, len(i)))[0]
+        return "google/gemini-2.5-flash-image"
+
+    async def _run(self, prompt: str, images: list[bytes], width: int, height: int) -> bytes:
+        model = await self.resolve_model()
+        self.last_model = model
         parts = [{"type": "image_url", "image_url": {"url": _data_uri(i)}} for i in images[:3]]
         ratio = _ratio(width, height) if width and height else None
         text = prompt + (f"\n\nAspect ratio {ratio}, high detail, no watermark." if ratio else "")
@@ -332,10 +364,12 @@ class OpenRouterVideoEngine(_Base):
         models = await self.list_models()
         if wanted and wanted != "auto":
             return next((m for m in models if m.get("id") == wanted), {"id": wanted})
+        light = ("fast", "lite", "turbo", "mini")
         for pref in self.PREFERENCE:
-            for m in models:
-                if pref in str(m.get("id", "")).lower():
-                    return m
+            hits = [m for m in models if pref in str(m.get("id", "")).lower()]
+            if hits:
+                # Calidad primero: la versión completa antes que "fast"/"lite"
+                return sorted(hits, key=lambda m: any(w in str(m.get("id", "")).lower() for w in light))[0]
         if not models:
             raise RuntimeError("OpenRouter no devolvió modelos de video")
         return models[0]

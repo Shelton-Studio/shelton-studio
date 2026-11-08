@@ -118,6 +118,19 @@ def _routed(role: str, mode: str):
 def get_engine(role: str = "generate", choice: str | None = None) -> ImageEngine:
     from app.connections import engine_for_role, list_enabled
 
+    if choice and choice.startswith("or:"):
+        # Modelo elegido por Shelton para este pedido (ver app/model_picker.py)
+        from app.model_picker import parse
+        pick = parse(choice)
+        want = pick.get("video") if role == "video" else pick.get("image") if role in ("generate", "edit", "subject") else None
+        if not want:
+            return get_engine(role, None)
+        kind = "openrouter_video" if role == "video" else "openrouter_image"
+        key = f"pick:{kind}:{want}"
+        if key not in _cache:
+            _cache[key] = _build(kind, {"model": want})
+        return _cache[key]
+
     mode = infra_mode() if not choice else "auto"
     if mode in ("local", "cloud"):
         key, kind, cfg = _routed(role, mode)
@@ -168,7 +181,7 @@ def engine_choices() -> list[dict]:
     out += [{"id": k, "label": v[0], "description": v[1], "local": True} for k, v in PRESET_INFO.items()]
     from app.llm import openrouter_config
     if openrouter_config()[0]:
-        out.append({"id": "openrouter", "label": f"OpenRouter · {settings.OPENROUTER_IMAGE_MODEL}",
+        out.append({"id": "openrouter", "label": "OpenRouter · " + ("el más realista disponible" if settings.OPENROUTER_IMAGE_MODEL == "auto" else settings.OPENROUTER_IMAGE_MODEL),
                     "description": "Imágenes en la nube con tu clave de OpenRouter (sin GPU). Cobra por imagen. "
                                    "Cambia el modelo en .env (OPENROUTER_IMAGE_MODEL) o agrega otra conexión «OpenRouter (imagen)».",
                     "local": False})
@@ -192,7 +205,7 @@ def engine_label(engine, role: str = "generate") -> str:
     if n == "mock":
         return "Simulado (demo)"
     if n == "openrouter_image":
-        return cfg.get("model") or settings.OPENROUTER_IMAGE_MODEL
+        return getattr(engine, "last_model", None) or cfg.get("model") or settings.OPENROUTER_IMAGE_MODEL
     if n == "openrouter_video":
         return getattr(engine, "last_model", None) or cfg.get("model") or settings.OPENROUTER_VIDEO_MODEL
     if n == "comfyui":
@@ -212,6 +225,8 @@ async def describe_role(role: str, choice: str | None = None) -> str:
         e = get_engine(role, choice)
         if hasattr(e, "_pick"):
             return (await e._pick())["id"]
+        if hasattr(e, "resolve_model"):
+            return await e.resolve_model()
         return engine_label(e, role)
     except Exception as err:
         return f"sin motor ({err})"

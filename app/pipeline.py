@@ -26,6 +26,7 @@ log = logging.getLogger("shelton.pipeline")
 _queue: asyncio.Queue[str] = asyncio.Queue()
 _done: dict[str, asyncio.Event] = {}      # target_id -> evento al terminar
 _workers: list[asyncio.Task] = []
+_reels_in_progress: set[str] = set()   # reels cuyo montaje ya está en marcha en este proceso (evita duplicarlo)
 
 
 # ============================================================ Cola
@@ -76,11 +77,14 @@ async def resume_reels() -> None:
         reels = s.query(Post).filter(Post.media_type == "reel", Post.status.in_(["queued", "generating"])).all()
         pending = []
         for r in reels:
-            if s.query(Job).filter(Job.post_id == r.id, Job.kind == "reel").first():
+            if r.id in _reels_in_progress or s.query(Job).filter(Job.post_id == r.id, Job.kind == "reel").first():
                 continue  # su montaje ya está en la cola
             scenes = s.query(Post).filter(Post.reel_id == r.id).order_by(Post.created_at).all()
             pending.append((r.id, r.conversation_id, [(p.id, p.media_type, p.status, p.parent_id) for p in scenes]))
     for rid, conv, scenes in pending:
+        if rid in _reels_in_progress:
+            continue
+        _reels_in_progress.add(rid)
         _done.setdefault(rid, asyncio.Event())
         animated_parents = {parent for _, media, _, parent in scenes if media == "video" and parent}
         clip_ids, wait_ids = [], []
@@ -392,6 +396,7 @@ def new_reel(source_ids: list[str], idea: str = "", conversation_id=None, platfo
         needs = [(p.id, p.media_type, bool(p.video_path)) for p in sources]
     events.publish({"type": "post", "post": data})
     _done.setdefault(rid, asyncio.Event())
+    _reels_in_progress.add(rid)
 
     async def orchestrate():
         try:

@@ -20,7 +20,7 @@ class Settings:
     OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
     OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4.5")
     # Imágenes vía OpenRouter (IMAGE_ENGINE=openrouter o elegirlo en el chat)
-    OPENROUTER_IMAGE_MODEL = os.getenv("OPENROUTER_IMAGE_MODEL", "google/gemini-2.5-flash-image")
+    OPENROUTER_IMAGE_MODEL = os.getenv("OPENROUTER_IMAGE_MODEL", "auto")
     # Video vía OpenRouter: "auto" elige el mejor disponible (Veo 3.1 > Sora 2 > Seedance > Kling > Wan)
     OPENROUTER_VIDEO_MODEL = os.getenv("OPENROUTER_VIDEO_MODEL", "auto")
 

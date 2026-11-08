@@ -17,6 +17,10 @@ from app.db import Job, Post, init_db, session  # noqa: E402
 
 def test_interrupted_reel_is_resumed():
     async def main():
+        # Otras pruebas corren en otro event loop: cola y candados nuevos para este (en producción hay un solo loop)
+        from app import engines
+        pipeline._queue = asyncio.Queue()
+        engines._locks.clear()
         init_db()
         await pipeline.start_workers()
         rid = pipeline.new_reel_from_scenes(["escena uno", "escena dos"], "reel de prueba")
@@ -31,6 +35,7 @@ def test_interrupted_reel_is_resumed():
             scenes = s.query(Post).filter(Post.reel_id == rid).count()
         assert scenes == 2
         pipeline._done.pop(rid, None)
+        pipeline._reels_in_progress.discard(rid)   # un reinicio real arranca con la memoria vacía
         await pipeline.stop_workers()
         await pipeline.start_workers()          # "reinicio"
         for _ in range(200):

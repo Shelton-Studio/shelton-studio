@@ -124,17 +124,26 @@ def test_openrouter_image_engine():
     seen = []
 
     def handler(request: httpx.Request):
+        if request.method == "GET":   # lista de modelos de imagen (modo auto)
+            return httpx.Response(200, json={"data": [
+                {"id": "google/gemini-2.5-flash-image", "architecture": {"output_modalities": ["image", "text"]}},
+                {"id": "google/gemini-3-pro-image-preview", "architecture": {"output_modalities": ["image", "text"]}},
+                {"id": "openai/gpt-4o", "architecture": {"output_modalities": ["text"]}}]})
         b = json.loads(request.content)
         seen.append(b)
         return httpx.Response(200, json={"choices": [{"message": {"content": "listo", "images": [
             {"type": "image_url", "image_url": {"url": data_url}}]}}]})
     OpenRouterImageEngine.transport = httpx.MockTransport(handler)
+    OpenRouterImageEngine._models_cache = None
     try:
         eng = get_engine("generate", "openrouter")
         out = asyncio.run(eng.generate("un café con luz de mañana", 1080, 1920, 1))
         assert out == buf.getvalue()
         assert seen[-1]["modalities"] == ["image", "text"] and seen[-1]["image_config"]["aspect_ratio"] == "9:16"
-        assert seen[-1]["model"] == settings.OPENROUTER_IMAGE_MODEL
+        expected = settings.OPENROUTER_IMAGE_MODEL
+        if expected == "auto":   # elige el más realista que haya (Nano Banana Pro antes que Gemini 2.5 Flash)
+            expected = "google/gemini-3-pro-image-preview"
+        assert seen[-1]["model"] == expected
         asyncio.run(eng.edit(buf.getvalue(), "fondo de playa", 1))
         parts = seen[-1]["messages"][0]["content"]
         assert parts[1]["type"] == "image_url" and "Edit the attached image" in parts[0]["text"]

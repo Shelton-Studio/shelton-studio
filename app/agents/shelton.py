@@ -50,6 +50,13 @@ Cómo trabajas:
 - Motor de imagen: si el usuario pide cambiar de modelo/motor o pregunta cuáles hay, usa image_engines y
   set_image_engine, y explícale en 1-2 líneas la diferencia (velocidad, calidad, costo) y que también puede
   cambiarlo con el selector "Motor" arriba del chat.
+- Elegir modelo por pedido: tienes todos los modelos disponibles (models_catalog). Si el usuario no fijó un motor en
+  el chat, escoge en create_posts / create_reel / make_video / create_campaign el que más convenga (image_model,
+  video_model): máximo realismo para personas, autos y productos; texto en la imagen para afiches; video con audio
+  (Veo) para escenas con sonido; económico para pruebas o lotes grandes. Usa lo que tengas en tu memoria sobre qué
+  modelo funcionó mejor para cada tipo de pedido. Si dudas, déjalo vacío (automático = el más realista). Di en una
+  línea qué modelo elegiste y por qué. Cuando el usuario apruebe o critique un resultado, guarda con remember qué
+  modelo funcionó (o no) para ese tipo de pedido, para elegir mejor la próxima vez.
 - Banco de fotos: si el usuario sube o pega varias fotos de lo mismo (un carro, una persona, una flor, un paisaje)
   y pide crear el modelo, usa create_subject_from_photos con TODAS las fotos. Si no dio nombre, pregúntalo una vez.
   Después ofrece hacer contenido con ese modelo: se usarán sus fotos como referencia para mantener la identidad.
@@ -87,15 +94,24 @@ _IDEA = {"type": "object", "properties": {
     "motion": {"type": "string", "description": "Solo video: qué se mueve y cómo (opcional)"},
 }, "required": ["idea", "platform"]}
 
+_MODEL_PICK = {
+    "image_model": {"type": "string", "description": "Opcional: id exacto de un modelo de imagen de models_catalog que "
+                    "convenga para ESTE pedido. Vacío = automático (el más realista disponible)."},
+    "video_model": {"type": "string", "description": "Opcional: id exacto de un modelo de video de models_catalog que "
+                    "convenga para ESTE pedido. Vacío = automático (la mejor calidad disponible)."},
+}
+
 TOOLS = [
+    _tool("models_catalog", "Lista TODOS los modelos de imagen y video disponibles (OpenRouter) con etiquetas de para qué "
+          "sirve cada uno y cuál elige el automático. Úsalo para escoger el modelo que más conviene a cada pedido.", {}, []),
     _tool("create_posts", "Crea de 1 a 6 posts (imagen + texto) y espera el resultado con la nota del juez.",
-          {"posts": {"type": "array", "items": _IDEA, "minItems": 1, "maxItems": 6}}, ["posts"]),
+          {"posts": {"type": "array", "items": _IDEA, "minItems": 1, "maxItems": 6}, **_MODEL_PICK}, ["posts"]),
     _tool("create_campaign", "Planifica y encola un lote grande de posts distintos (7 a 200). Devuelve al instante; "
           "los posts aparecen en la galería a medida que se terminan.",
           {"brief": {"type": "string", "description": "Objetivo, temas, tono, estilos, fechas, ofertas..."},
            "count": {"type": "integer", "minimum": 1, "maximum": 200},
            "platforms": {"type": "array", "items": {"type": "string", "enum": PLATFORM_KEYS}},
-           "subjects": {"type": "array", "items": {"type": "string"}}}, ["brief", "count"]),
+           "subjects": {"type": "array", "items": {"type": "string"}}, **_MODEL_PICK}, ["brief", "count"]),
     _tool("edit_post", "Edita un post existente: cambiar algo de la imagen (fondo, ropa, luz, color, estilo, añadir/quitar "
           "objetos, texto en la imagen) o solo reescribir su texto. Crea una versión nueva y espera el resultado.",
           {"post_id": {"type": "string"}, "instruction": {"type": "string"},
@@ -106,11 +122,12 @@ TOOLS = [
            "scenes": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 8,
                       "description": "Escenas concretas y visuales, en orden (gancho primero)"},
            "platform": {"type": "string", "enum": ["tiktok", "instagram_story", "x", "square", "instagram_feed"]},
-           "subjects": {"type": "array", "items": {"type": "string"}}}, ["idea", "scenes"]),
+           "subjects": {"type": "array", "items": {"type": "string"}}, **_MODEL_PICK}, ["idea", "scenes"]),
     _tool("make_video", "Anima la imagen de un post y crea un clip de video (~5 s) para Reels/TikTok/Shorts. "
           "Crea un post nuevo de tipo video y espera el resultado.",
           {"post_id": {"type": "string"},
-           "motion": {"type": "string", "description": "Qué se mueve y cómo (cámara, acción, ambiente). Vacío = lo decide el productor"}},
+           "motion": {"type": "string", "description": "Qué se mueve y cómo (cámara, acción, ambiente). Vacío = lo decide el productor"},
+           "video_model": _MODEL_PICK["video_model"]},
           ["post_id"]),
     _tool("make_reel", "Une varios posts de video en un solo reel vertical (en orden) con su caption.",
           {"post_ids": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 12},
@@ -232,9 +249,16 @@ async def _announce(emit, role: str, engine: str | None = None) -> None:
 
 async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
     conv_id, engine = ctx["conv_id"], ctx["engine"] or None
+    if name in ("create_posts", "create_campaign", "create_reel", "make_video") and (
+            args.get("image_model") or args.get("video_model")):
+        from app.model_picker import choice_for
+        engine, note = await choice_for(args.get("image_model"), args.get("video_model"), engine)
+        if note:
+            await emit({"type": "status", "text": note})
+    picked = engine if (engine or "").startswith("or:") else None   # el video también usa el modelo que eligió Shelton
     if name in ("create_reel", "make_video", "make_reel") or (
             name == "create_posts" and any(p.get("format") == "video" for p in args.get("posts", []))):
-        await _announce(emit, "video", None)
+        await _announce(emit, "video", engine if (engine or "").startswith("or:") else None)
     elif name in ("add_voice", "add_sound"):
         await _announce(emit, "voice")
 
@@ -246,7 +270,8 @@ async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
                 await emit({"type": "status", "text": f"No encontré en el banco: {', '.join(missing)}"})
             ids.append(pipeline.new_post(it["idea"], it.get("platform", ""), conversation_id=conv_id, subject_ids=sids,
                                          caption_notes=it.get("caption_notes", ""), engine=engine,
-                                         media=it.get("format", "image"), motion=it.get("motion", "")))
+                                         media=it.get("format", "image"), motion=it.get("motion", ""),
+                                         video_engine=picked))
         return await _wait_and_report(ids, emit, f"Equipo trabajando en {len(ids)} post(s)…")
 
     if name == "create_campaign":
@@ -264,7 +289,8 @@ async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
         sids, missing = pipeline.find_subjects(args.get("subjects", []))
         if missing:
             await emit({"type": "status", "text": f"No encontré en el banco: {', '.join(missing)}"})
-        rid = pipeline.new_reel_from_scenes(args["scenes"], args["idea"], args.get("platform", "tiktok"), sids, conv_id, engine)
+        rid = pipeline.new_reel_from_scenes(args["scenes"], args["idea"], args.get("platform", "tiktok"), sids, conv_id, engine,
+                                            video_engine=picked)
         with session() as s:
             scene_ids = [p.id for p in s.query(Post).filter(Post.reel_id == rid).order_by(Post.created_at)]
         await emit({"type": "posts", "ids": [rid]})
@@ -274,7 +300,7 @@ async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
         return await _wait_and_report([rid], emit, f"Cadena de reel en marcha: {len(args['scenes'])} escenas…")
 
     if name == "make_video":
-        pid = pipeline.new_video(args["post_id"], args.get("motion", ""), conv_id)
+        pid = pipeline.new_video(args["post_id"], args.get("motion", ""), conv_id, engine=engine)
         return await _wait_and_report([pid], emit, "Productor de video animando la escena…")
 
     if name == "make_reel":
@@ -406,6 +432,10 @@ async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
         sid = sids[0] if sids else pipeline.new_subject(args["subject_name"], args.get("kind", "person"), "", generate=False)
         data = await pipeline.add_subject_reference(sid, path, describe=not sids)
         return json.dumps({k: data[k] for k in ("id", "name", "kind", "description")}, ensure_ascii=False)
+
+    if name == "models_catalog":
+        from app.model_picker import catalog
+        return json.dumps(await catalog(), ensure_ascii=False)[:12000]
 
     if name == "image_engines":
         return json.dumps({"current": ctx["engine"], "options": engine_choices()}, ensure_ascii=False)
