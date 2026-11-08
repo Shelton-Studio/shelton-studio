@@ -228,3 +228,30 @@ def test_network_review_best_times_and_live(srv):
     assert "Lucia Ref" in final(ev)
     ev, _ = chat(c, "TOOL live_status {}")
     assert "working_now" in final(ev) and "last_network_review" in final(ev)
+
+
+def test_video_links_in_chat_are_detected_and_reused():
+    os.environ.setdefault("IMAGE_ENGINE", "mock")
+    os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="shelton_links_"))
+    sys.path.insert(0, str(ROOT))
+    from app import reference
+    from app.agents import shelton
+    from app.db import init_db
+    init_db()
+    text = ("mira https://www.tiktok.com/@ana/video/7312?is_from_webapp=1 y https://youtu.be/abc, "
+            "también https://www.instagram.com/reel/XYZ/ y esto no https://www.google.com/search?q=x")
+    links = reference.video_links(text)
+    assert [s for _, s in links] == ["TikTok", "YouTube", "Instagram"]
+    assert reference.video_links("https://cdn.site.com/clip.mp4?x=1")[0][1] == "video"
+    notes = shelton._link_notes(text)
+    assert len(notes) == 3 and "analyze_reference" in notes[0]
+    # Un link ya analizado se reutiliza (no se vuelve a bajar)
+    video = Path(reference.settings.media_dir) / "ref_test_src.mp4"
+    video.write_bytes(b"x")
+    rid = "linktest01"
+    (reference._dir() / f"{rid}.json").write_text(json.dumps({
+        "id": rid, "url": "https://www.tiktok.com/@ana/video/7312", "title": "t", "duration": 5.0,
+        "video_path": str(video), "frames": ["a", "b"], "frame_post_ids": [], "audio_id": ""}), encoding="utf-8")
+    assert reference.find_by_url("https://www.tiktok.com/@ana/video/7312/?lang=es")["id"] == rid
+    assert asyncio.run(reference.from_url("https://www.tiktok.com/@ana/video/7312"))["id"] == rid
+    assert f"reference_id={rid}" in shelton._link_notes(text)[0]

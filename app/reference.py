@@ -67,6 +67,44 @@ def find_urls(text: str) -> list[str]:
     return [u.rstrip(").,;") for u in URL_RE.findall(text or "")]
 
 
+# Redes y sitios de video conocidos (yt-dlp soporta muchos más: cualquier link se intenta igual)
+VIDEO_SITES = {"tiktok.com": "TikTok", "instagram.com": "Instagram", "youtube.com": "YouTube", "youtu.be": "YouTube",
+               "facebook.com": "Facebook", "fb.watch": "Facebook", "x.com": "X", "twitter.com": "X",
+               "pinterest.": "Pinterest", "pin.it": "Pinterest", "threads.net": "Threads", "threads.com": "Threads",
+               "snapchat.com": "Snapchat", "vimeo.com": "Vimeo", "kwai": "Kwai", "likee": "Likee",
+               "twitch.tv": "Twitch", "dailymotion.com": "Dailymotion", "reddit.com": "Reddit", "linkedin.com": "LinkedIn",
+               "bilibili.com": "Bilibili", "douyin.com": "Douyin", "capcut.com": "CapCut", "tumblr.com": "Tumblr"}
+MEDIA_EXT = (".mp4", ".mov", ".webm", ".m4v", ".mkv")
+
+
+def video_links(text: str) -> list[tuple[str, str]]:
+    """Links de video en un mensaje: [(url, red)]. Un link directo a .mp4 también cuenta."""
+    out = []
+    for u in find_urls(text):
+        low = u.lower()
+        site = next((name for dom, name in VIDEO_SITES.items() if dom in low), None)
+        if site or low.split("?")[0].endswith(MEDIA_EXT):
+            out.append((u, site or "video"))
+    return out
+
+
+def _norm(url: str) -> str:
+    return url.split("?")[0].rstrip("/").lower()
+
+
+def find_by_url(url: str) -> dict | None:
+    """Si ese link ya se analizó, devuelve su ficha (no se vuelve a bajar)."""
+    key = _norm(url)
+    for p in sorted(_dir().glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True):
+        try:
+            r = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        if r.get("url") and _norm(r["url"]) == key and Path(r.get("video_path", "")).exists():
+            return r
+    return None
+
+
 # ------------------------------------------------------------------ Descarga
 def _download(url: str, out_base: Path) -> tuple[str, str]:
     """Descarga el video con yt-dlp (TikTok, Instagram, YouTube Shorts, X, Facebook...). Devuelve (ruta, título)."""
@@ -92,7 +130,9 @@ def _download(url: str, out_base: Path) -> tuple[str, str]:
     return str(p), (info.get("title") or info.get("description") or "")[:200]
 
 
-async def from_url(url: str, conversation_id: str | None = None) -> dict:
+async def from_url(url: str, conversation_id: str | None = None, reuse: bool = True) -> dict:
+    if reuse and (old := find_by_url(url)):
+        return public(old)
     rid = uuid.uuid4().hex[:12]
     base = settings.media_dir / f"ref_{rid}"
     try:
