@@ -346,8 +346,18 @@ const Bot = window.Bot = {
 };
 setTimeout(() => Bot.mount(), 600);
 // En el chat, el robot se sube para no tapar el botón Enviar
-const markRoute = () => document.body.classList.toggle("route-chat", (location.hash.slice(2).split("/")[0] || "inicio") === "chat");
-window.addEventListener("hashchange", markRoute); markRoute();
+// Solo si de verdad lo tapa (pantallas angostas); en pantallas anchas se queda donde está
+function markRoute() {
+  const body = document.body, send = $("#send"), face = $("#b-face");
+  body.classList.remove("route-chat");
+  if (!send || !face) return;
+  const a = send.getBoundingClientRect(), b = face.getBoundingClientRect(), pad = 8;
+  const overlap = a.left < b.right + pad && b.left < a.right + pad && a.top < b.bottom + pad && b.top < a.bottom + pad;
+  body.classList.toggle("route-chat", overlap);
+}
+window.addEventListener("hashchange", () => setTimeout(markRoute, 400));
+window.addEventListener("resize", () => { clearTimeout(markRoute.t); markRoute.t = setTimeout(markRoute, 150); });
+setTimeout(markRoute, 1200);
 
 // ------------------------------------------------------------------ AUDIOS (biblioteca)
 VIEWS.audios = async (el) => {
