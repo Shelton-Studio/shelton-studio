@@ -60,13 +60,32 @@ How to write the prompt:
 
 SUBJECT_RULES = """
 Reference images are attached to the generator for the recurring subjects listed below (image 1, image 2...).
-Refer to them as "the woman from image 1", "the car from image 2", etc., describe the new scene, pose, outfit and
-camera, and say to keep their identity (face, hair, body / exact model, color, details) unchanged.
-If a subject is of kind "style", do not put it in the scene: say "in the exact visual style of image N"."""
+Several images can show the SAME subject from different angles: use all of them to keep it identical.
+Refer to them as "the woman from images 1-3", "the car from image 2", etc., describe the new scene, pose, outfit and
+camera, and say to keep their identity (face, hair, body / exact make, shape, color, wheels, details / exact place)
+unchanged. If a subject is of kind "style", do not put it in the scene: say "in the exact visual style of image N"."""
+
+
+def reference_map(subjects: list[Subject], limit: int = 3) -> list[list[int]]:
+    """Qué números de imagen corresponden a cada modelo (mismo orden que pipeline.reference_images)."""
+    counts = [len(s.references or []) for s in subjects]
+    out: list[list[int]] = [[] for _ in subjects]
+    n, depth = 0, 0
+    while n < limit and any(depth < c for c in counts):
+        for i, c in enumerate(counts):
+            if depth < c and n < limit:
+                n += 1
+                out[i].append(n)
+        depth += 1
+    return out
 
 
 def subjects_context(subjects: list[Subject]) -> str:
-    return "\n".join(f"image {i}: {s.name} ({s.kind}) - {s.description}" for i, s in enumerate(subjects, 1))
+    rows = []
+    for s, imgs in zip(subjects, reference_map(subjects)):
+        where = (f"images {imgs[0]}-{imgs[-1]}" if len(imgs) > 1 else f"image {imgs[0]}") if imgs else "no photo"
+        rows.append(f"{where}: {s.name} ({s.kind}) - {s.description}")
+    return "\n".join(rows)
 
 
 async def art_direct(idea: str, platform: Platform, brand: Brand | None, feedback: list[str] | None = None,
@@ -205,6 +224,26 @@ async def design_subject(name: str, kind: str, request: str, brand: Brand | None
 SUBJECT_ANALYST = registry.register_default("subject_analyst", """You analyze a reference photo of a recurring subject and write a precise, reusable visual description
 in English (60-120 words) so image models can redraw the same subject. Describe only what is visible and stable
 (identity features, colors, shapes, materials), not the temporary background or lighting.""")
+
+
+SUBJECT_KINDS_DETECT = ["person", "car", "vehicle", "place", "product", "pet", "creature", "object", "style", "other"]
+
+
+async def describe_subject_photos(image_paths: list[str], name: str, kind: str = "auto", hint: str = "") -> dict:
+    """Analiza VARIAS fotos del mismo modelo: ficha de identidad detallada y tipo detectado."""
+    content = []
+    for i, p in enumerate(image_paths[:6], 1):
+        content += [{"type": "text", "text": f"Photo {i}:"}, image_block(p, 768)]
+    content.append({"type": "text", "text": (
+        f"All photos show the same subject.\nSubject name: {name}\nKind given by the user: {kind}\nUser notes: {hint or '-'}\n"
+        "Write a precise identity description that combines what is consistent across all photos (ignore what changes "
+        "between them, like background or lighting). If kind is 'auto', detect it. Also say which photo is the best "
+        "main reference (clear, front/three-quarter view, well lit).")})
+    return await _call("subject_analyst", content, obj({
+        "description": {"type": "string"},
+        "kind": {"type": "string", "enum": SUBJECT_KINDS_DETECT},
+        "best_photo": {"type": "integer"},
+    }), effort="low")
 
 
 async def describe_subject(image_path: str, name: str, kind: str, hint: str = "") -> str:

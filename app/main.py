@@ -427,6 +427,21 @@ async def create_subject(body: SubjectIn):
     return {"id": pipeline.new_subject(body.name, body.kind, body.request, body.generate)}
 
 
+@app.post("/api/subjects/from-photos")
+async def subject_from_photos(files: list[UploadFile] = File(...), name: str = Form(...), kind: str = Form("auto"),
+                              notes: str = Form("")):
+    """Banco de fotos del mismo carro, persona, flor o paisaje -> modelo listo para generar contenido consistente."""
+    if not name.strip():
+        raise HTTPException(400, "Ponle un nombre al modelo")
+    paths = []
+    for f in files[:20]:
+        paths.append(save_bytes(_normalize(await f.read()), f"subject_up_{uuid.uuid4().hex[:8]}.png"))
+    try:
+        return await pipeline.create_subject_from_photos(name, paths, kind or "auto", notes)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.post("/api/subjects/{sid}/photos")
 async def subject_photo(sid: str, file: UploadFile = File(...), describe: bool = Form(False)):
     with session() as s:

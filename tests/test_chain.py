@@ -63,6 +63,9 @@ async def fake_json_call(system, content, schema, effort="low", max_tokens=8000,
         return {"instruction": "Make the background a beach", "image_change": True}
     if "reference_prompt" in keys:
         return {"description": "young woman, curly hair", "reference_prompt": "portrait", "notes": "influencer"}
+    if keys == {"description", "kind", "best_photo"}:
+        n = str(content).count("Photo ")
+        return {"description": f"red sports coupe seen in {n} photos", "kind": "car", "best_photo": 2 if n > 1 else 1}
     if keys == {"description"}:
         return {"description": "red sports car"}
     raise AssertionError(keys)
