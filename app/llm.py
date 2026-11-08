@@ -69,6 +69,13 @@ def _log_run(agent: str, ok: bool, start: float, model: str, resp=None, error: s
 
 
 async def create(agent: str = "shelton", betas_extra: list[str] | None = None, summary: str = "", **kwargs):
+    """Llamada a un agente. Mientras dura, el agente aparece como «trabajando» en la web (panel En vivo)."""
+    from app import working
+    with working.track(agent, summary or "pensando"):
+        return await _create_inner(agent, betas_extra, summary, **kwargs)
+
+
+async def _create_inner(agent: str = "shelton", betas_extra: list[str] | None = None, summary: str = "", **kwargs):
     """messages.create con la ficha del agente, fallback por defecto, control de rechazos y registro."""
     from app.agents import registry
     kwargs.setdefault("model", registry.model(agent))
