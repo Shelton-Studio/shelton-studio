@@ -111,8 +111,28 @@ VIEWS.chat = async (el, arg) => {
     };
   }
   const box = $("#input");
+  if (box) box.addEventListener("input", () => linkHint(box, $(".composer-box")));
   if (box) box.addEventListener("paste", (e) => { const files = [...(e.clipboardData?.files || [])].filter((f) => /^(audio|video)\//.test(f.type)); if (files.length) { e.preventDefault(); files.forEach(attachFile); } });
 };
+// Links de video pegados en el chat: aviso de que Shelton los va a trabajar
+const VIDEO_SITES = [["tiktok.com", "TikTok"], ["instagram.com", "Instagram"], ["youtube.com", "YouTube"], ["youtu.be", "YouTube"],
+  ["facebook.com", "Facebook"], ["fb.watch", "Facebook"], ["x.com", "X"], ["twitter.com", "X"], ["pinterest.", "Pinterest"], ["pin.it", "Pinterest"],
+  ["threads.", "Threads"], ["snapchat.com", "Snapchat"], ["vimeo.com", "Vimeo"], ["kwai", "Kwai"], ["likee", "Likee"], ["twitch.tv", "Twitch"],
+  ["reddit.com", "Reddit"], ["linkedin.com", "LinkedIn"], ["douyin.com", "Douyin"], ["capcut.com", "CapCut"]];
+function videoLinks(text) {
+  return (String(text).match(/https?:\/\/[^\s<>"']+/gi) || []).map((u) => {
+    const low = u.toLowerCase(), site = VIDEO_SITES.find(([d]) => low.includes(d));
+    return site || /\.(mp4|mov|webm|m4v)(\?|$)/.test(low) ? { url: u, site: site ? site[1] : "video" } : null;
+  }).filter(Boolean);
+}
+function linkHint(input, box) {
+  const links = videoLinks(input.value);
+  let h = $(".link-hint", box);
+  if (!links.length) { h?.remove(); return; }
+  if (!h) { h = document.createElement("div"); h.className = "link-hint"; box.prepend(h); }
+  const sites = [...new Set(links.map((l) => l.site))].join(", ");
+  h.innerHTML = `🎞️ <b>Link de ${esc(sites)} detectado.</b> Shelton lo baja, guarda su audio, lo desarma por escenas y lo recrea con tu modelo. Dile qué quieres: «igual con Valentina», «algo parecido de noche», «solo el audio»…`;
+}
 async function attachFile(f) {
   const kind = /^audio\//.test(f.type) || /\.(wav|mp3|m4a|ogg|flac)$/i.test(f.name) ? "audio" : /^video\//.test(f.type) || /\.(mp4|mov|webm|m4v)$/i.test(f.name) ? "reference" : "image";
   const box = $("#attachments");
@@ -137,6 +157,7 @@ async function attachFile(f) {
 const _send = sendMessage;
 window.sendMessage = sendMessage = async function () {
   const spoken = S.spoken; S.spoken = false;
+  $(".composer-box .link-hint")?.remove();
   await _send();
   if (spoken) { const last = $$("#msgs .msg.bot .bubble"); const t = last[last.length - 1]?.textContent; if (t) Voice.say(t); }
 };
@@ -221,6 +242,7 @@ const Bot = window.Bot = {
       else { $("#b-text").value = "Abre a "; $("#b-text").focus(); }
     });
     $$("[data-sub]", p).forEach((b) => b.onclick = () => { const n = b.dataset.sub; $("#b-text").value = `Abre a ${n} y hazle `; $("#b-text").focus(); this.say(`Perfecto, ${n}. ¿Qué le hacemos? ¿Fotos, un reel o un video?`, false); });
+    $("#b-text", p).oninput = () => linkHint($("#b-text", p), $("#b-form", p).parentNode.querySelector(".b-linkbox") || (() => { const d = document.createElement("div"); d.className = "b-linkbox"; $("#b-form", p).before(d); return d; })());
     $("#b-form", p).onsubmit = (e) => { e.preventDefault(); const t = $("#b-text").value.trim(); if (t) this.send(t); };
     $("#b-mic", p).onclick = () => this.listen();
     $("#b-new", p).onclick = () => { this.conv = null; localStorage.removeItem("buddyConv"); $("#b-log").innerHTML = ""; this.say("Listo, abrí otra conversación en paralelo. ¿Qué modelo usamos?", false); };
@@ -275,7 +297,7 @@ const Bot = window.Bot = {
   async send(text, spoken = false) {
     // Si ya estoy con otro pedido, este va en paralelo en su propia conversación (no hay que esperar)
     const parallel = this.inflight > 0;
-    this.inflight++; $("#b-text") && ($("#b-text").value = "");
+    this.inflight++; $("#b-text") && ($("#b-text").value = ""); $(".b-linkbox")?.remove();
     this.say(text, true); const status = this.say(parallel ? "Lo hago en paralelo…" : "Pensando…", false); status.classList.add("live");
     this.mood("thinking");
     let final = "", ids = [], conv = parallel ? null : this.conv;

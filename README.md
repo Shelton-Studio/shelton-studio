@@ -189,6 +189,7 @@ journalctl -u shelton-studio -n 100 --no-pager
   - Pega el link de un TikTok, Reel o Short (o sube el video) y pide "hazme algo igual con mi modelo".
   - El Analista de videos lo desarma escena por escena y guarda su audio.
   - Cada escena se recrea con tu modelo del banco: mismo fondo, encuadre y movimiento, con otra cara. Luego se monta el reel, con el audio original si quieres.
+  - También puedes **pegar el link directo en el chat** (o en Shelton mini) de cualquier red: TikTok, Instagram, YouTube, X, Facebook, Pinterest, Threads, Kwai… Shelton lo detecta solo. Si ese link ya se analizó, lo reutiliza.
   - Usa solo modelos con permiso. Si el audio es música de otra persona, revisa los derechos antes de publicarlo fuera de esa red.
 - **Memoria por modelo**:
   - Cada modelo del banco tiene su propia memoria (🧠 en el Banco).

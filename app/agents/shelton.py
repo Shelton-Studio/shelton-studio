@@ -57,7 +57,8 @@ Cómo trabajas:
   modelo funcionó mejor para cada tipo de pedido. Si dudas, déjalo vacío (automático = el más realista). Di en una
   línea qué modelo elegiste y por qué. Cuando el usuario apruebe o critique un resultado, guarda con remember qué
   modelo funcionó (o no) para ese tipo de pedido, para elegir mejor la próxima vez.
-- Videos de referencia: si el usuario pega un link de TikTok/Reels/Shorts (o sube un video) y pide "algo
+- Videos de referencia: si el usuario pega un link de video de cualquier red (TikTok, Instagram, YouTube, X, Facebook,
+  Pinterest, Threads, Kwai, Snapchat...) o sube un video y pide "algo
   similar", "igual" o "hazlo con mi modelo", usa analyze_reference y luego recreate_reference con el modelo del banco
   (mode same = mismo fondo, encuadre y movimiento cambiando la cara; similar = versión original inspirada). Solo
   reemplaza a la persona por modelos del banco; nunca pongas la cara de una persona real que no dio permiso ni de
@@ -215,8 +216,8 @@ TOOLS = [
     _tool("studio_status", "Estado de la cola, posts listos hoy y campañas en curso.", {}, []),
     _tool("studio_capacity", "Con qué cuentas AHORA: trabajadores en paralelo, GPUs y nube, cola, cuánto tarda cada "
           "cosa (medido) y en cuánto se libera. Úsalo para planear varios pedidos a la vez y dar tiempos realistas.", {}, []),
-    _tool("analyze_reference", "Analiza un video de referencia (link de TikTok, Instagram Reels, YouTube Shorts, X o "
-          "Facebook, o un video subido): lo baja, saca cuadros clave, guarda su audio en la biblioteca y lo desarma "
+    _tool("analyze_reference", "Analiza un video de referencia (link de cualquier red: TikTok, Instagram, YouTube, X, "
+          "Facebook, Pinterest, Threads, Kwai, Snapchat... o un video subido): lo baja, saca cuadros clave, guarda su audio en la biblioteca y lo desarma "
           "escena por escena. Devuelve reference_id para recrearlo.",
           {"url": {"type": "string", "description": "Link del video"},
            "reference_id": {"type": "string", "description": "Si el usuario ya subió el video (aparece en el mensaje)"}}, []),
@@ -662,6 +663,24 @@ async def chat(conv_id: str | None, user_text: str, upload_post_ids: list[str] |
     await task
 
 
+def _link_notes(text: str) -> list[str]:
+    """Si el usuario pegó links de video (TikTok, Instagram, YouTube, X...), Shelton sabe qué hacer con ellos."""
+    from app import reference
+    links = reference.video_links(text)
+    notes = []
+    for url, site in links[:5]:
+        done = reference.find_by_url(url)
+        if done:
+            notes.append(f"El usuario pegó un link de {site} que YA está analizado: reference_id={done['id']} "
+                         f"({done['duration']} s, {len(done['frames'])} escenas). Úsalo directo.")
+        else:
+            notes.append(f"El usuario pegó un link de video de {site}: {url}. Para trabajarlo usa analyze_reference con "
+                         "ese url (lo baja, guarda su audio y lo desarma por escenas). Si pide algo igual o parecido con un "
+                         "modelo del banco, sigue con recreate_reference; si no dijo qué modelo usar, pregúntale cuál "
+                         "(muéstrale los del banco). Si solo quiere el audio o ideas, úsalo para eso.")
+    return notes
+
+
 def _attachment_notes(attachments: list[dict]) -> list[str]:
     """Audios y videos de referencia que el usuario adjuntó al mensaje."""
     from app import audio_lib, reference
@@ -708,6 +727,9 @@ async def _turn(conv_id, user_text, upload_post_ids, emit, agent, engine, attach
             content += [{"type": "text", "text": f"El usuario subió esta imagen (post_id={pid}):"}, image_block(path, 1024)]
     for note in _attachment_notes(list(attachments)):
         content.append({"type": "text", "text": note})
+    if agent == "shelton":
+        for note in _link_notes(user_text):
+            content.append({"type": "text", "text": note})
     content.append({"type": "text", "text": user_text})
     messages.append({"role": "user", "content": content})
     display.append({"role": "user", "text": user_text, "post_ids": upload_post_ids,
