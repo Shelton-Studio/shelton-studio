@@ -157,20 +157,28 @@ async def from_url(url: str, conversation_id: str | None = None, reuse: bool = T
     return await ingest(path, url, title, conversation_id, rid)
 
 
-async def from_file(data: bytes, filename: str, conversation_id: str | None = None) -> dict:
+async def from_file(data: bytes, filename: str, conversation_id: str | None = None, token: str = "") -> dict:
     rid = uuid.uuid4().hex[:12]
     ext = Path(filename or "video.mp4").suffix.lower() or ".mp4"
     path = settings.media_dir / f"ref_{rid}{ext}"
     path.write_bytes(data)
-    return await ingest(str(path), "", Path(filename or "video").stem, conversation_id, rid)
+    return await ingest(str(path), "", Path(filename or "video").stem, conversation_id, rid, token)
 
 
 # ------------------------------------------------------------------ Análisis
-async def ingest(path: str, url: str, title: str, conversation_id: str | None, rid: str | None = None) -> dict:
+async def ingest(path: str, url: str, title: str, conversation_id: str | None, rid: str | None = None,
+                 token: str = "") -> dict:
+    import time
     from app import audio_lib, video as vid, working
     from app.agents import specialists as sp
     from app.voice import has_audio
     rid = rid or uuid.uuid4().hex[:12]
+    t0 = time.monotonic()
+
+    def step(text: str) -> None:   # avance en vivo para el chip «Analizando video…»
+        if token:
+            events.publish({"type": "reference_progress", "token": token, "text": text})
+    step("Preparando el video…")
     seconds = await asyncio.to_thread(vid.duration, path)
     if seconds <= 0:
         raise ValueError("No pude leer ese video")
@@ -178,19 +186,27 @@ async def ingest(path: str, url: str, title: str, conversation_id: str | None, r
         raise ValueError(f"El video dura {int(seconds)} s: el máximo es {MAX_SECONDS} s")
     # MP4 limpio (para verlo en la web y para sacar cuadros)
     mp4 = str(settings.media_dir / f"ref_{rid}_src.mp4")
-    await asyncio.to_thread(vid._run, ["-i", path, "-map", "0:v:0", "-map", "0:a?", "-vf",
-                                       "scale='min(1080,iw)':-2,format=yuv420p", *[x for x in vid._ENCODE if x != "-an"],
-                                       "-c:a", "aac", "-b:a", "192k", mp4])
+    copied = False
+    if await asyncio.to_thread(vid.web_ready, path):   # TikTok/Reels ya vienen en H.264: se copia (casi instantáneo)
+        try:
+            await asyncio.to_thread(vid._run, ["-i", path, "-map", "0:v:0", "-map", "0:a?", "-c", "copy",
+                                               "-movflags", "+faststart", mp4], None, True)
+            copied = True
+        except RuntimeError:
+            copied = False
+    if not copied:
+        step("Convirtiendo el video a un formato compatible…")
+        await asyncio.to_thread(vid._run, ["-i", path, "-map", "0:v:0", "-map", "0:a?", "-vf",
+                                           "scale='min(1080,iw)':-2,format=yuv420p", *[x for x in vid._ENCODE if x != "-an"],
+                                           "-c:a", "aac", "-b:a", "192k", mp4])
     if Path(path) != Path(mp4):
         Path(path).unlink(missing_ok=True)
     # Cuadros clave: uno cada ~3 s (entre 2 y 6)
     n = max(2, min(6, round(seconds / 3)))
     times = [seconds * (i + 0.5) / n for i in range(n)]
-    frames = []
-    for i, t in enumerate(times):
-        f = str(settings.media_dir / f"ref_{rid}_f{i}.jpg")
-        await asyncio.to_thread(vid.frame_at, mp4, f, f"{t:.2f}")
-        frames.append((f, t))
+    step(f"Sacando {n} escenas…")
+    frames = [(str(settings.media_dir / f"ref_{rid}_f{i}.jpg"), t) for i, t in enumerate(times)]
+    await asyncio.gather(*(asyncio.to_thread(vid.frame_at, mp4, f, f"{t:.2f}", True) for f, t in frames))
     from app.media import size_of
     w, h = size_of(frames[0][0])
     platform = "tiktok" if h > w * 1.2 else "x" if w > h * 1.2 else "square"
@@ -206,13 +222,22 @@ async def ingest(path: str, url: str, title: str, conversation_id: str | None, r
             frame_posts.append(p.id)
             events.publish({"type": "post", "post": post_dict(p)})
     audio = None
-    if await asyncio.to_thread(has_audio, mp4):
+    step("La IA está mirando las escenas y guardo el audio…")
+
+    async def save_audio():
+        if not await asyncio.to_thread(has_audio, mp4):
+            return None
         try:
-            audio = await asyncio.to_thread(audio_lib.from_video, mp4, f"Audio de {title or 'referencia'}", "referencia", url)
+            return await asyncio.to_thread(audio_lib.from_video, mp4, f"Audio de {title or 'referencia'}", "referencia", url)
         except ValueError:
-            audio = None
-    with working.track("video_analyst", f"Analizando referencia: {title or url or 'video subido'}"):
-        analysis = await sp.analyze_reference(frames, title, seconds)
+            return None
+
+    async def analyze():
+        with working.track("video_analyst", f"Analizando referencia: {title or url or 'video subido'}"):
+            return await sp.analyze_reference(frames, title, seconds)
+    audio, analysis = await asyncio.gather(save_audio(), analyze())   # en paralelo
+    log.info("Referencia %s lista en %.1f s (%s)", rid, time.monotonic() - t0, "copiada" if copied else "convertida")
+    step("¡Listo!")
     ref = {"id": rid, "url": url, "title": title, "duration": round(seconds, 2), "video_path": mp4,
            "platform": platform, "frames": [f for f, _ in frames], "frame_times": [round(t, 2) for _, t in frames],
            "frame_post_ids": frame_posts, "audio_id": audio["id"] if audio else "", "analysis": analysis,

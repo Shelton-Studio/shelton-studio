@@ -29,11 +29,15 @@ _FFMPEG_SLOTS = _threading.BoundedSemaphore(max(1, int(_os.getenv("FFMPEG_PARALL
 _PRESET = _os.getenv("FFMPEG_PRESET", "veryfast")
 
 
-def _run(args: list[str], stdin: bytes | None = None) -> None:
+def _run(args: list[str], stdin: bytes | None = None, light: bool = False) -> None:
+    """light=True: tareas livianas (copiar, sacar un cuadro) que no esperan detrás de una codificación pesada."""
     args = [_PRESET if (a == "slow" and i and args[i - 1] == "-preset") else a for i, a in enumerate(args)]
-    with _FFMPEG_SLOTS:
-        p = subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-threads", "2", *args],
-                           input=stdin, capture_output=True)
+    cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-threads", "2", *args]
+    if light:
+        p = subprocess.run(cmd, input=stdin, capture_output=True)
+    else:
+        with _FFMPEG_SLOTS:
+            p = subprocess.run(cmd, input=stdin, capture_output=True)
     if p.returncode != 0:
         raise RuntimeError(f"ffmpeg: {p.stderr.decode(errors='ignore')[-600:]}")
 
@@ -80,9 +84,24 @@ def clip_to_mp4(data: bytes, src_fps: float, out_path: str, width: int, height: 
     return out_path
 
 
-def frame_at(video_path: str, out_path: str, at: str = "0") -> str:
-    _run(["-ss", at, "-i", video_path, "-frames:v", "1", "-q:v", "2", out_path])
+def frame_at(video_path: str, out_path: str, at: str = "0", light: bool = False) -> str:
+    _run(["-ss", at, "-i", video_path, "-frames:v", "1", "-q:v", "2", out_path], light=light)
     return out_path
+
+
+def web_ready(video_path: str) -> bool:
+    """¿Ya es un MP4 H.264 (+AAC) que el navegador reproduce? Entonces se copia tal cual, sin recodificar."""
+    p = subprocess.run([FFMPEG, "-hide_banner", "-i", video_path], capture_output=True)
+    info = p.stderr.decode(errors="ignore")
+    video = [ln for ln in info.splitlines() if "Video:" in ln]
+    audio = [ln for ln in info.splitlines() if "Audio:" in ln]
+    if not video or "h264" not in video[0] or "yuv420p" not in video[0]:
+        return False
+    if audio and "aac" not in audio[0]:
+        return False
+    import re
+    m = re.search(r"(\d{2,5})x(\d{2,5})", video[0])
+    return bool(m) and max(int(m.group(1)), int(m.group(2))) <= 2160
 
 
 def duration(video_path: str) -> float:
