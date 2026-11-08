@@ -23,6 +23,7 @@ class Settings:
     OPENROUTER_IMAGE_MODEL = os.getenv("OPENROUTER_IMAGE_MODEL", "auto")
     # Video vía OpenRouter: "auto" elige el mejor disponible (Veo 3.1 > Sora 2 > Seedance > Kling > Wan)
     OPENROUTER_VIDEO_MODEL = os.getenv("OPENROUTER_VIDEO_MODEL", "auto")
+    OPENROUTER_TTS_MODEL = os.getenv("OPENROUTER_TTS_MODEL", "auto")    # voz del Locutor; auto = la más pro (ElevenLabs v4)
     OPENROUTER_AUDIO_MODEL = os.getenv("OPENROUTER_AUDIO_MODEL", "google/gemini-2.5-flash")   # dictado por voz
     NETWORK_REVIEW_HOURS = float(os.getenv("NETWORK_REVIEW_HOURS", "2"))   # Shelton mini + scouts revisan la red (0 = apagado)
     WHISPER_LOCAL = os.getenv("WHISPER_LOCAL", "1") == "1"      # usa faster-whisper si está instalado

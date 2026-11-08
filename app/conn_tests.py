@@ -128,6 +128,21 @@ async def _openrouter_image(cfg):
     return msg.replace("Modelo:", "Modelo de imagen:")
 
 
-_TESTS = {"anthropic": _anthropic, "openrouter": _openrouter, "openrouter_image": _openrouter_image, "comfyui": _comfyui, "telegram": _telegram, "instagram": _instagram,
+async def _openrouter_tts(cfg):
+    from app.llm import openrouter_config
+    from app.voice import OpenRouterTTS
+    key = cfg.get("api_key") or openrouter_config()[0]
+    if not key:
+        raise RuntimeError("Sin clave: ponla aquí o en Conexiones → Cerebro (OpenRouter)")
+    msg = await _openrouter({"api_key": key, "model": "-"})
+    eng = OpenRouterTTS({**cfg, "api_key": key})
+    OpenRouterTTS._models = None
+    m = await eng.resolve()
+    voices = eng.voices_of(m)
+    return msg.split(". Modelo:")[0] + f". Voz: {m['id']} ({len(voices)} voces)"
+
+
+_TESTS = {"anthropic": _anthropic, "openrouter": _openrouter, "openrouter_image": _openrouter_image,
+          "openrouter_tts": _openrouter_tts, "comfyui": _comfyui, "telegram": _telegram, "instagram": _instagram,
           "facebook": _facebook, "discord": _discord, "webhook_publisher": _webhook, "event_webhook": _webhook,
           "fal": _fal, "replicate": _replicate, "openai_images": _openai, "gemini_image": _gemini}

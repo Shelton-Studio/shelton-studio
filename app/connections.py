@@ -66,6 +66,11 @@ TYPES: dict[str, dict] = {
     "local_tts": {"category": "voice", "name": "Voz local (Chatterbox)",
                   "help": "Servidor de voz en tu GPU: python tts_server/server.py. Español y 22 idiomas más, clona voces con 5-10 s de muestra.",
                   "fields": [F("url", "URL", placeholder="http://127.0.0.1:8189", required=True)]},
+    "openrouter_tts": {"category": "voice", "name": "OpenRouter (voz)",
+                       "help": "Generador de voz con tu clave de OpenRouter (ElevenLabs v4, MAI-Voice, Gemini TTS...). "
+                               "Modelo «auto» = el más pro disponible. Voz vacía = el Locutor elige la que encaja.",
+                       "fields": [F("model", "Modelo de voz", placeholder="auto"), F("voice", "Voz fija (opcional)", placeholder="sarah, george…"),
+                                  F("api_key", "API key (opcional)", "secret")]},
     "elevenlabs": {"category": "voice", "name": "ElevenLabs (nube)", "fields": [
         F("api_key", "API key", "secret", required=True), F("voice_id", "Voice id por defecto"),
         F("model", "Modelo", placeholder="eleven_multilingual_v2")]},
