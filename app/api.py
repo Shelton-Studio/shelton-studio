@@ -789,8 +789,14 @@ async def apis_summary():
                           "model": c["config"].get("chat_id") or c["config"].get("model", ""), "active": c["enabled"],
                           "last_test": c["last_test"]})
     if not any(c["category"] == "voice" for c in conns):
+        from app.voice import voice_route
+        vkind, vcfg, vlabel = voice_route()
+        if vkind == "openrouter_tts":
+            items.append({"group": "Voz", "name": "OpenRouter (voz)", "type": "openrouter_tts", "source": ".env",
+                          "model": vlabel, "active": True,
+                          "note": "Generador de voz con la misma clave de OpenRouter (auto = el más pro)."})
         items.append({"group": "Voz", "name": "Voz local (Chatterbox)", "type": "local_tts", "source": ".env",
-                      "model": settings.TTS_URL, "active": True})
+                      "model": settings.TTS_URL, "active": vkind == "local_tts"})
     if settings.TELEGRAM_BOT_TOKEN and not any(c["type"] == "telegram" for c in conns):
         items.append({"group": "Publicación", "name": "Telegram", "type": "telegram", "source": ".env",
                       "key": _mask(settings.TELEGRAM_BOT_TOKEN), "model": settings.TELEGRAM_CHAT_ID, "active": True})
@@ -872,17 +878,10 @@ def mode_routes(mode: str) -> list[dict]:
             out.append({"role": role, "label": label, "ok": True, "tool": _describe(kind, cfg), "local": local})
         except ValueError as e:
             out.append({"role": role, "label": label, "ok": False, "tool": str(e), "local": mode == "local"})
-    voices = list_enabled("voice")
-    if mode == "local":
-        voices = [c for c in voices if c.type == "local_tts"]
-    elif mode == "cloud":
-        voices = [c for c in voices if c.type != "local_tts"]
-    if voices:
-        out.append({"role": "voice", "label": "Voz", "ok": True, "tool": voices[0].name, "local": voices[0].type == "local_tts"})
-    elif mode == "cloud" and settings.IMAGE_ENGINE != "mock":
-        out.append({"role": "voice", "label": "Voz", "ok": False, "tool": "Falta: conecta ElevenLabs u otra voz en el botón APIs", "local": False})
-    else:
-        out.append({"role": "voice", "label": "Voz", "ok": True, "tool": f"Voz local · {settings.TTS_URL}", "local": True})
+    from app.voice import voice_route
+    vkind, vcfg, vlabel = voice_route()
+    out.append({"role": "voice", "label": "Voz", "ok": bool(vkind), "tool": vlabel if vkind != "local_tts" else f"Voz local · {vcfg.get('url')}",
+                "local": vkind in ("local_tts", "mock")})
     brain = "OpenRouter" if provider() == "openrouter" else "Claude (Anthropic)"
     out.insert(0, {"role": "brain", "label": "Cerebro", "ok": True, "tool": brain, "local": False})
     return out

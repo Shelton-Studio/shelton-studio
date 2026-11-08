@@ -178,6 +178,12 @@ journalctl -u shelton-studio -n 100 --no-pager
     ```
 
     Y abre `https://<nombre-de-la-máquina>.<tu-red>.ts.net`.
+- **Generador de voz con OpenRouter** (la misma clave):
+  - En Nube, y en Auto cuando el estudio trabaja con OpenRouter, el Locutor habla con el modelo de voz más pro disponible: ElevenLabs v4 primero, luego MAI-Voice, Gemini TTS…
+  - Elige la voz que encaja con lo que pides (femenina, grave, anciana, joven…) y cada post muestra "modelo · voz".
+  - Para fijar un modelo, usa `OPENROUTER_TTS_MODEL` o agrega la conexión «OpenRouter (voz)» con una voz fija.
+  - En Local se usa la voz de tu GPU (Chatterbox).
+  - La clonación de voz de los modelos del banco hoy funciona con Chatterbox local.
 - **Audios**: sube WAV/MP3 (o un video y se guarda su audio) en **Audios** o con 📎 en el chat. Shelton se los pone a cualquier post ("ponle el audio *Tema verano* al reel de Valentina"). Desde la ficha de un video puedes guardar su audio en la biblioteca.
 - **Copiar videos**:
   - Pega el link de un TikTok, Reel o Short (o sube el video) y pide "hazme algo igual con mi modelo".

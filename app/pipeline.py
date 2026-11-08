@@ -511,10 +511,19 @@ async def _audio_post(post_id: str, payload: dict) -> None:
         events.publish({"type": "progress", "id": post_id, "text": "Locutor escribiendo el guion y diseñando la voz"})
         speaker = next((x for x in subjects if x.voice_path or x.kind in ("person", "creature")), None)
         voices = vc.list_voices()
-        dv = await sp.direct_voice(post.idea, payload.get("voice_request", ""), seconds, voices,
+        pool = list(voices)
+        if vc.voice_route()[0] == "openrouter_tts":   # voces del generador de OpenRouter, para que el Locutor elija
+            try:
+                eng = vc.OpenRouterTTS(vc.voice_route()[1])
+                pool += [{"name": v, "description": "voz de OpenRouter"} for v in eng.voices_of(await eng.resolve())]
+            except Exception:  # noqa: BLE001
+                pass
+        dv = await sp.direct_voice(post.idea, payload.get("voice_request", ""), seconds, pool,
                                    f"{speaker.name}: {speaker.voice_style or speaker.notes}" if speaker else "",
                                    payload.get("script", ""))
         spec = dv["spec"]
+        spec["request"] = " ".join(x for x in (payload.get("voice_request", ""),
+                                              speaker.voice_style if speaker else "", speaker.kind if speaker else "") if x)
         ref = None
         if speaker and speaker.voice_path and Path(speaker.voice_path).exists():
             ref = Path(speaker.voice_path).read_bytes()
@@ -526,6 +535,8 @@ async def _audio_post(post_id: str, payload: dict) -> None:
         from app import working
         with working.track("motor_voz", dv["script"][:140], vc.voice_label(), post_id, log=True):
             wav = await vc.synthesize(dv["script"], settings.CONTENT_LANGUAGE, ref, spec)
+        if vc.voice_route()[0] == "openrouter_tts":   # etiqueta exacta: modelo y voz que usó OpenRouter
+            _mark(post_id, "voice", f"{vc.OpenRouterTTS.last_model} · {getattr(vc.OpenRouterTTS, 'last_voice', '') or 'voz por defecto'}")
         voice_path = str(settings.media_dir / f"{post_id}_voice.wav")
         await asyncio.to_thread(vc.apply_fx, wav, spec, voice_path)
         tracks.append(("voice", voice_path))
