@@ -28,6 +28,10 @@ fi
 ok "Python $(python3 -c 'import sys;print(".".join(map(str,sys.version_info[:2])))'), ${FREE_MB} MB libres"
 
 say "Descargando Shelton Studio en $DIR"
+if [ -d "$DIR" ] && ! git -C "$DIR" remote get-url origin 2>/dev/null | grep -qi "alligator-ai"; then
+  # Otra app con la misma carpeta: no se mezcla ni se actualiza con nuestro código.
+  die "$DIR es de otro proyecto. Muévelo aparte (mv $DIR ${DIR}-viejo) o instala en otra carpeta con SHELTON_DIR=/ruta y vuelve a correrlo."
+fi
 if [ -d "$DIR/.git" ]; then git -C "$DIR" pull -q --ff-only origin main && ok "Actualizado"
 else git clone -q "$REPO" "$DIR" && ok "Descargado"; fi
 cd "$DIR"
@@ -44,6 +48,16 @@ if [ ! -f .env ]; then
   say "Configuración inicial"
   TS_IP=$(tailscale ip -4 2>/dev/null | head -n1 || true)
   HOST="${TS_IP:-127.0.0.1}"
+  # Link https privado de Tailscale (https://<máquina>.<tu-red>.ts.net): Shelton escucha solo dentro del equipo
+  # y Tailscale lo publica con https a tu red (el micrófono del navegador también funciona así).
+  if [ -n "$TS_IP" ] && [ "${SHELTON_HTTPS:-}" != "0" ]; then
+    WANT="${SHELTON_HTTPS:-}"
+    if [ -z "$WANT" ]; then
+      echo -n "  ¿Abrir Shelton con un link https privado de Tailscale (tipo https://shelton.tu-red.ts.net)? [S/n]: "
+      A=$(ask); case "$A" in n|N|no|NO) WANT=0 ;; *) WANT=1 ;; esac
+    fi
+    if [ "$WANT" = "1" ]; then HOST="127.0.0.1"; SHELTON_HTTPS=1; fi
+  fi
   # Primer puerto libre desde el 8010 (prueba real de conexión: no choca con otras apps).
   PORT=$(HOST="$HOST" python3 - <<'PY'
 import os, socket
@@ -68,7 +82,7 @@ PY
   # Con clave de OpenRouter: imágenes reales por OpenRouter. Sin clave: simuladas hasta conectar la GPU.
   if [ -n "${IMAGE_ENGINE:-}" ]; then ENGINE="$IMAGE_ENGINE"; elif [ -n "$KEY_OR" ]; then ENGINE=openrouter; else ENGINE=mock; fi
   cp .env.example .env
-  HOST="$HOST" PORT="$PORT" KEY_OR="$KEY_OR" KEY_AN="$KEY_AN" ENGINE="$ENGINE" venv/bin/python - <<'PY'
+  HOST="$HOST" PORT="$PORT" KEY_OR="$KEY_OR" KEY_AN="$KEY_AN" ENGINE="$ENGINE" HTTPS_TS="${SHELTON_HTTPS:-0}" venv/bin/python - <<'PY'
 import os, re
 p = ".env"
 s = open(p, encoding="utf-8").read()
@@ -77,6 +91,7 @@ def put(k, v):
     s = re.sub(rf"(?m)^#?\s*{k}=.*$", lambda m: f"{k}={v}", s, count=1) if re.search(rf"(?m)^#?\s*{k}=", s) else s + f"\n{k}={v}\n"
 put("APP_HOST", os.environ["HOST"]); put("APP_PORT", os.environ["PORT"])
 put("IMAGE_ENGINE", os.environ["ENGINE"])
+put("SHELTON_HTTPS", os.environ["HTTPS_TS"])
 if os.environ["KEY_OR"]: put("OPENROUTER_API_KEY", os.environ["KEY_OR"])
 if os.environ["KEY_AN"]: put("ANTHROPIC_API_KEY", os.environ["KEY_AN"])
 open(p, "w", encoding="utf-8").write(s)
@@ -92,6 +107,12 @@ else
     sed -i 's/^IMAGE_ENGINE=mock/IMAGE_ENGINE=openrouter/' .env
     ok "Motor de imagen: OpenRouter (imágenes reales; el video sigue esperando la GPU)"
   fi
+fi
+if [ "${SHELTON_HTTPS:-}" = "1" ] && ! grep -qE '^SHELTON_HTTPS=1' .env; then
+  # Activar el link https en una instalación que ya existía: Shelton pasa a escuchar solo dentro del equipo
+  sed -i 's/^APP_HOST=.*/APP_HOST=127.0.0.1/' .env
+  if grep -qE '^SHELTON_HTTPS=' .env; then sed -i 's/^SHELTON_HTTPS=.*/SHELTON_HTTPS=1/' .env; else echo "SHELTON_HTTPS=1" >> .env; fi
+  ok "Link https de Tailscale activado"
 fi
 HOST=$(grep -E '^APP_HOST=' .env | cut -d= -f2); PORT=$(grep -E '^APP_PORT=' .env | cut -d= -f2)
 
@@ -154,7 +175,16 @@ for _ in $(seq 1 90); do
   if curl -fsS "http://${HOST}:${PORT}/api/health" >/dev/null 2>&1; then
     BRAIN=$(curl -fsS "http://${HOST}:${PORT}/api/health" | venv/bin/python -c "import json,sys;h=json.load(sys.stdin);print(('OpenRouter' if h.get('provider')=='openrouter' else 'Anthropic')+' · '+h.get('model','')+('' if h.get('claude') else ' (SIN CLAVE)'))")
     say "¡Listo!"
-    echo "  Abre:    http://${HOST}:${PORT}"
+    LINK="http://${HOST}:${PORT}"
+    if grep -qE '^SHELTON_HTTPS=1' .env && command -v tailscale >/dev/null; then
+      if tailscale serve --bg "http://127.0.0.1:${PORT}" >/dev/null 2>&1; then
+        TS_NAME=$(tailscale status --json 2>/dev/null | venv/bin/python -c "import json,sys;print(json.load(sys.stdin)['Self']['DNSName'].rstrip('.'))" 2>/dev/null || true)
+        [ -n "$TS_NAME" ] && LINK="https://${TS_NAME}"
+      else
+        echo "  ⚠ No se pudo publicar el link https. En login.tailscale.com → DNS activa «MagicDNS» y «HTTPS Certificates», y vuelve a correr el instalador."
+      fi
+    fi
+    echo "  Abre:    ${LINK}"
     echo "  Cerebro: ${BRAIN}"
     [ -n "$ADMIN_MSG" ] && echo "$ADMIN_MSG"
     echo "  Logs:    journalctl -u ${SERVICE} -f   (o ${DIR}/shelton.log)"
