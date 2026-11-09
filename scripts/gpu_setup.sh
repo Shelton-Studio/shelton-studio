@@ -5,6 +5,7 @@
 # - Instala ComfyUI (imágenes, edición, video, sonido) en ~/ComfyUI como servicio «shelton-studio-comfy» en 127.0.0.1:8288
 # - Instala la voz local (Chatterbox, tts_server) como servicio «shelton-studio-voz» en 127.0.0.1:8289
 # - Nombres y puertos propios: no pisa otros ComfyUI, voces ni servicios que ya existan en la máquina
+# - Buen vecino: suelta la memoria de la GPU cuando no está generando (--disable-smart-memory; cámbialo con COMFY_ARGS)
 # - Descarga los modelos para la RTX 3090 (o los grupos que indiques: SHELTON_MODELS="imagen edicion")
 # - Todo escucha solo dentro de la PC: se usa a través de Shelton (nadie de afuera llega a la GPU)
 # Volver a correrlo = actualizar ComfyUI y completar modelos que falten.
@@ -52,7 +53,7 @@ After=network-online.target
 
 [Service]
 WorkingDirectory=${COMFY}
-ExecStart=${COMFY}/venv/bin/python main.py --listen 127.0.0.1 --port ${COMFY_PORT}
+ExecStart=${COMFY}/venv/bin/python main.py --listen 127.0.0.1 --port ${COMFY_PORT} ${COMFY_ARGS:---disable-smart-memory}
 Restart=always
 RestartSec=5
 
