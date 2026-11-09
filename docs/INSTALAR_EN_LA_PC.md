@@ -1,6 +1,6 @@
 # Instalar Shelton Studio en la PC con la GPU (máquina `shelton` de Tailscale)
 
-Guía para la persona que instala. Al final, el equipo entra con **https://shelton.tailc84616.ts.net**, con usuario y contraseña.
+Guía para la persona que instala. Al final, el equipo entra con el link que muestra el instalador (en la PC compartida: **https://shelton.tailc84616.ts.net:8443**), con usuario y contraseña.
 
 **Resultado:**
 - Shelton vive en esta PC.
@@ -16,66 +16,16 @@ Cada comando va en su propio bloque: cópialo, pégalo en la terminal y pulsa En
 
 ---
 
-## Paso 0 · Desconectar por completo el Shelton anterior
+## Paso 0 · No tocar nada de lo que ya corre en la PC
 
-El Shelton que hay hoy en esta PC es **otro proyecto**, sin relación con Shelton Studio. Se apaga, se desactiva, se saca del link https y su carpeta se mueve aparte, para que no quede conectado a nada nuestro. No se borra: si algún día lo quieren, sigue en su carpeta.
+Esta PC es **compartida**: tiene otros proyectos funcionando, con sus servicios, Docker, bases de datos, Ollama, su propio ComfyUI y su voz. **No se apaga ni se borra nada de eso.** Shelton Studio se instala **al lado**, totalmente separado:
+- carpeta propia: `~/shelton-studio`;
+- servicio propio: `shelton-studio`;
+- puerto propio (el primero libre desde el 8010, solo dentro de la PC);
+- base de datos propia, dentro de su carpeta;
+- link https propio: si el link sin número ya lo usa otra app, el instalador usa `https://shelton.tailc84616.ts.net:8443` (o el siguiente puerto libre) y no pisa lo de ellos.
 
-Entrar como root:
-
-```bash
-sudo -i
-```
-
-Ver qué servicios o programas de Shelton hay corriendo:
-
-```bash
-systemctl list-units --type=service --all | grep -i -E "shelton|comfy|voz|tts"
-```
-
-```bash
-ss -ltnp | grep -E ":80|:443|:8[0-9]{3}"
-```
-
-Ver qué publica hoy Tailscale en el link https:
-
-```bash
-tailscale serve status
-```
-
-Por cada servicio del Shelton viejo que apareció, detenlo y desactívalo. Cambia `NOMBRE` por el nombre que salió, por ejemplo `shelton.service`:
-
-```bash
-systemctl disable --now NOMBRE
-```
-
-- Si corre en una ventana de terminal, en `screen` o en `tmux`, ciérralo ahí (`Ctrl+C`).
-- Si corre con Docker, detenlo para que no vuelva a arrancar solo. Cambia `CONTENEDOR` por el nombre que muestra `docker ps`:
-
-```bash
-docker update --restart=no CONTENEDOR
-```
-
-```bash
-docker stop CONTENEDOR
-```
-
-Sacarlo del link https (el link queda libre para el nuestro):
-
-```bash
-tailscale serve reset
-```
-
-Si el proyecto viejo está en la carpeta `~/shelton-studio`, muévelo aparte para que no se mezcle con el nuevo (si no existe, este comando no hace nada):
-
-```bash
-[ -d ~/shelton-studio ] && mv ~/shelton-studio ~/shelton-viejo-desconectado
-```
-
-Comprueba que ya no responde nada en el link (debe dar error o no conectar):
-
-```bash
-curl -sk -o /dev/null -w "%{http_code}\n" https://shelton.tailc84616.ts.net
-```
+No corras `tailscale serve reset`: borraría los links de las otras apps.
 
 ## Paso 1 · Tailscale con HTTPS
 
@@ -97,7 +47,7 @@ El instalador pregunta tres cosas:
 2. **Clave de OpenRouter** → pégala (no se ve al escribir).
 3. **Usuario admin y contraseña** → mínimo 10 caracteres. Si la dejas vacía, genera una segura y la muestra **una sola vez**: guárdala.
 
-Al final muestra: `Abre: https://shelton.tailc84616.ts.net`. Ábrelo desde cualquier equipo de la red Tailscale y entra con ese usuario.
+Al final muestra el link, por ejemplo `Abre: https://shelton.tailc84616.ts.net:8443`. Ábrelo desde cualquier equipo de la red Tailscale y entra con ese usuario.
 
 > Si dice que no pudo publicar el link https: revisa el paso 1 (HTTPS Certificates) y vuelve a correr el instalador.
 
@@ -121,7 +71,9 @@ ubuntu-drivers install
 reboot
 ```
 
-Instala ComfyUI y la voz local como servicios, y baja los modelos. Tarda: son unos 120 GB.
+Instala **nuestro propio** ComfyUI y nuestra voz local, como servicios `shelton-studio-comfy` (puerto 8288) y `shelton-studio-voz` (puerto 8289), y baja los modelos. No pisa el ComfyUI ni la voz que ya existan. Tarda: son unos 120 GB.
+
+> Si la GPU ya la usan otros programas (Ollama, otro ComfyUI), los modelos grandes pueden quedarse sin memoria. Coordínenlo antes de probar video local.
 
 ```bash
 bash ~/shelton-studio/scripts/gpu_setup.sh
@@ -151,7 +103,7 @@ SHELTON_MODELS="imagen edicion" bash ~/shelton-studio/scripts/gpu_setup.sh
 |---|---|
 | Ver si Shelton está vivo | `systemctl status shelton-studio` |
 | Ver sus mensajes | `journalctl -u shelton-studio -f` |
-| ComfyUI / voz | `journalctl -u comfyui -f` · `journalctl -u shelton-voz -f` |
+| ComfyUI / voz (las nuestras) | `journalctl -u shelton-studio-comfy -f` · `journalctl -u shelton-studio-voz -f` |
 | Actualizar Shelton | vuelve a correr el comando del paso 2 |
 | Olvidé la contraseña | `cd ~/shelton-studio && venv/bin/python -m app.auth reset-password admin` |
 | Copia de seguridad | en la web: Ajustes → **Exportar todo** |

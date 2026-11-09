@@ -177,9 +177,35 @@ for _ in $(seq 1 90); do
     say "¡Listo!"
     LINK="http://${HOST}:${PORT}"
     if grep -qE '^SHELTON_HTTPS=1' .env && command -v tailscale >/dev/null; then
-      if tailscale serve --bg "http://127.0.0.1:${PORT}" >/dev/null 2>&1; then
+      # Puerto https: nunca pisa lo que otras apps ya publican en esta máquina. Usa 443 (link sin número) solo si
+      # está libre o ya es de Shelton; si no, el primero libre de 8443, 8444, 9443, 10443 (o SHELTON_HTTPS_PORT).
+      HTTPS_PORT=$(tailscale serve status --json 2>/dev/null | TARGET="http://127.0.0.1:${PORT}" WANT="${SHELTON_HTTPS_PORT:-}" \
+        venv/bin/python -c "
+import json, os, sys
+target, want = os.environ['TARGET'], os.environ['WANT']
+try:
+    web = (json.load(sys.stdin) or {}).get('Web') or {}
+    ok = True
+except Exception:
+    web, ok = {}, False
+used = {}
+for hostport, cfg in web.items():
+    port = hostport.rsplit(':', 1)[-1]
+    proxies = [h.get('Proxy', '') for h in ((cfg or {}).get('Handlers') or {}).values()]
+    used[port] = proxies
+mine = [p for p, prox in used.items() if any(x.rstrip('/') == target for x in prox)]
+if want:
+    print(want)
+elif mine:
+    print(mine[0])
+elif ok and '443' not in used:
+    print('443')
+else:
+    print(next(p for p in ('8443', '8444', '9443', '10443') if p not in used))
+" 2>/dev/null || echo 8443)
+      if tailscale serve --bg --https="${HTTPS_PORT}" "http://127.0.0.1:${PORT}" >/dev/null 2>&1; then
         TS_NAME=$(tailscale status --json 2>/dev/null | venv/bin/python -c "import json,sys;print(json.load(sys.stdin)['Self']['DNSName'].rstrip('.'))" 2>/dev/null || true)
-        [ -n "$TS_NAME" ] && LINK="https://${TS_NAME}"
+        [ -n "$TS_NAME" ] && LINK="https://${TS_NAME}$([ "$HTTPS_PORT" = "443" ] || echo ":${HTTPS_PORT}")"
       else
         echo "  ⚠ No se pudo publicar el link https. En login.tailscale.com → DNS activa «MagicDNS» y «HTTPS Certificates», y vuelve a correr el instalador."
       fi
