@@ -416,3 +416,87 @@ async def network_review_now():
         return {"running": True}
     _review_task = asyncio.create_task(pipeline.run_network_review())
     return {"running": True, "started": True}
+
+
+# ------------------------------------------------------------------ LoRA propia de cada modelo (entrenar en la GPU)
+@router.get("/subjects/{sid}/lora")
+async def lora_status(sid: str):
+    from app import lora
+    try:
+        return lora.status(sid)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+class LoraTrainIn(BaseModel):
+    steps: int | None = None
+
+
+@router.post("/subjects/{sid}/lora/train")
+async def lora_train(sid: str, body: LoraTrainIn):
+    from app import lora
+    try:
+        return lora.start(sid, body.steps)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/subjects/{sid}/lora/cancel")
+async def lora_cancel(sid: str):
+    from app import lora
+    lora.cancel(sid)
+    return {"ok": True}
+
+
+class LoraToggleIn(BaseModel):
+    enabled: bool
+
+
+@router.post("/subjects/{sid}/lora/enabled")
+async def lora_enabled(sid: str, body: LoraToggleIn):
+    from app.serialize import subject_dict
+    with session() as s:
+        sub = s.get(Subject, sid)
+        if not sub:
+            raise HTTPException(404, "Modelo no encontrado")
+        sub.lora_enabled = body.enabled
+        s.flush()
+        data = subject_dict(sub)
+    events.publish({"type": "subject", "subject": data})
+    return data
+
+
+# ------------------------------------------------------------------ Archivos de memoria (todo en .md, nada se borra)
+@router.get("/memory/files")
+async def memory_files():
+    from app import memoria
+    return memoria.tree()
+
+
+@router.get("/memory/file")
+async def memory_file(path: str, download: bool = False):
+    from fastapi.responses import FileResponse as _FR
+    from app import memoria
+    try:
+        p = memoria.resolve(path)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return _FR(p, media_type="text/markdown; charset=utf-8", filename=p.name if download else None)
+
+
+@router.get("/memory/zip")
+async def memory_zip(folder: str = ""):
+    from fastapi.responses import Response as _R
+    from app import memoria
+    data = await asyncio.to_thread(memoria.zip_bytes, folder or None)
+    name = f"memoria_{folder or 'completa'}_{datetime.now():%Y-%m-%d}.zip"
+    return _R(data, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@router.post("/training/{agent}/{entry_id}/restore")
+async def lesson_restore(agent: str, entry_id: str):
+    from app.agents import training
+    try:
+        return training.restore(agent, entry_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))

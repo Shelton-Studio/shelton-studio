@@ -70,6 +70,12 @@ Cómo trabajas:
   todo lo que corre (live_status). Responde corto y al grano: confirma qué lanzaste, qué sigue corriendo y cuánto falta.
 - Mejor hora para publicar: usa best_times (por red y por modelo; mezcla el historial del estudio con investigación
   web y se actualiza cada 2 h). Recomiéndala cuando entregues contenido o pidan publicar/programar.
+- Memoria en archivos: al empezar cada sesión recibes lo último que hicieron tú y tu equipo. Si necesitas más
+  contexto (qué se decidió antes, qué aprendió un agente, una conversación vieja), usa memory_archive (search/read).
+  Nada se borra: las lecciones viejas quedan archivadas.
+- LoRA propia: si quieren que la GPU local "aprenda" de verdad a un modelo del banco (la misma cara siempre, sin
+  depender de la nube), usa train_subject_lora. Necesita al menos 8 fotos buenas de ese modelo (mejor 15-30: de su
+  ficha o de posts aprobados, hechas con cualquier IA). Cuando está lista, en modo Local sus fotos salen con su LoRA.
 - Trabajo en paralelo: puedes lanzar varios pedidos a la vez (varios modelos, reels y fotos). Mira studio_capacity
   para saber cuántos corren a la vez y cuánto tardan, y da tiempos realistas. Mientras algo se procesa, propón
   avanzar con otra cosa (otro modelo, más fotos del mismo, el texto, la voz).
@@ -238,6 +244,17 @@ TOOLS = [
           {"refresh": {"type": "boolean"}, "model": {"type": "string", "description": "Solo este modelo del banco"}}, []),
     _tool("live_status", "Qué está vivo AHORA en paralelo: agentes y motores trabajando, trabajos en cola/corriendo "
           "con su paso, actividad de la última hora y la última revisión de la red.", {}, []),
+    _tool("train_subject_lora", "Entrena la LoRA de un modelo del banco en la GPU local (aprende su cara/forma de "
+          "verdad; tarda 1-2 h y mientras tanto las fotos locales esperan). Usa sus fotos de ficha y los posts aprobados "
+          "donde aparece (mínimo 8, mejor 15-30). action=status para ver cómo va o cuántas fotos tiene.",
+          {"subject": {"type": "string"}, "action": {"type": "string", "enum": ["start", "status", "cancel"]},
+           "steps": {"type": "integer", "description": "Pasos de entrenamiento (vacío = 2000)"}}, ["subject"]),
+    _tool("memory_archive", "Archivo de memoria (todo en .md, nada se borra): lecciones activas y archivadas de cada "
+          "agente y de cada modelo del banco, bitácoras diarias de trabajo, conversaciones pasadas y revisiones. "
+          "action=list para ver las carpetas, search para buscar un texto, read para abrir un archivo.",
+          {"action": {"type": "string", "enum": ["list", "search", "read"]},
+           "query": {"type": "string", "description": "Texto a buscar (search)"},
+           "path": {"type": "string", "description": "Ruta del archivo (read), como la devuelve list o search"}}, ["action"]),
     _tool("list_audio", "Biblioteca de audios: WAV/MP3 subidos y audios sacados de videos (con id, nombre y duración).", {}, []),
     _tool("use_audio", "Le pone un audio de la biblioteca a un post de imagen o video (crea una versión nueva). "
           "mode='replace' reemplaza el audio; 'mix' lo deja de fondo sin tapar la voz que ya tenga.",
@@ -560,6 +577,35 @@ async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
         return json.dumps({"working_now": working.snapshot(), **live_state(), "capacity": pipeline.capacity(),
                            "last_network_review": _review_brief()}, ensure_ascii=False, default=str)[:8000]
 
+    if name == "memory_archive":
+        from app import memoria
+        act = args.get("action", "list")
+        if act == "search":
+            return json.dumps(memoria.search(args.get("query", "")), ensure_ascii=False)
+        if act == "read":
+            try:
+                return memoria.resolve(args.get("path", "")).read_text(encoding="utf-8")[:12000]
+            except ValueError as e:
+                return str(e)
+        return json.dumps([{"carpeta": f["key"], "nombre": f["name"], "grupo": f["group"], "archivos": f["count"],
+                            "recientes": [x["path"] for x in f["files"][:5]]} for f in memoria.tree()], ensure_ascii=False)[:12000]
+
+    if name == "train_subject_lora":
+        from app import lora
+        sids, missing = pipeline.find_subjects([args["subject"]])
+        if not sids:
+            return f"No encontré el modelo «{args['subject']}» en el banco."
+        action = args.get("action") or "start"
+        if action == "cancel":
+            lora.cancel(sids[0])
+            return "Entrenamiento cancelado."
+        if action == "start":
+            r = lora.start(sids[0], args.get("steps"))
+            await emit({"type": "status", "text": f"Entrenando la LoRA con {r['images']} fotos ({r['steps']} pasos)…"})
+            return json.dumps({**r, "note": "Corre en segundo plano en la GPU local (1-2 h). Se ve en el Banco y en En vivo."},
+                              ensure_ascii=False)
+        return json.dumps(lora.status(sids[0]), ensure_ascii=False)
+
     if name == "studio_capacity":
         return json.dumps(pipeline.capacity(), ensure_ascii=False)
 
@@ -719,6 +765,12 @@ async def _turn(conv_id, user_text, upload_post_ids, emit, agent, engine, attach
     await emit({"type": "conversation", "id": conv_id, "agent": agent})
 
     content: list = [{"type": "text", "text": studio_context(ctx["engine"])}]
+    if not messages:   # sesión nueva: retoma el contexto desde los archivos de memoria
+        from app import memoria
+        digest = memoria.team_digest()
+        if digest:
+            content.append({"type": "text", "text": "[Memoria del estudio — lo último que hicieron tú y tu equipo, "
+                                                    "leído de los archivos. Úsalo para retomar donde quedaron]\n" + digest})
     for pid in upload_post_ids:
         with session() as s:
             p = s.get(Post, pid)
@@ -781,4 +833,7 @@ async def _turn(conv_id, user_text, upload_post_ids, emit, agent, engine, attach
     with session() as s:
         conv = s.get(Conversation, conv_id)
         conv.api_messages, conv.display = messages, display
+        title, created = conv.title, conv.created_at
+    from app import memoria
+    memoria.save_conversation(conv_id, title, registry.AGENTS.get(agent, {}).get("name", agent), display, created)
     await emit({"type": "message", "text": final_text, "post_ids": created_posts})

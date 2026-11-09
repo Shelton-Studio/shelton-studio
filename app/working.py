@@ -15,7 +15,7 @@ _ids = itertools.count(1)
 
 # Pseudo-agentes para los motores (no son agentes de Claude, pero también trabajan)
 ENGINE_NAMES = {"motor_imagen": "Motor de imagen", "motor_video": "Motor de video",
-                "motor_voz": "Motor de voz", "motor_sonido": "Motor de sonido"}
+                "motor_voz": "Motor de voz", "motor_sonido": "Motor de sonido", "lora_trainer": "Entrenador de LoRA"}
 
 
 def _now_iso() -> str:
@@ -60,3 +60,5 @@ def track(agent: str, task: str = "", model: str = "", post_id: str | None = Non
                 events.publish({"type": "run", "agent": agent, "ok": ok})
             except Exception:
                 pass
+            from app import memoria
+            memoria.log_work(agent, task, ok, model, err)
