@@ -21,6 +21,7 @@ from app.config import settings
 from app.db import User, session
 
 COOKIE = "shelton_session"
+MIN_PASSWORD = 5    # largo mínimo de la contraseña (sin otras reglas)
 DAYS = 365          # «mantener sesión iniciada»: se renueva sola cada vez que entras
 PUBLIC_PREFIXES = ("/login", "/api/auth/", "/static/", "/media/", "/favicon")
 PUBLIC_EXACT = {"/api/health"}
@@ -46,10 +47,8 @@ def verify_password(pw: str, stored: str) -> bool:
 
 def check_strength(pw: str) -> str:
     """'' si está bien; si no, por qué."""
-    if len(pw) < 10:
-        return "La contraseña debe tener al menos 10 caracteres"
-    if pw.lower() in ("contraseña", "contrasena", "password12", "shelton123", "admin12345", "1234567890"):
-        return "Esa contraseña es muy fácil de adivinar"
+    if len(pw) < MIN_PASSWORD:
+        return f"La contraseña debe tener al menos {MIN_PASSWORD} caracteres"
     return ""
 
 
@@ -224,7 +223,7 @@ def _cli() -> None:
         print(f"CREATED {u['username']} {pw if not os.environ.get('SHELTON_ADMIN_PASSWORD') else ''}".strip())
     elif cmd == "create-admin":
         user = input("Usuario admin [admin]: ").strip() or "admin"
-        pw = getpass.getpass("Contraseña (mín. 10 caracteres; Enter = generar una segura): ")
+        pw = getpass.getpass("Contraseña (mín. 5 caracteres; Enter = generar una segura): ")
         if not pw:
             pw = generate_password()
             print(f"Contraseña generada: {pw}")
