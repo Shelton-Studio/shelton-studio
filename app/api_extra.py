@@ -500,3 +500,10 @@ async def lesson_restore(agent: str, entry_id: str):
         return training.restore(agent, entry_id)
     except ValueError as e:
         raise HTTPException(404, str(e))
+
+
+@router.get("/lora/available")
+async def lora_available():
+    from app import lora
+    ok, why = lora.available()
+    return {"trainer_ready": ok, "trainer_msg": why, "min_images": lora.MIN_IMAGES}

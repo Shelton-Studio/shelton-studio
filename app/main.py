@@ -443,7 +443,7 @@ async def subject_from_photos(files: list[UploadFile] = File(...), name: str = F
     if not name.strip():
         raise HTTPException(400, "Ponle un nombre al modelo")
     paths = []
-    for f in files[:20]:
+    for f in files[:40]:   # hasta 40: alcanzan para entrenar su LoRA (15-30 ideal)
         paths.append(save_bytes(_normalize(await f.read()), f"subject_up_{uuid.uuid4().hex[:8]}.png"))
     try:
         return await pipeline.create_subject_from_photos(name, paths, kind or "auto", notes)
