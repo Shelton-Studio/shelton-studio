@@ -45,7 +45,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/juancamp7777/alligator-AI/ma
 El instalador pregunta tres cosas:
 1. **¿Link https privado de Tailscale?** → Enter (sí).
 2. **Clave de OpenRouter** → pégala (no se ve al escribir).
-3. **Usuario admin y contraseña** → mínimo 10 caracteres. Si la dejas vacía, genera una segura y la muestra **una sola vez**: guárdala.
+3. **Usuario admin y contraseña** → mínimo 5 caracteres. Si la dejas vacía, genera una segura y la muestra **una sola vez**: guárdala.
 
 Al final muestra el link, por ejemplo `Abre: https://shelton.tailc84616.ts.net:8443`. Ábrelo desde cualquier equipo de la red Tailscale y entra con ese usuario.
 

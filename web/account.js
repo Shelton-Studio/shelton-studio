@@ -48,7 +48,7 @@ async function logout() {
 
 function changePassword() {
   const box = modal("Cambiar contraseña", `<label class="f">Contraseña actual<input type="password" id="pw-c" autocomplete="current-password"></label>
-    <label class="f">Nueva contraseña (mín. 10 caracteres)<input type="password" id="pw-n" autocomplete="new-password"></label>
+    <label class="f">Nueva contraseña (mín. 5 caracteres)<input type="password" id="pw-n" autocomplete="new-password"></label>
     <label class="f">Repite la nueva<input type="password" id="pw-r" autocomplete="new-password"></label>
     <div class="hint">Al cambiarla se cierran las sesiones abiertas en otros navegadores.</div>`,
     `<button class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn primary" id="pw-go">Guardar</button>`);
@@ -64,7 +64,7 @@ async function manageUsers() {
   const box = modal("Usuarios", `<div class="hint">Los <b>admin</b> pueden todo (incluido crear usuarios). Los <b>editores</b> usan el estudio pero no administran cuentas.</div>
     ${list.map((u) => `<div class="card" style="padding:12px;display:flex;gap:10px;align-items:center"><span class="u-av">${esc(u.username[0].toUpperCase())}</span><div class="grow"><b>${esc(u.username)}</b> <span class="chip ${u.role === "admin" ? "accent" : ""}">${u.role}</span><div class="faint small">Último ingreso: ${u.last_login ? when(u.last_login) : "nunca"}</div></div>${u.id !== S.me.id ? `<button class="btn sm ghost" data-udel="${u.id}">${icon("trash", 14)}</button>` : '<span class="faint small">tú</span>'}</div>`).join("")}
     <h3 style="margin:8px 0 0">Nuevo usuario</h3><div class="row"><label class="f grow">Usuario<input id="nu-u" autocomplete="off"></label><label class="f" style="width:140px">Rol<select id="nu-r"><option value="editor">Editor</option><option value="admin">Admin</option></select></label></div>
-    <label class="f">Contraseña (mín. 10 caracteres)<input type="password" id="nu-p" autocomplete="new-password"></label>`,
+    <label class="f">Contraseña (mín. 5 caracteres)<input type="password" id="nu-p" autocomplete="new-password"></label>`,
     `<button class="btn ghost" onclick="closeModal()">Cerrar</button><button class="btn primary" id="nu-go">Crear usuario</button>`);
   $("#nu-go", box).onclick = async () => {
     try { await api("/api/users", { method: "POST", body: { username: $("#nu-u").value, password: $("#nu-p").value, role: $("#nu-r").value } }); toast("Usuario creado", "good", "👤"); manageUsers(); }

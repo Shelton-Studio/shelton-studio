@@ -97,7 +97,7 @@ def test_brute_force_is_slowed(site):
 
 def test_users_and_password_change(site):
     admin = login(site)
-    assert admin.post("/api/users", json={"username": "maria", "password": "corta", "role": "editor"}).status_code == 400
+    assert admin.post("/api/users", json={"username": "maria", "password": "abcd", "role": "editor"}).status_code == 400   # menos de 5
     u = admin.post("/api/users", json={"username": "maria", "password": "estrella-del-sur-9", "role": "editor"}).json()
     assert u["role"] == "editor"
     assert admin.post("/api/users", json={"username": "maria", "password": "estrella-del-sur-9"}).status_code == 400

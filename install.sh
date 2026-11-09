@@ -123,7 +123,7 @@ if venv/bin/python -m app.auth list 2>/dev/null | grep -q .; then
 else
   echo "  Crea tu usuario admin para entrar a Shelton."
   echo -n "  Usuario [admin]: "; ADMIN_USER=$(ask); ADMIN_USER="${ADMIN_USER:-admin}"
-  echo "  Contraseña (mín. 10 caracteres, no se verá al escribir). Enter = generar una segura:"
+  echo "  Contraseña (mín. 5 caracteres, no se verá al escribir). Enter = generar una segura:"
   ADMIN_PW=$(ask -s); echo
   if [ -n "$ADMIN_PW" ]; then
     echo "  Repítela:"; ADMIN_PW2=$(ask -s); echo
