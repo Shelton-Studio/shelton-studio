@@ -218,6 +218,30 @@ journalctl -u shelton-studio -n 100 --no-pager
   - Shelton pasa cada lección, adaptada, a los demás agentes que la necesitan.
 - **Exportar todo** (Ajustes): un ZIP con contenido, banco, audios, voces, memoria, referencias y un respaldo para restaurar. Cada modelo y cada post también se pueden exportar por separado.
 
+### LoRA propia de cada modelo (la GPU local aprende de verdad)
+
+- **Instalar el entrenador**, una vez, en la PC con la GPU (ai-toolkit, con su propio Python 3.12):
+
+  ```bash
+  bash ~/shelton-studio/scripts/lora_setup.sh
+  ```
+
+- **Entrenar:** en el **Banco**, cada modelo tiene el botón **🎓 Entrenar LoRA** (o pídeselo a Shelton: "entrena a Camila").
+  - Usa las fotos de su ficha y los posts aprobados donde aparece sola, hechos con cualquier IA: mínimo 8, ideal 15-30.
+  - En la 3090 tarda entre 1 y 2 horas. El avance se ve en el Banco y en **En vivo**. Mientras tanto, las fotos locales esperan su turno.
+- **Usar:** cuando la LoRA está lista, en modo **Local** las fotos de ese modelo salen con Z-Image Turbo + su LoRA, sin depender de la nube. Se puede apagar desde su ficha.
+
+### Archivos de memoria (nada se borra)
+
+- **Pestaña Archivos:** todo lo que aprenden y hacen Shelton y cada subagente, en archivos `.md`. Se ven y se descargan uno por uno, por carpeta o todo en un ZIP. Incluye:
+  - lecciones activas y archivadas;
+  - memoria de cada modelo del banco;
+  - bitácora diaria de cada agente;
+  - conversaciones completas;
+  - revisiones del equipo.
+- **Nada se borra:** "borrar" una lección la **archiva**. Deja de aplicarse, pero queda guardada y se puede **reactivar**.
+- **Al empezar cada sesión,** Shelton relee solo lo último de cada agente y las conversaciones recientes, para retomar donde quedaron. Si necesita más, busca y abre cualquier archivo de la memoria.
+
 ### Mover tus datos a otra máquina
 
 Todo lo tuyo vive en dos lugares:

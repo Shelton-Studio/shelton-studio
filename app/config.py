@@ -46,6 +46,11 @@ class Settings:
 
     # Qwen-Image (calidad máxima, mejor texto dentro de la imagen). Comparte text encoder y VAE con el editor.
     QWEN_IMAGE_UNET = os.getenv("QWEN_IMAGE_UNET", "qwen_image_fp8_e4m3fn.safetensors")
+    # Entrenamiento de LoRA en la GPU local (ai-toolkit, scripts/lora_setup.sh)
+    AITK_DIR = os.getenv("AITK_DIR", str(Path.home() / "ai-toolkit"))
+    COMFY_LORA_DIR = os.getenv("COMFY_LORA_DIR", str(Path.home() / "ComfyUI" / "models" / "loras"))
+    LORA_STEPS = int(os.getenv("LORA_STEPS", "2000"))
+    LORA_STRENGTH = float(os.getenv("LORA_STRENGTH", "1.0"))
     QWEN_IMAGE_LORA = os.getenv("QWEN_IMAGE_LORA", "Qwen-Image-Lightning-8steps-V1.0.safetensors")
     QWEN_IMAGE_STEPS = int(os.getenv("QWEN_IMAGE_STEPS", "8"))
 

@@ -144,9 +144,28 @@ def update(agent: str, entry_id: str, **fields) -> dict:
 
 
 def delete(agent: str, entry_id: str) -> None:
+    """Nada se borra: la lección pasa a _archivo/ (deja de aplicarse, pero queda guardada y se puede reactivar)."""
     path = _dir(agent) / f"{Path(entry_id).name}.md"
     if path.exists():
+        e = _parse(path)
+        e["status"] = "disabled"
+        e["decided_by"] = (e.get("decided_by") or "") + f" · archivada {datetime.now():%Y-%m-%d %H:%M}"
+        arch = path.parent / "_archivo"
+        arch.mkdir(exist_ok=True)
+        _write(arch / path.name, e)
         path.unlink()
+
+
+def restore(agent: str, entry_id: str) -> dict:
+    """Reactiva una lección archivada."""
+    src = _dir(agent) / "_archivo" / f"{Path(entry_id).name}.md"
+    if not src.exists():
+        raise ValueError("Lección archivada no encontrada")
+    e = _parse(src)
+    e["status"] = "active"
+    _write(_dir(agent) / src.name, e)
+    src.unlink()
+    return _parse(_dir(agent) / src.name)
 
 
 def knowledge(agent: str) -> str:

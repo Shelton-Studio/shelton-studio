@@ -104,6 +104,11 @@ def capacity() -> dict:
 
 
 async def start_workers() -> None:
+    try:
+        from app import lora
+        lora.recover_after_restart()
+    except Exception:  # noqa: BLE001
+        log.exception("recuperar LoRAs")
     # Al arrancar, retoma lo que quedó a medias.
     with session() as s:
         for job in s.query(Job).filter(Job.status.in_(["pending", "running"])).order_by(Job.created_at):
@@ -280,23 +285,49 @@ async def _create_post(post_id: str, payload: dict) -> None:
             base_note += f" Requested changes: {payload['changes']}."
     else:
         refs = reference_images(subjects)
+    # LoRA propia: si todos los modelos del post ya fueron aprendidos en la GPU local, se usan sus LoRAs
+    loras, lora_note = [], ""
+    if subjects and not base_note:
+        from app import lora as lora_mod
+        found = lora_mod.loras_for(subjects)
+        if found:
+            gen_engine = get_engine("generate", choice)
+            if getattr(gen_engine, "name", "") == "comfyui" and hasattr(gen_engine, "generate_with_loras"):
+                from app.agents import training as _tr
+                loras, refs = found, []
+                lora_note = ("The recurring subject(s) below are LEARNED by the image model (custom LoRA). Write each "
+                             "one's trigger word EXACTLY where that subject appears in the prompt, then describe the new "
+                             "scene, pose, outfit, light and camera. Do not mention reference images.\n" +
+                             "\n".join(f"- {s.name} ({s.kind}): trigger `{t}` — {s.description[:400]}"
+                                        + (f" Lessons: {_tr.subject_knowledge(s.id)}" if _tr.subject_knowledge(s.id) else "")
+                                        for s, (_, t) in zip(subjects, found)))
     engine = get_engine("subject" if refs else "generate", choice)
     from app.engines import engine_label
-    _mark(post_id, "image", engine_label(engine, "subject" if refs else "generate"))
+    _mark(post_id, "image", engine_label(engine, "subject" if refs else "generate")
+          + (" + LoRA " + ", ".join(s.name for s in subjects) if loras else ""))
 
     feedback: list[str] = []
     tries: list[dict] = []   # todos los intentos se conservan
     for attempt in range(1, 2 + max(0, settings.QA_MAX_RETRIES)):
         _update_post(post_id, status="generating", attempts=attempt, error="")
         events.publish({"type": "progress", "id": post_id, "text": f"Director creativo (intento {attempt})"})
-        ad = await sp.art_direct(post.idea, platform, brand, feedback, subjects, base_note, 2 if base_note else 3)
+        if loras:
+            ad = await sp.art_direct(post.idea, platform, brand, feedback, None, lora_note)
+            for _, trig in loras:   # la palabra clave tiene que estar sí o sí
+                if trig not in ad["prompt"]:
+                    ad["prompt"] = f"{trig}, {ad['prompt']}"
+        else:
+            ad = await sp.art_direct(post.idea, platform, brand, feedback, subjects, base_note, 2 if base_note else 3)
         seed = random.randint(1, 2**31 - 1)
 
         step = _progress(post_id, f"Generando imagen (intento {attempt})")
         from app import working
         from app.engines import engine_label as _el
         with working.track("motor_imagen", f"{post.idea[:120]} (intento {attempt})", _el(engine, "generate"), post_id, log=True):
-            if refs:
+            if loras:
+                raw = await engine.generate_with_loras([(n, settings.LORA_STRENGTH) for n, _ in loras], ad["prompt"],
+                                                       width, height, seed, step)
+            elif refs:
                 raw = await engine.generate_with_refs(refs, ad["prompt"], width, height, seed, step)
             else:
                 raw = await engine.generate(ad["prompt"], width, height, seed, step)

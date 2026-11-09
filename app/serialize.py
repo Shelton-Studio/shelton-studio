@@ -28,6 +28,8 @@ def subject_dict(s: Subject) -> dict:
             "references": [url_for(r) for r in (s.references or [])],
             "alternatives": [url_for(a) for a in (s.alternatives or [])],
             "voice_url": url_for(s.voice_path) if s.voice_path else "", "voice_style": s.voice_style or "",
+            "lora": {"status": s.lora_status or "", "progress": round(s.lora_progress or 0, 1), "name": s.lora_name or "",
+                     "trigger": s.lora_trigger or "", "enabled": s.lora_enabled is not False, "info": s.lora_info or {}},
             "created_at": s.created_at.isoformat() + "Z" if s.created_at else None}
 
 

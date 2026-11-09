@@ -75,6 +75,15 @@ class ComfyEngine:
         async with gpu_slot(self.url):
             return (await self.client.run(wf, on_progress))[0]
 
+    async def generate_with_loras(self, loras: list[tuple[str, float]], prompt, width, height, seed,
+                                  on_progress: Progress = None) -> bytes:
+        """Generar con LoRAs propias del banco (aprendidas en la GPU): se enchufan después del modelo base."""
+        w, h = self._size(width, height)
+        wf = self._wf("generate", {"prompt": prompt, "width": w, "height": h, "seed": seed})
+        inject_loras(wf, loras)
+        async with gpu_slot(self.url):
+            return (await self.client.run(wf, on_progress))[0]
+
     async def edit(self, image, instruction, seed, on_progress: Progress = None) -> bytes:
         async with gpu_slot(self.url):
             name = await self.client.upload_image(image, f"shelton_{uuid.uuid4().hex[:10]}.png")
@@ -189,3 +198,25 @@ def _attach_extra_refs(wf: dict, names: list[str]) -> None:
                                    "image": [load_id, 0]}}
         for enc in encoders:
             wf[enc]["inputs"][f"image{i}"] = [scale_id, 0]
+
+
+def inject_loras(wf: dict, loras: list[tuple[str, float]]) -> dict:
+    """Agrega nodos LoraLoaderModelOnly entre el modelo base (UNETLoader/UnetLoaderGGUF) y lo que lo usa."""
+    base = next((k for k, v in wf.items() if isinstance(v, dict) and v.get("class_type") in ("UNETLoader", "UnetLoaderGGUF")), None)
+    if not base or not loras:
+        return wf
+    prev = base
+    new_ids = []
+    for i, (name, strength) in enumerate(loras):
+        nid = f"shl_lora_{i}"
+        wf[nid] = {"class_type": "LoraLoaderModelOnly",
+                   "inputs": {"model": [prev, 0], "lora_name": name, "strength_model": float(strength)}}
+        new_ids.append(nid)
+        prev = nid
+    for k, v in wf.items():
+        if k in new_ids or not isinstance(v, dict):
+            continue
+        for key, val in (v.get("inputs") or {}).items():
+            if isinstance(val, list) and len(val) == 2 and val[0] == base and val[1] == 0:
+                v["inputs"][key] = [prev, 0]
+    return wf

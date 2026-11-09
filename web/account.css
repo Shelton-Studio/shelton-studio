@@ -28,3 +28,16 @@
 body.route-chat .buddy { bottom: 150px; }
 body.route-chat .asks { bottom: 240px; }
 @media (max-width: 720px) { body.route-chat .buddy { bottom: 170px; } }
+
+/* LoRA de cada modelo */
+.lora-box { display: grid; gap: 6px; padding-top: 8px; margin-top: 4px; border-top: 1px dashed var(--line); }
+.lora-bar { height: 6px; border-radius: 99px; background: var(--panel-3); overflow: hidden; }
+.lora-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .6s; }
+
+/* Archivos de memoria */
+.ar-folder > summary { list-style: none; }
+.ar-folder > summary::-webkit-details-marker { display: none; }
+.ar-files { display: grid; gap: 6px; margin-top: 12px; max-height: 420px; overflow-y: auto; }
+.ar-file { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 10px; background: var(--bg-2); min-width: 0; }
+.ar-pre { white-space: pre-wrap; word-break: break-word; background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px;
+  padding: 14px; max-height: 60vh; overflow: auto; font-size: 13px; line-height: 1.5; margin: 8px 0 0; }

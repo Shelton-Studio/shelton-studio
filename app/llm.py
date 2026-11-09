@@ -64,6 +64,8 @@ def _log_run(agent: str, ok: bool, start: float, model: str, resp=None, error: s
                            duration_ms=int((time.monotonic() - start) * 1000), error=error[:1000], summary=summary[:300]))
     except Exception:
         log.exception("no se pudo registrar la ejecución")
+    from app import memoria
+    memoria.log_work(agent, summary, ok, model, error)
     from app import events
     events.publish({"type": "run", "agent": agent, "ok": ok})
 

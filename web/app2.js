@@ -221,7 +221,7 @@ function bindLessons(root, refresh) {
     await api(`/api/training/${b.dataset.a}/${b.dataset.id}/resolve`, { method: "POST", body: { action: b.dataset.res, decided_by: localStorage.getItem("author") || "" } }); refresh(); updateCounts();
   });
   $$("[data-tog]", root).forEach((b) => b.onclick = async () => { await api(`/api/training/${b.dataset.a}/${b.dataset.id}`, { method: "PATCH", body: { enabled: b.dataset.tog === "1" } }); refresh(); });
-  $$("[data-del-l]", root).forEach((b) => b.onclick = async () => { if (confirm("¿Borrar esta lección?")) { await api(`/api/training/${b.dataset.a}/${b.dataset.delL}`, { method: "DELETE" }); refresh(); } });
+  $$("[data-del-l]", root).forEach((b) => b.onclick = async () => { if (confirm("¿Archivar esta lección? Deja de aplicarse pero queda guardada en Archivos (no se borra).")) { await api(`/api/training/${b.dataset.a}/${b.dataset.delL}`, { method: "DELETE" }); refresh(); } });
 }
 
 // ------------------------------------------------------------------ MEMORIA

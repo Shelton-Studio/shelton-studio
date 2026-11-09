@@ -44,7 +44,10 @@ def base_prompt(key: str) -> str:
 def prompt(key: str) -> str:
     """Prompt de la ficha + lecciones del entrenamiento humano."""
     from app.agents import training
-    return base_prompt(key) + training.knowledge(key)
+    from app import memoria
+    recent = memoria.recent_work(key, 8)
+    cont = ("\n\n## Tu trabajo reciente (para retomar donde quedaste)\n" + recent) if recent else ""
+    return base_prompt(key) + training.knowledge(key) + cont
 
 
 def model(key: str) -> str:

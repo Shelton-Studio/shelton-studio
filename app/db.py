@@ -56,6 +56,13 @@ class Subject(Base):
     alternatives: Mapped[list] = mapped_column(JSON, default=list)  # intentos de referencia no elegidos
     voice_path: Mapped[str] = mapped_column(String, default="")     # muestra de su voz (para clonarla)
     voice_style: Mapped[str] = mapped_column(Text, default="")      # cómo suena: "grave, cálida, acento neutro"
+    # LoRA propia (aprendida en la GPU local): archivo en ComfyUI/models/loras y palabra clave
+    lora_name: Mapped[str] = mapped_column(String, default="")
+    lora_trigger: Mapped[str] = mapped_column(String, default="")
+    lora_status: Mapped[str] = mapped_column(String, default="")    # "" | training | ready | failed | canceled
+    lora_progress: Mapped[float] = mapped_column(Float, default=0)   # 0..100
+    lora_info: Mapped[dict] = mapped_column(JSON, default=dict)     # pasos, fotos, inicio, fin, error, eta
+    lora_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
