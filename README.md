@@ -118,6 +118,9 @@ En Windows: `demo.bat`. Interfaz completa con imágenes y respuestas simuladas, 
 
 ---
 
+> **Instalar en la PC con la GPU (máquina `shelton` de Tailscale), con link https y IA local:** guía paso a paso en
+> [docs/INSTALAR_EN_LA_PC.md](docs/INSTALAR_EN_LA_PC.md).
+
 ## Replicarlo en otro servidor (guía rápida)
 
 1. **Servidor Linux** (Ubuntu/Debian; un droplet sirve). Instala con un solo comando. Volver a correrlo actualiza:
