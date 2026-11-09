@@ -271,28 +271,77 @@ async def _run(subject_id: str, steps: int) -> None:
     events.publish({"type": "lora_ready", "subject_id": subject_id, "name": name_human, "minutes": mins})
 
 
+_worker: asyncio.Task | None = None
+
+
+def queue_ids() -> list[str]:
+    """Modelos esperando su turno, en orden de llegada."""
+    with session() as s:
+        subs = s.query(Subject).filter(Subject.lora_status == "queued").all()
+        subs.sort(key=lambda x: (x.lora_info or {}).get("queued_at", ""))
+        return [x.id for x in subs]
+
+
+def ensure_worker() -> None:
+    """Arranca (si hace falta) el que entrena la fila: uno a la vez, uno detrás de otro."""
+    global _worker
+    if _worker is None or _worker.done():
+        _worker = asyncio.create_task(_drain())
+
+
+async def _drain() -> None:
+    while True:
+        ids = queue_ids()
+        if not ids:
+            return
+        sid = ids[0]
+        with session() as s:
+            steps = int(((s.get(Subject, sid).lora_info or {}).get("steps")) or settings.LORA_STEPS)
+        _tasks[sid] = asyncio.current_task()
+        try:
+            await _run(sid, steps)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            log.exception("LoRA %s", sid)
+            _update(sid, lora_status="failed", info={"error": str(e)[:400], "phase": ""})
+        with session() as s:   # si algo lo dejó en «queued» por error, no volver a tomarlo en bucle
+            sub = s.get(Subject, sid)
+            if sub and sub.lora_status in ("queued", "training"):
+                sub.lora_status = "failed"
+        _publish_queue()
+
+
+def _publish_queue() -> None:
+    """Actualiza en la web la posición de cada modelo en la fila."""
+    for pos, sid in enumerate(queue_ids(), 1):
+        _update(sid, info={"position": pos, "phase": f"En fila: #{pos}"})
+
+
 def start(subject_id: str, steps: int | None = None) -> dict:
+    """Pone el modelo en la fila de entrenamiento (la GPU entrena uno a la vez; los demás esperan su turno)."""
     ok, why = available()
     if not ok:
         raise ValueError(why)
-    if subject_id in _tasks and not _tasks[subject_id].done():
-        raise ValueError("Ese modelo ya se está entrenando")
-    if any(not t.done() for t in _tasks.values()):
-        raise ValueError("Ya hay otro modelo entrenándose: la GPU entrena uno a la vez. Espera a que termine.")
+    with session() as s:
+        sub = s.get(Subject, subject_id)
+        if not sub:
+            raise ValueError("Ese modelo no existe")
+        if sub.lora_status in ("training", "queued"):
+            raise ValueError("Ese modelo ya está entrenando o en la fila")
     n = len(dataset_images(subject_id))
     if n < MIN_IMAGES:
         raise ValueError(f"Hay {n} fotos de este modelo y hacen falta al menos {MIN_IMAGES} (mejor 15-30). "
                          "Agrega fotos a su ficha o aprueba posts donde aparezca.")
     steps = max(300, min(int(steps or settings.LORA_STEPS), 6000))
-
-    async def runner():
-        try:
-            await _run(subject_id, steps)
-        except Exception as e:  # noqa: BLE001
-            log.exception("LoRA %s", subject_id)
-            _update(subject_id, lora_status="failed", info={"error": str(e)[:400], "phase": ""})
-    _tasks[subject_id] = asyncio.create_task(runner())
-    return {"started": True, "images": n, "steps": steps}
+    busy = any(x != subject_id for x in queue_ids()) or (_worker is not None and not _worker.done())
+    _update(subject_id, lora_status="queued", lora_progress=0,
+            info={"steps": steps, "images": n, "queued_at": datetime.now().isoformat(timespec="seconds"),
+                  "error": "", "eta_min": None})
+    _publish_queue()
+    ensure_worker()
+    pos = queue_ids().index(subject_id) + 1 if subject_id in queue_ids() else 1
+    return {"started": True, "queued": busy, "position": pos, "images": n, "steps": steps}
 
 
 def cancel(subject_id: str) -> None:
@@ -300,6 +349,7 @@ def cancel(subject_id: str) -> None:
     _update(subject_id, lora_status="canceled", info={"phase": "", "error": "Cancelado por una persona"})
     if proc and proc.returncode is None:
         proc.terminate()
+    _publish_queue()
 
 
 def recover_after_restart() -> None:
@@ -309,6 +359,7 @@ def recover_after_restart() -> None:
             sub.lora_status = "failed"
             sub.lora_info = {**(sub.lora_info or {}), "error": "Se interrumpió (Shelton se reinició). Vuelve a entrenar.",
                              "phase": ""}
+    # La fila sigue: los que esperaban su turno se entrenan solos al volver a arrancar
 
 
 def loras_for(subjects: list[Subject]) -> list[tuple[str, str]]:

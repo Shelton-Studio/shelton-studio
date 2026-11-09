@@ -105,7 +105,7 @@ def test_full_training_cycle_and_use_in_generation(monkeypatch, tmp_path):
     async def main():
         r = lora.start(sid, 400)
         assert r["images"] == 10 and r["steps"] == 400
-        await lora._tasks[sid]
+        await lora._worker
     asyncio.run(main())
     with session() as s:
         sub = s.get(Subject, sid)
@@ -156,3 +156,29 @@ def test_restart_marks_interrupted():
     lora.recover_after_restart()
     with session() as s:
         assert s.get(Subject, sid).lora_status == "failed"
+
+
+def test_queue_trains_one_after_another(monkeypatch, tmp_path):
+    """Varios modelos en fila: se entrenan solos, uno detrás de otro."""
+    init_db()
+    _setup(monkeypatch, tmp_path)
+    a, b, c = _subject(9), _subject(9), _subject(9)
+
+    async def main():
+        ra = lora.start(a, 300)
+        rb = lora.start(b, 300)
+        rc = lora.start(c, 300)
+        assert not ra["queued"] and rb["queued"] and rc["queued"] and rc["position"] == 3
+        try:
+            lora.start(b, 300)
+        except ValueError as e:
+            assert "fila" in str(e)
+        else:
+            raise AssertionError("no debía aceptar el mismo modelo dos veces")
+        lora.cancel(c)                       # sacar uno de la fila
+        await lora._worker
+    asyncio.run(main())
+    with session() as s:
+        assert s.get(Subject, a).lora_status == "ready"
+        assert s.get(Subject, b).lora_status == "ready"
+        assert s.get(Subject, c).lora_status == "canceled"

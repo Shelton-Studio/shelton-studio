@@ -107,6 +107,8 @@ async def start_workers() -> None:
     try:
         from app import lora
         lora.recover_after_restart()
+        if lora.queue_ids():
+            lora.ensure_worker()
     except Exception:  # noqa: BLE001
         log.exception("recuperar LoRAs")
     # Al arrancar, retoma lo que quedó a medias.
