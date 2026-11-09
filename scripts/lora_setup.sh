@@ -18,6 +18,11 @@ SHELTON_DIR="${SHELTON_DIR:-$HOME/shelton-studio}"
 command -v nvidia-smi >/dev/null || die "No hay driver de NVIDIA"
 [ -x "$COMFY/venv/bin/python" ] || die "Primero instala la IA local: bash $SHELTON_DIR/scripts/gpu_setup.sh"
 
+say "Librerías del sistema que usa el entrenador (OpenCV necesita libGL)"
+apt-get install -y -q libgl1 libglib2.0-0t64 >/dev/null 2>&1 || apt-get install -y -q libgl1 libglib2.0-0 >/dev/null 2>&1 \
+  || echo "  ⚠ No pude instalar libgl1: corre «apt-get update» y vuelve a intentar"
+ok "libGL lista"
+
 say "ai-toolkit en $AITK"
 if [ -d "$AITK/.git" ]; then git -C "$AITK" pull -q --ff-only && ok "Actualizado"
 else git clone -q https://github.com/ostris/ai-toolkit "$AITK" && ok "Descargado"; fi
@@ -34,6 +39,9 @@ say "Dependencias (PyTorch + ai-toolkit, unos minutos)"
   --index-url "https://download.pytorch.org/whl/${CUDA_WHEEL:-cu128}"
 "$UV" pip install -q --python "$AITK/venv/bin/python" -r "$AITK/requirements.txt"
 "$AITK/venv/bin/python" -c "import torch;assert torch.cuda.is_available(),'CUDA no disponible';print('  GPU para entrenar:',torch.cuda.get_device_name(0))"
+# Comprueba que el entrenador arranca de verdad (sus imports), no solo la GPU
+(cd "$AITK" && "$AITK/venv/bin/python" -c "import cv2, toolkit.config; print('  Entrenador listo para arrancar')") \
+  || die "El entrenador no arranca: mira el error de arriba y mándalo"
 
 say "Conectando con Shelton"
 ENV="$SHELTON_DIR/.env"
