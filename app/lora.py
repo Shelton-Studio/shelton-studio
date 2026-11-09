@@ -199,12 +199,17 @@ async def _run(subject_id: str, steps: int) -> None:
         await _free_comfy_vram()
         _update(subject_id, info={"phase": "Preparando (la primera vez baja Z-Image para entrenar, ~20 GB)"})
         with working.track("lora_trainer", f"Entrenando la LoRA de {name_human} ({n} fotos, {steps} pasos)", "ai-toolkit · Z-Image Turbo"):
+            import os as _os
+            env = {**_os.environ, "PYTHONUNBUFFERED": "1"}   # que escriba cada línea al momento (log y avance en vivo)
             proc = await asyncio.create_subprocess_exec(
-                str(trainer_python()), "run.py", str(cfg), cwd=str(Path(settings.AITK_DIR).expanduser()),
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+                str(trainer_python()), "-u", "run.py", str(cfg), cwd=str(Path(settings.AITK_DIR).expanduser()),
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, env=env)
+            logf.write_text(f"[Shelton] Entrenador iniciado (pid {proc.pid}). Primero baja Z-Image (~20 GB) la primera vez…\n",
+                            encoding="utf-8")
             _procs[subject_id] = proc
             last_pub, tail = 0.0, []
-            with open(logf, "w", encoding="utf-8") as lf:
+            phase = ""
+            with open(logf, "a", encoding="utf-8") as lf:
                 buf = b""
                 while True:
                     chunk = await proc.stdout.read(4096)
@@ -218,7 +223,17 @@ async def _run(subject_id: str, steps: int) -> None:
                         if not line:
                             continue
                         lf.write(line + "\n")
+                        lf.flush()
                         tail = (tail + [line])[-40:]
+                        low = line.lower()
+                        new_phase = ("Bajando Z-Image para entrenar (solo la primera vez)" if ("download" in low or "fetching" in low)
+                                     else "Preparando las fotos" if "caching" in low or "latent" in low
+                                     else "Cargando el modelo en la GPU" if ("loading" in low and "model" in low) or "quantiz" in low
+                                     else "")
+                        if new_phase and new_phase != phase and time.time() - last_pub > 3:
+                            phase = new_phase
+                            _update(subject_id, info={"phase": phase})
+                            last_pub = time.time()
                         m = STEP_RE.search(line)
                         if m and int(m.group(2)) == steps:
                             done = int(m.group(1))

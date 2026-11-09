@@ -24,7 +24,7 @@ from app.comfyui.client import load_workflow  # noqa: E402
 
 FAKE_TRAINER = r'''#!/usr/bin/env python3
 import json, sys, time, pathlib
-cfg = json.load(open(sys.argv[2] if sys.argv[1] == "run.py" else sys.argv[1]))
+cfg = json.load(open(next(a for a in sys.argv[1:] if a.endswith(".json"))))
 p = cfg["config"]["process"][0]
 name, steps = cfg["config"]["name"], p["train"]["steps"]
 assert p["model"]["arch"] == "zimage:turbo" and p["model"]["assistant_lora_path"].endswith(".safetensors")
