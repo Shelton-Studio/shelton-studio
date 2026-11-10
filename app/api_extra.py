@@ -395,7 +395,8 @@ def _timing_brief() -> dict:
 
 def _review_brief() -> dict:
     r = pipeline.last_review()
-    return {**r, "every_hours": settings.NETWORK_REVIEW_HOURS}
+    from app import consumo
+    return {**r, "every_hours": consumo.network_hours()}
 
 
 # ------------------------------------------------------------------ Revisión de la red y mejor hora para publicar

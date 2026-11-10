@@ -167,3 +167,40 @@ def test_cheap_model_for_simple_agent_can_be_undone(monkeypatch):
         pass
     else:
         raise AssertionError("no debía permitir bajar al juez")
+
+
+def test_network_review_frequency_is_adjustable(monkeypatch):
+    """La revisión de la red (scouts) se puede espaciar y descansa de noche: es la tarea automática que más gasta."""
+    monkeypatch.delenv("NETWORK_REVIEW_HOURS", raising=False)
+    assert consumo.network_hours() == 6
+    consumo.aplicar("network:8")
+    assert consumo.network_hours() == 8
+    tip = next(t for t in consumo.ahorro(7)["tips"] if t["id"] == "network")
+    assert tip["value"] == 8 and tip["night_pause"]
+    consumo.aplicar("night_off")
+    assert consumo.night_paused() is False
+    consumo.aplicar("night_on")
+    try:
+        consumo.aplicar("network:1")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("1 h no es una opción")
+    consumo.aplicar("network:6")
+
+
+def test_old_env_default_does_not_override_panel(monkeypatch):
+    f = consumo._settings_file()
+    if f.exists():
+        data = json.loads(f.read_text())
+        data.pop("network_hours", None)
+        f.write_text(json.dumps(data))
+    monkeypatch.setenv("NETWORK_REVIEW_HOURS", "2")      # el valor viejo de fábrica en .env
+    assert consumo.network_hours() == 6
+    monkeypatch.setenv("NETWORK_REVIEW_HOURS", "0")      # apagado a propósito
+    monkeypatch.setattr(settings, "NETWORK_REVIEW_HOURS", 0.0)
+    assert consumo.network_hours() == 0
+    monkeypatch.setenv("NETWORK_REVIEW_HOURS", "2")
+    consumo.aplicar("network:12")                        # lo elegido en el panel manda
+    assert consumo.network_hours() == 12
+    consumo.aplicar("network:6")
