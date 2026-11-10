@@ -35,10 +35,11 @@ VIEWS.consumo = async (el) => {
   el.innerHTML = pageHead("💰", "Consumo", "De dónde sale cada costo y cuánto se gasta: el cerebro, las imágenes, el video, la voz y la luz de la GPU. Se actualiza en vivo.",
     `<div class="seg" id="cs-days">${[[1, "Hoy"], [7, "7 días"], [30, "30 días"], [90, "90 días"]].map(([d, t]) => `<button data-d="${d}" class="${d === days ? "on" : ""}">${t}</button>`).join("")}</div>
      <a class="btn" id="cs-csv" href="/api/consumo/csv?days=${days}">${icon("download", 15)} Exportar (Excel/CSV)</a>`) +
-    `<div id="cs-gpu"></div><div id="cs-body"><div class="card">${empty("⏳", "Cargando el consumo…")}</div></div>`;
+    `<div id="cs-gpu"></div><div id="cs-ahorro"></div><div id="cs-body"><div class="card">${empty("⏳", "Cargando el consumo…")}</div></div>`;
   $$("#cs-days button").forEach((b) => b.onclick = () => { try { localStorage.setItem("csDays", b.dataset.d); } catch {} VIEWS.consumo(el); });
   const loadGpu = async () => { try { renderGpu($("#cs-gpu"), await api("/api/consumo/gpu")); } catch {} };
-  await Promise.all([loadGpu(), (async () => { try { renderConsumo($("#cs-body"), await api(`/api/consumo?days=${days}`), days); } catch (e) { $("#cs-body").innerHTML = `<div class="card">${empty("⚠️", esc(e.message))}</div>`; } })()]);
+  const loadAhorro = async () => { try { renderAhorro($("#cs-ahorro"), await api(`/api/consumo/ahorro?days=${Math.max(days, 7)}`), () => loadAhorro()); } catch {} };
+  await Promise.all([loadGpu(), loadAhorro(), (async () => { try { renderConsumo($("#cs-body"), await api(`/api/consumo?days=${days}`), days); } catch (e) { $("#cs-body").innerHTML = `<div class="card">${empty("⚠️", esc(e.message))}</div>`; } })()]);
   if (csTimer) clearInterval(csTimer);
   let n = 0;
   csTimer = setInterval(async () => {
@@ -179,4 +180,28 @@ function eventsTable(list) {
     ${list.map((e) => `<tr class="${e.ok ? "" : "cs-fail"}"><td class="nowrap">${esc(when(e.at + "Z"))}</td><td>${esc(e.kind_label)}${e.ok ? "" : ' <span class="chip bad">falló</span>'}${e.note ? `<div class="faint small ellipsis" title="${esc(e.note)}">${esc(e.note)}</div>` : ""}</td>
       <td><div>${esc(e.provider)}</div><div class="faint small mono ellipsis" title="${esc(e.model)}">${esc(e.model || "")}</div></td><td>${esc(agentName(e.agent) || e.agent || "—")}</td>
       <td class="r">${e.tokens ? num(e.tokens) : "—"}</td><td class="r">${dur(e.seconds)}</td><td class="r nowrap"><b>${usd(e.cost)}</b> ${srcChip(e.source)}</td></tr>`).join("")}</tbody></table></div>`;
+}
+
+// Ahorro inteligente: optimizar sin bajar la calidad (todo se puede deshacer)
+function renderAhorro(box, a, reload) {
+  if (!box) return;
+  const tips = a.tips || [];
+  box.innerHTML = `<div class="card cs-ahorro"><div class="row" style="gap:10px;flex-wrap:wrap"><b>🌱 Ahorro inteligente</b>
+      <span class="faint small grow">Optimizar sin bajar la calidad. Todo se puede deshacer.</span>
+      ${a.saved_total > 0 ? `<span class="chip good">Ya ahorrado: ${usd(a.saved_total)}</span>` : ""}
+      ${a.potential_total > 0 ? `<span class="chip warn">Podrías ahorrar ~${usd(a.potential_total)} más en ${a.days} días</span>` : ""}</div>
+    <div class="cs-tips">${tips.map((t) => `<div class="cs-tip-card ${t.on ? "on" : ""}">
+      <div class="row" style="gap:8px;align-items:flex-start"><span class="cs-tip-ico">${t.icon}</span><div class="grow"><b>${esc(t.title)}</b>
+        ${t.on ? ' <span class="chip good">Activado</span>' : ""}
+        <div class="small muted" style="margin-top:3px">${esc(t.text)}</div>
+        ${t.quality ? `<div class="small" style="margin-top:4px">✅ Calidad: ${esc(t.quality)}</div>` : ""}
+        ${t.detail ? `<div class="faint small" style="margin-top:3px">${esc(t.detail)}</div>` : ""}</div>
+        <div class="cs-tip-side">${t.saved ? `<div class="small">Ahorrado</div><b>${usd(t.saved)}</b>` : t.potential ? `<div class="small">Ahorro posible</div><b>~${usd(t.potential)}</b>` : ""}
+          ${t.action ? `<button class="btn sm ${t.on ? "ghost" : "primary"}" data-act="${esc(t.action)}">${t.on ? "Deshacer" : "Activar"}</button>` : ""}</div></div></div>`).join("")}</div>
+    ${(a.keep || []).length ? `<div class="faint small" style="margin-top:10px">🔒 No se tocan (de ellos depende la calidad): ${a.keep.map((k) => `<b>${esc(k.agent)}</b> (${esc(k.why)})`).join(", ")}.</div>` : ""}</div>`;
+  $$("[data-act]", box).forEach((b) => b.onclick = async () => {
+    b.disabled = true;
+    try { await api("/api/consumo/ahorro", { method: "POST", body: { action: b.dataset.act } }); toast("Listo. Se puede deshacer cuando quieras.", "good", "🌱"); reload(); }
+    catch (e) { toast(esc(e.message), "bad"); b.disabled = false; }
+  });
 }

@@ -97,6 +97,27 @@ def _convert_messages(messages: list[dict], system: str) -> list[dict]:
     return out
 
 
+def add_cache_points(msgs: list[dict]) -> list[dict]:
+    """Caché de instrucciones (Claude): las instrucciones y la conversación ya enviadas se guardan unos minutos y,
+    al reenviarlas, cuestan ~10% en vez del 100%. La respuesta es idéntica: solo cambia el precio."""
+    def mark(m: dict) -> None:
+        c = m.get("content")
+        if isinstance(c, str) and c:
+            m["content"] = [{"type": "text", "text": c, "cache_control": {"type": "ephemeral"}}]
+        elif isinstance(c, list):
+            for part in reversed(c):
+                if part.get("type") == "text":
+                    part["cache_control"] = {"type": "ephemeral"}
+                    break
+    systems = [m for m in msgs if m["role"] == "system"]
+    if systems:
+        mark(systems[0])
+    users = [m for m in msgs if m["role"] == "user"]
+    if users:
+        mark(users[-1])
+    return msgs
+
+
 def _convert_tools(tools: list[dict] | None) -> tuple[list[dict], list[dict]]:
     fns, plugins = [], []
     for t in tools or []:
@@ -110,13 +131,15 @@ def _convert_tools(tools: list[dict] | None) -> tuple[list[dict], list[dict]]:
 
 # ------------------------------------------------------------------ llamada
 async def create(api_key: str, model: str, system=None, messages=None, tools=None, max_tokens: int = 8000,
-                 output_config: dict | None = None, **_ignored) -> SimpleNamespace:
+                 output_config: dict | None = None, cache: bool = False, **_ignored) -> SimpleNamespace:
     """Misma firma útil que messages.create; ignora lo específico de Anthropic (thinking, betas, caché...)."""
     fns, plugins = _convert_tools(tools)
     fmt = (output_config or {}).get("format")
     sys_text = _system_text(system)
     body = {"model": model, "messages": _convert_messages(messages or [], sys_text), "max_tokens": min(max_tokens, 32000),
             "usage": {"include": True}}
+    if cache and str(model).startswith("anthropic/"):
+        add_cache_points(body["messages"])
     if fns:
         body["tools"] = fns
     if plugins:
@@ -133,7 +156,8 @@ async def create(api_key: str, model: str, system=None, messages=None, tools=Non
             hint = ("Responde SOLO con un objeto JSON válido (sin texto alrededor ni ```), que cumpla este esquema:\n"
                     + json.dumps(fmt["schema"], ensure_ascii=False))
             if body["messages"] and body["messages"][0]["role"] == "system":
-                body["messages"][0]["content"] += "\n\n" + hint
+                sysm = body["messages"][0]
+                sysm["content"] = _system_text(sysm["content"]) + "\n\n" + hint   # vuelve a texto simple (con o sin caché)
             else:
                 body["messages"].insert(0, {"role": "system", "content": hint})
             r = await c.post(URL, json=body, headers=headers)
@@ -164,7 +188,8 @@ async def create(api_key: str, model: str, system=None, messages=None, tools=Non
     stop = "tool_use" if any(b.type == "tool_use" for b in blocks) else ("max_tokens" if finish == "length" else "end_turn")
     u = data.get("usage") or {}
     usage = SimpleNamespace(input_tokens=u.get("prompt_tokens", 0), output_tokens=u.get("completion_tokens", 0),
-                            cache_read_input_tokens=0, cache_creation_input_tokens=0, cost=u.get("cost"))
+                            cache_read_input_tokens=0, cache_creation_input_tokens=0, cost=u.get("cost"),
+                            cached_tokens=(u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
     return SimpleNamespace(content=blocks, stop_reason=stop, stop_details=None, usage=usage,
                            model=data.get("model", model))
 

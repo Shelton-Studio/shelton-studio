@@ -111,3 +111,59 @@ def test_gpu_live_reads_nvidia_smi(monkeypatch, tmp_path):
     x = g["gpus"][0]
     assert x["name"] == "NVIDIA GeForce RTX 3090" and x["util"] == 97 and x["power_w"] == 340.5
     assert sum(x["who"].values()) == 18000
+
+
+def test_prompt_cache_lowers_cost_without_changing_the_request(monkeypatch):
+    """Caché de instrucciones: mismas instrucciones y mensajes, solo con marcas de caché (y se registra lo ahorrado)."""
+    init_db()
+    _clear()
+    seen = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        seen.append(body)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                                         "usage": {"prompt_tokens": 5000, "completion_tokens": 50, "cost": 0.002,
+                                                   "prompt_tokens_details": {"cached_tokens": 4500}}})
+    openrouter._transport = httpx.MockTransport(handler)
+    old = (settings.ANTHROPIC_API_KEY, settings.OPENROUTER_API_KEY)
+    settings.ANTHROPIC_API_KEY, settings.OPENROUTER_API_KEY = "", "sk-or-test"
+    try:
+        msgs = [{"role": "user", "content": "hola"}, {"role": "assistant", "content": "hola!"},
+                {"role": "user", "content": "haz un post"}]
+        asyncio.run(llm.create(agent="shelton", system="INSTRUCCIONES LARGAS", messages=msgs))
+        consumo.save_settings(prompt_cache=False)
+        asyncio.run(llm.create(agent="shelton", system="INSTRUCCIONES LARGAS", messages=msgs))
+        consumo.save_settings(prompt_cache=True)
+    finally:
+        openrouter._transport = None
+        settings.ANTHROPIC_API_KEY, settings.OPENROUTER_API_KEY = old
+    on, off = seen
+    assert on["messages"][0]["content"] == [{"type": "text", "text": "INSTRUCCIONES LARGAS", "cache_control": {"type": "ephemeral"}}]
+    assert on["messages"][-1]["content"][0]["cache_control"] == {"type": "ephemeral"}
+    assert on["messages"][-1]["content"][0]["text"] == "haz un post"
+    assert off["messages"][0]["content"] == "INSTRUCCIONES LARGAS"               # apagado: igual que antes
+    with session() as s:
+        assert s.query(UsageEvent).first().tokens_cached == 4500
+    a = consumo.ahorro(7)
+    cache = next(t for t in a["tips"] if t["id"] == "cache")
+    assert cache["on"] and cache["saved"] > 0
+
+
+def test_cheap_model_for_simple_agent_can_be_undone(monkeypatch):
+    init_db()
+    from app.agents import registry
+    monkeypatch.setattr("app.llm.provider", lambda: "openrouter")
+    before = registry.model("copywriter")
+    consumo.aplicar("model_cheap:copywriter")
+    assert registry.model("copywriter") == consumo.CHEAP_MODEL
+    tip = next(t for t in consumo.ahorro(7)["tips"] if t["id"] == "model:copywriter")
+    assert tip["on"] and tip["action"] == "model_restore:copywriter"
+    consumo.aplicar("model_restore:copywriter")
+    assert registry.model("copywriter") == before
+    try:
+        consumo.aplicar("model_cheap:judge")                 # el juez no se toca
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("no debía permitir bajar al juez")

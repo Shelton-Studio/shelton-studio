@@ -53,7 +53,8 @@ def test_provider_and_json_with_image():
     assert out == {"score": 88, "notes": "bien"}
     req = REQUESTS[-1]
     assert req["model"] == "anthropic/claude-sonnet-4.5" and req["response_format"]["type"] == "json_schema"
-    assert req["messages"][0] == {"role": "system", "content": "Juez"}
+    # Las instrucciones van con la marca de caché (cuestan ~10% al reenviarlas); el texto es el mismo
+    assert req["messages"][0] == {"role": "system", "content": [{"type": "text", "text": "Juez", "cache_control": {"type": "ephemeral"}}]}
     parts = req["messages"][1]["content"]
     assert parts[0]["type"] == "image_url" and parts[0]["image_url"]["url"] == "data:image/jpeg;base64,AAAA"
 
