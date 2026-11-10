@@ -436,3 +436,6 @@ audio { width: 100%; height: 40px; }
 .msg.user .copy-btn { align-self: flex-end; }
 @media (hover: none) { .copy-btn { opacity: .7; } }
 .bubble { user-select: text; -webkit-user-select: text; }
+.bubble.long { max-height: 260px; overflow: hidden; -webkit-mask-image: linear-gradient(180deg, #000 70%, transparent); mask-image: linear-gradient(180deg, #000 70%, transparent); }
+.more-btn { opacity: 1 !important; color: var(--accent, #8b5cf6); }
+.copy-btn, .msg .who, .steps { user-select: none; -webkit-user-select: none; }

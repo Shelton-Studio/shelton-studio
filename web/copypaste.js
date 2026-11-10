@@ -35,8 +35,27 @@ function addCopyButtons(root) {
     btn.type = "button"; btn.className = "copy-btn"; btn.title = "Copiar este mensaje"; btn.textContent = "📋 Copiar";
     btn.onclick = (e) => { e.stopPropagation(); copyText(b.textContent.trim()); };
     b.after(btn);
+    // Mensajes tuyos muy largos (una conversación pegada, un documento): se ven recogidos, con «Ver todo»
+    if (b.closest(".msg.user") && b.textContent.length > 1200) {
+      const label = () => `Ver todo (${b.textContent.length.toLocaleString("es")} caracteres)`;
+      b.classList.add("long");
+      const more = document.createElement("button");
+      more.type = "button"; more.className = "copy-btn more-btn"; more.textContent = label();
+      more.onclick = (e) => { e.stopPropagation(); more.textContent = b.classList.toggle("long") ? label() : "Ver menos"; };
+      btn.after(more);
+    }
   });
 }
+
+// Ctrl+A en el chat (fuera de la caja de texto): selecciona solo la conversación, no toda la página
+document.addEventListener("keydown", (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "a" || e.shiftKey) return;
+  const t = e.target, msgs = document.getElementById("msgs");
+  if (!msgs || !msgs.isConnected || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable) return;
+  e.preventDefault();
+  const r = document.createRange(); r.selectNodeContents(msgs);
+  const sel = getSelection(); sel.empty(); sel.addRange(r);
+});
 
 // Copiar varios mensajes seleccionados: texto limpio
 document.addEventListener("copy", (e) => {
@@ -44,8 +63,9 @@ document.addEventListener("copy", (e) => {
   if (!sel || sel.isCollapsed || !sel.rangeCount) return;
   const msgs = document.getElementById("msgs");
   const r = sel.getRangeAt(0);
-  if (!msgs || !msgs.contains(r.commonAncestorContainer)) return;
+  if (!msgs || !(msgs.contains(r.commonAncestorContainer) || r.intersectsNode(msgs))) return;
   const frag = r.cloneContents();
+  if (!msgs.contains(r.commonAncestorContainer) && $$(".msg", frag).length < 1) return;
   if ($$(".msg", frag).length < 2) {
     // Dentro de un solo mensaje: solo el texto de los globos (sin «Pensando…» ni etiquetas)
     const bubbles = $$(".bubble", frag);
