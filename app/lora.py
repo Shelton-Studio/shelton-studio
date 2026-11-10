@@ -79,7 +79,38 @@ def dataset_images(subject_id: str) -> list[str]:
         if p not in seen:
             seen.add(p)
             out.append(p)
-    return out[:MAX_IMAGES]
+    return out
+
+
+def _studied_file(subject_id: str) -> Path:
+    return settings.DATA_DIR / "lora" / subject_id / "fotos_estudiadas.json"
+
+
+def studied_counts(subject_id: str) -> dict:
+    """Cuántas veces estudió la LoRA cada foto (para que cada sesión aprenda de fotos nuevas)."""
+    f = _studied_file(subject_id)
+    try:
+        return json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def session_images(subject_id: str) -> list[str]:
+    """Las fotos de esta sesión: primero las que la LoRA todavía no estudió (o estudió menos veces).
+    Así la misma LoRA va sumando material nuevo cada vez, en vez de repetir siempre las mismas 30."""
+    allp = dataset_images(subject_id)
+    seen = studied_counts(subject_id)
+    order = sorted(range(len(allp)), key=lambda i: (seen.get(allp[i], 0), i))
+    return [allp[i] for i in order[:MAX_IMAGES]]
+
+
+def _mark_studied(subject_id: str, paths: list[str]) -> None:
+    seen = studied_counts(subject_id)
+    for p in paths:
+        seen[p] = seen.get(p, 0) + 1
+    f = _studied_file(subject_id)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(seen, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 def status(subject_id: str) -> dict:
@@ -88,7 +119,9 @@ def status(subject_id: str) -> dict:
     with session() as s:
         sub = s.get(Subject, subject_id)
         data = subject_dict(sub)["lora"]
+    seen = studied_counts(subject_id)
     return {**data, "trainer_ready": ok, "trainer_msg": why, "images": len(imgs), "min_images": MIN_IMAGES,
+            "images_studied": sum(1 for p in imgs if seen.get(p)), "images_new": sum(1 for p in imgs if not seen.get(p)),
             "max_images": MAX_IMAGES, "default_steps": settings.LORA_STEPS, "saved_step": saved_step(subject_id),
             "sec_per_step": round(sec_per_step(subject_id), 2), "max_session_steps": MAX_SESSION_STEPS,
             "versions": versions(subject_id)}
@@ -120,7 +153,8 @@ def _prepare(subject_id: str, work: Path, trigger: str) -> int:
         kind = {"person": "person", "car": "car", "vehicle": "vehicle", "place": "place", "product": "product",
                 "pet": "pet", "creature": "creature"}.get(sub.kind, "subject")
     n = 0
-    for i, src in enumerate(dataset_images(subject_id)):
+    used = []
+    for i, src in enumerate(session_images(subject_id)):
         try:
             img = ImageOps.exif_transpose(Image.open(src)).convert("RGB")
         except Exception:  # noqa: BLE001
@@ -128,7 +162,9 @@ def _prepare(subject_id: str, work: Path, trigger: str) -> int:
         img.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
         img.save(ds / f"{i:03d}.jpg", "JPEG", quality=95)
         (ds / f"{i:03d}.txt").write_text(f"a photo of {trigger}, a {kind}", encoding="utf-8")
+        used.append(src)
         n += 1
+    (work / "fotos_sesion.json").write_text(json.dumps(used, ensure_ascii=False), encoding="utf-8")
     return n
 
 
@@ -399,6 +435,11 @@ async def _run(subject_id: str, steps: int, base: int = 0, mode: str = "restart"
     vdir.mkdir(exist_ok=True)
     vname = f"{job_name}_{steps}pasos_{datetime.now():%Y%m%d_%H%M}.safetensors"
     await asyncio.to_thread(shutil.copy2, final, vdir / vname)
+    # Las fotos de esta sesión quedan marcadas como estudiadas: la próxima vez aprende de las que faltan
+    try:
+        _mark_studied(subject_id, json.loads((work / "fotos_sesion.json").read_text(encoding="utf-8")))
+    except Exception:  # noqa: BLE001
+        pass
     mins = round((time.time() - t0) / 60)
     _update(subject_id, lora_status="ready", lora_progress=100, lora_name=dest_name, lora_enabled=True,
             info={"phase": "", "finished": datetime.now().isoformat(timespec="seconds"), "minutes": mins, "eta_min": None,

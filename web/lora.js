@@ -44,7 +44,8 @@ async function loraDialog(sid, name) {
   try { st = await api(`/api/subjects/${sid}/lora`); } catch (e) { return toast(esc(e.message), "bad"); }
   const enough = st.images >= st.min_images, has = st.saved_step > 0;
   const box = modal(`🎓 Entrenar la LoRA de ${esc(name)}`, `<div class="hint">La GPU local <b>aprende a ${esc(name)} de verdad</b>: después, en modo <b>Local</b>, sus fotos salen con Z-Image Turbo + su LoRA.</div>
-    <div class="card" style="padding:12px">📸 Fotos disponibles: <b>${st.images}</b> (mínimo ${st.min_images}, ideal 15-${st.max_images}).
+    <div class="card" style="padding:12px">📸 Fotos disponibles: <b>${st.images}</b> (mínimo ${st.min_images}; estudia hasta ${st.max_images} por sesión).
+      ${has && st.images_new ? `<div style="margin-top:6px">📚 <b>${st.images_new} fotos nuevas</b> que todavía no estudió: entran en la próxima sesión.</div>` : ""}
       ${has ? `<div style="margin-top:6px">🧠 Ya aprendió <b>${st.saved_step} pasos</b>. Velocidad medida en esta placa: <b>${st.sec_per_step} s por paso</b>.</div>` : ""}
       ${enough ? "" : `<div style="color:#fca5a5;margin-top:6px">Faltan fotos: agrega más a su ficha (+ Foto) o aprueba posts donde aparezca.</div>`}</div>
     ${st.trainer_ready ? "" : `<div class="card" style="padding:12px;color:#fcd34d">⚠ ${esc(st.trainer_msg)}</div>`}
@@ -56,7 +57,7 @@ async function loraDialog(sid, name) {
     <input id="lcustom" type="number" min="100" max="${st.max_session_steps}" placeholder="pasos" style="display:none">
     <div class="card" style="padding:12px" id="lplan">Calculando…</div>
     <div class="hint">Más pasos no siempre es mejor: si se pasa, la LoRA "copia" demasiado las fotos. Prueben fotos entre sesiones.</div>
-    ${(st.versions || []).length ? `<details class="card" style="padding:12px"><summary style="cursor:pointer">🗂️ Versiones guardadas (${st.versions.length}) · nunca se borran</summary>
+    ${(st.versions || []).length ? `<details class="card" style="padding:12px"><summary style="cursor:pointer">🗂️ Respaldos de la misma LoRA (${st.versions.length}) · nunca se borran</summary>
       <div class="grid" style="gap:6px;margin-top:8px">${st.versions.map((v) => `<div class="row" style="gap:8px"><span class="grow small mono ellipsis">${esc(v.file)}</span>
         <span class="faint small">${v.steps ? v.steps + " pasos" : ""}</span>${(st.info || {}).active_version === v.file ? '<span class="chip good">En uso</span>' : `<button class="btn sm" data-lver="${esc(v.file)}">Usar esta</button>`}</div>`).join("")}</div></details>` : ""}`,
     `<button class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn primary" id="lgo" ${enough && st.trainer_ready ? "" : "disabled"}>Empezar</button>`);

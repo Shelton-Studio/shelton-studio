@@ -258,3 +258,23 @@ def test_every_finished_training_is_kept_as_a_version(monkeypatch, tmp_path):
         assert sub.lora_status == "ready" and sub.lora_info["active_version"] == vs[1]["file"]
         assert lora._read_saved_step(loras_dir / sub.lora_name) == 300
     assert len(lora.versions(sid)) == 2                      # no se borró ninguna
+
+
+def test_each_session_studies_new_photos(monkeypatch, tmp_path):
+    """Una sola LoRA que sigue aprendiendo: si hay más de 30 fotos, cada sesión estudia primero las que no vio."""
+    init_db()
+    _setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(lora, "MAX_IMAGES", 8)
+    sid = _subject(12)
+
+    async def run(**kw):
+        lora.start(sid, **kw)
+        await lora._worker
+    first = lora.session_images(sid)
+    asyncio.run(run(steps=200))
+    st = lora.status(sid)
+    assert st["images"] == 12 and st["images_studied"] == 8 and st["images_new"] == 4
+    second = lora.session_images(sid)
+    assert set(lora.dataset_images(sid)) - set(first) <= set(second)   # las 4 que faltaban entran ahora
+    asyncio.run(run(steps=200, mode="continue"))
+    assert lora.status(sid)["images_new"] == 0 and lora.saved_step(sid) == 400
