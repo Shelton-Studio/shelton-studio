@@ -464,6 +464,12 @@ async def _run(subject_id: str, steps: int, base: int = 0, mode: str = "restart"
     except Exception:  # noqa: BLE001
         pass
     mins = round((time.time() - t0) / 60)
+    try:
+        from app.consumo import record
+        record("lora", "ai-toolkit", "Z-Image Turbo", seconds=time.time() - t0, agent="lora_trainer",
+               note=f"LoRA de {name_human}: {base} → {steps} pasos ({n} fotos)")
+    except Exception:  # noqa: BLE001
+        log.warning("No pude registrar el consumo del entrenamiento", exc_info=True)
     _update(subject_id, lora_status="ready", lora_progress=100, lora_name=dest_name, lora_enabled=True,
             info={"phase": "", "finished": datetime.now().isoformat(timespec="seconds"), "minutes": mins, "eta_min": None,
                   "trained_steps": steps, "step": steps, **({"sec_per_step": round(spp_now, 3)} if spp_now else {})})

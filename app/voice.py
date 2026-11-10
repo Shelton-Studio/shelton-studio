@@ -85,6 +85,14 @@ async def synthesize(text: str, language: str, ref_audio: bytes | None, spec: di
     kind, cfg, label = voice_route()
     if not kind:
         raise RuntimeError("Modo Nube: " + label)
+    from app.consumo import measure
+    with measure("voz", kind, (cfg or {}).get("model", "") or label, note=f"{len(text)} caracteres"):
+        return await _synthesize(kind, cfg, label, text, language, ref_audio, spec)
+
+
+async def _synthesize(kind, cfg, label, text: str, language: str, ref_audio: bytes | None, spec: dict) -> bytes:
+    if not kind:
+        raise RuntimeError("Modo Nube: " + label)
     if kind == "mock":
         return _mock_wav(text)
     if kind == "local_tts":

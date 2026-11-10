@@ -115,7 +115,8 @@ async def create(api_key: str, model: str, system=None, messages=None, tools=Non
     fns, plugins = _convert_tools(tools)
     fmt = (output_config or {}).get("format")
     sys_text = _system_text(system)
-    body = {"model": model, "messages": _convert_messages(messages or [], sys_text), "max_tokens": min(max_tokens, 32000)}
+    body = {"model": model, "messages": _convert_messages(messages or [], sys_text), "max_tokens": min(max_tokens, 32000),
+            "usage": {"include": True}}
     if fns:
         body["tools"] = fns
     if plugins:
@@ -163,7 +164,7 @@ async def create(api_key: str, model: str, system=None, messages=None, tools=Non
     stop = "tool_use" if any(b.type == "tool_use" for b in blocks) else ("max_tokens" if finish == "length" else "end_turn")
     u = data.get("usage") or {}
     usage = SimpleNamespace(input_tokens=u.get("prompt_tokens", 0), output_tokens=u.get("completion_tokens", 0),
-                            cache_read_input_tokens=0, cache_creation_input_tokens=0)
+                            cache_read_input_tokens=0, cache_creation_input_tokens=0, cost=u.get("cost"))
     return SimpleNamespace(content=blocks, stop_reason=stop, stop_details=None, usage=usage,
                            model=data.get("model", model))
 
