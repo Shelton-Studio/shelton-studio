@@ -63,7 +63,7 @@ def _settings_file() -> Path:
 
 
 def get_settings() -> dict:
-    base = {"kwh_price": 0.15, "currency": "USD"}
+    base = {"kwh_price": 0.15, "currency": "USD", "prompt_cache": True, "restore_models": {}}
     try:
         f = _settings_file()
         if f.exists():
@@ -73,8 +73,10 @@ def get_settings() -> dict:
     return base
 
 
-def save_settings(kwh_price: float) -> dict:
-    data = {**get_settings(), "kwh_price": max(0.0, float(kwh_price))}
+def save_settings(kwh_price: float | None = None, **extra) -> dict:
+    data = {**get_settings(), **extra}
+    if kwh_price is not None:
+        data["kwh_price"] = max(0.0, float(kwh_price))
     _settings_file().parent.mkdir(parents=True, exist_ok=True)
     _settings_file().write_text(json.dumps(data), encoding="utf-8")
     return data
@@ -119,7 +121,7 @@ def _gpu_watts() -> float:
 
 def record(kind: str, provider: str, model: str = "", *, seconds: float = 0, cost_usd: float | None = None,
            tokens_in: int = 0, tokens_out: int = 0, agent: str = "", post_id: str = "", ok: bool = True,
-           note: str = "", watts: float | None = None) -> None:
+           note: str = "", watts: float | None = None, tokens_cached: int = 0) -> None:
     """Guarda un consumo. Sin costo real: local → luz de la GPU; nube → tabla de precios (marcado «estimado»)."""
     energy = 0.0
     if cost_usd is not None:
@@ -148,6 +150,7 @@ def record(kind: str, provider: str, model: str = "", *, seconds: float = 0, cos
         with session() as s:
             s.add(UsageEvent(kind=kind, provider=provider or "", model=(model or "")[:200], agent=agent or "",
                              post_id=post_id or "", tokens_in=int(tokens_in or 0), tokens_out=int(tokens_out or 0),
+                             tokens_cached=int(tokens_cached or 0),
                              seconds=round(float(seconds or 0), 2), cost_usd=round(cost, 6), cost_source=source,
                              energy_wh=round(energy, 3), ok=ok, note=(note or "")[:500]))
     except Exception:  # noqa: BLE001
@@ -176,8 +179,9 @@ def record_llm(agent: str, provider: str, model: str, usage, ok: bool, seconds: 
         + (getattr(usage, "cache_creation_input_tokens", 0) or 0) if usage else 0
     tout = (getattr(usage, "output_tokens", 0) or 0) if usage else 0
     real = getattr(usage, "cost", None) if usage else None
+    cached = (getattr(usage, "cached_tokens", 0) or getattr(usage, "cache_read_input_tokens", 0) or 0) if usage else 0
     record("cerebro", provider, model, seconds=seconds, cost_usd=real, tokens_in=tin, tokens_out=tout,
-           agent=agent, ok=ok)
+           agent=agent, ok=ok, tokens_cached=cached)
 
 
 # ------------------------------------------------------------------ motores medidos
@@ -502,3 +506,156 @@ async def consumo_csv(days: int = 30):
                         r.post_id, r.note])
     return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": f'attachment; filename="consumo_{days}dias.csv"'})
+
+
+# ------------------------------------------------------------------ ahorro inteligente (sin bajar la calidad)
+# Agentes que corren cada varias horas: la caché dura ~5 min, así que en ellos no conviene (costaría un poco más).
+NO_CACHE_AGENTS = {"trend_scout", "tool_scout"}
+CHEAP_MODEL = "anthropic/claude-haiku-4.5"
+# Trabajos de texto simples donde un modelo más económico rinde igual (los que miran imágenes o dirigen, no se tocan)
+SIMPLE_AGENTS = {"copywriter": "Escribe captions y hashtags: texto corto, el modelo económico lo hace igual de bien.",
+                 "voice_director": "Arma el guion y la descripción de la voz: texto corto y simple.",
+                 "sound_designer": "Describe efectos de sonido en pocas palabras.",
+                 "tool_scout": "Resume herramientas nuevas cada 2 horas: no necesita el modelo más caro."}
+KEEP_AGENTS = {"shelton": "dirige todo", "art_director": "de su prompt depende la foto",
+               "judge": "mira las imágenes y decide la calidad", "video_analyst": "mira videos",
+               "subject_analyst": "mira las fotos del banco", "planner": "diseña campañas"}
+
+
+def use_cache(agent: str) -> bool:
+    return bool(get_settings().get("prompt_cache", True)) and agent not in NO_CACHE_AGENTS
+
+
+def _price_in(model: str) -> float:
+    m = (model or "").lower()
+    return next((p for k, p in TOKEN_PRICES if k in m), DEFAULT_TOKEN_PRICE)[0]
+
+
+def ahorro(days: int = 30) -> dict:
+    """Qué se puede optimizar sin perder calidad, calculado con el consumo real del período."""
+    from app.agents import registry
+    from app.llm import provider
+    days = max(1, min(int(days), 365))
+    start, end = _start(days)
+    cfg = get_settings()
+    with session() as s:
+        rows = s.query(UsageEvent).filter(UsageEvent.created_at >= start).all()
+        for r in rows:
+            s.expunge(r)
+    brain = [r for r in rows if r.kind == "cerebro" and r.ok]
+    names = _agent_names()
+    tips = []
+
+    # 1) Caché de instrucciones
+    cached = sum((r.tokens_cached or 0) for r in brain)
+    saved_cache = sum((r.tokens_cached or 0) * _price_in(r.model) * 0.9 / 1_000_000 for r in brain)
+    tin = sum(r.tokens_in for r in brain)
+    cacheable = sum(r.tokens_in - (r.tokens_cached or 0) for r in brain if r.agent not in NO_CACHE_AGENTS
+                    and r.model.startswith("anthropic/"))
+    potential = cacheable * 0.6 * _price_in("sonnet") * 0.9 / 1_000_000
+    tips.append({"id": "cache", "icon": "⚡", "on": bool(cfg.get("prompt_cache", True)),
+                 "title": "Caché de instrucciones (memoria rápida de Claude)",
+                 "quality": "Sin cambio: la respuesta es exactamente la misma.",
+                 "text": ("Shelton y su equipo reenvían sus instrucciones y la conversación en cada llamada. Con la caché, "
+                          "lo que ya se envió en los últimos minutos cuesta ~10% en vez del 100%."),
+                 "saved": round(saved_cache, 4), "potential": round(potential, 4) if not cfg.get("prompt_cache", True) else None,
+                 "detail": f"{num_es(cached)} de {num_es(tin)} tokens de entrada salieron de la caché en el período.",
+                 "action": "cache_off" if cfg.get("prompt_cache", True) else "cache_on"})
+
+    # 2) Modelo económico para trabajos simples
+    if provider() == "openrouter":
+        restore = cfg.get("restore_models") or {}
+        for key, why in SIMPLE_AGENTS.items():
+            cur = registry.model(key)
+            using_cheap = cur == CHEAP_MODEL
+            spent = sum(r.cost_usd for r in brain if r.agent == key)
+            calls = sum(1 for r in brain if r.agent == key)
+            tips.append({"id": f"model:{key}", "icon": "🪶", "on": using_cheap,
+                         "title": f"{names.get(key, key)}: usar Claude Haiku 4.5",
+                         "quality": "Muy bajo riesgo: es un trabajo de texto simple.", "text": why,
+                         "saved": None, "potential": round(spent * (2 / 3), 4) if not using_cheap else None,
+                         "detail": (f"Gastó {usd_es(spent)} en {calls} llamadas en el período. Haiku cuesta ~3 veces menos."
+                                    if not using_cheap else f"Ya usa Haiku. Antes usaba: {restore.get(key) or 'el modelo por defecto'}."),
+                         "action": f"model_restore:{key}" if using_cheap else f"model_cheap:{key}"})
+
+    # 3) Fotos en la nube vs. GPU local
+    cloud_img = [r for r in rows if r.kind == "imagen" and r.provider not in LOCAL and r.ok]
+    if cloud_img:
+        c = sum(r.cost_usd for r in cloud_img)
+        tips.append({"id": "local_images", "icon": "🖥️", "on": False, "title": "Fotos de prueba en la GPU local",
+                     "quality": "La GPU local hace fotos de muy buena calidad (Z-Image) y además usa la LoRA de cada modelo.",
+                     "text": "Las pruebas y borradores hacerlos en Local (gratis, solo luz). Dejar la nube para lo que necesite un modelo especial.",
+                     "saved": None, "potential": round(c * 0.7, 4),
+                     "detail": f"{len(cloud_img)} fotos en la nube costaron {usd_es(c)} en el período.", "action": None})
+
+    # 4) Conversaciones muy largas
+    sh = [r for r in brain if r.agent == "shelton"]
+    if sh:
+        avg_in = sum(r.tokens_in for r in sh) / len(sh)
+        if avg_in > 40_000:
+            tips.append({"id": "long_chats", "icon": "💬", "on": False, "title": "Conversación nueva para cada tema",
+                         "quality": "Sin pérdida: Shelton relee su memoria al empezar cada conversación.",
+                         "text": "Cada mensaje reenvía toda la conversación. En chats muy largos cada respuesta sale más cara.",
+                         "saved": None, "potential": None,
+                         "detail": f"En promedio, cada mensaje a Shelton envía {num_es(int(avg_in))} tokens.", "action": None})
+
+    # 5) Llamadas que fallan
+    failed = [r for r in rows if not r.ok]
+    if len(failed) >= 5:
+        tips.append({"id": "failures", "icon": "🧯", "on": False, "title": f"{len(failed)} llamadas fallaron",
+                     "quality": "", "text": "Revisa en «Últimos consumos» cuáles fallan: suelen ser una clave vencida o un modelo caído.",
+                     "saved": None, "potential": None, "detail": "", "action": None})
+
+    keep = [{"agent": names.get(k, k), "why": v} for k, v in KEEP_AGENTS.items()]
+    return {"days": days, "tips": tips, "keep": keep,
+            "saved_total": round(saved_cache, 4),
+            "potential_total": round(sum(t["potential"] or 0 for t in tips), 4)}
+
+
+def num_es(n) -> str:
+    return f"{int(n):,}".replace(",", ".")
+
+
+def usd_es(n) -> str:
+    return "US$ " + f"{float(n):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def aplicar(action: str) -> dict:
+    """Aplicar o deshacer una optimización (todo se puede deshacer)."""
+    from app.agents import registry
+    cfg = get_settings()
+    if action in ("cache_on", "cache_off"):
+        save_settings(prompt_cache=action == "cache_on")
+        return {"ok": True}
+    kind, _, key = action.partition(":")
+    if key not in SIMPLE_AGENTS:
+        raise ValueError("Esa optimización no existe")
+    restore = dict(cfg.get("restore_models") or {})
+    if kind == "model_cheap":
+        p = registry.profile(key)
+        restore[key] = (p.model if p and p.model else "")
+        registry.save(key, model=CHEAP_MODEL)
+    elif kind == "model_restore":
+        registry.save(key, model=restore.pop(key, ""))
+    else:
+        raise ValueError("Esa optimización no existe")
+    save_settings(restore_models=restore)
+    return {"ok": True}
+
+
+@router.get("/consumo/ahorro")
+async def consumo_ahorro(days: int = 30):
+    return await asyncio.to_thread(ahorro, days)
+
+
+class AplicarIn(BaseModel):
+    action: str
+
+
+@router.post("/consumo/ahorro")
+async def consumo_ahorro_aplicar(body: AplicarIn):
+    from fastapi import HTTPException
+    try:
+        return aplicar(body.action)
+    except ValueError as e:
+        raise HTTPException(400, str(e))

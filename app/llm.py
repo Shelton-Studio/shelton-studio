@@ -123,7 +123,8 @@ async def _create_openrouter(agent: str, summary: str, start: float, kwargs: dic
     model = kwargs["model"] if "/" in str(kwargs.get("model", "")) else default_model
     kwargs["model"] = model
     try:
-        resp = await openrouter.create(api_key=key, **kwargs)
+        from app.consumo import use_cache
+        resp = await openrouter.create(api_key=key, cache=use_cache(agent), **kwargs)
     except openrouter.ORError as e:
         msg = {401: "Clave de OpenRouter inválida (revisa Conexiones o .env)",
                402: "Sin saldo en OpenRouter: recarga créditos",
