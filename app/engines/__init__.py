@@ -62,6 +62,11 @@ _cache: dict[str, ImageEngine] = {}
 
 
 def _build(kind: str, cfg: dict) -> ImageEngine:
+    from app.consumo import metered
+    return metered(_build_raw(kind, cfg))
+
+
+def _build_raw(kind: str, cfg: dict) -> ImageEngine:
     if kind == "mock":
         from app.engines.mock import MockEngine
         return MockEngine()

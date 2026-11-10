@@ -33,6 +33,8 @@ async def lifespan(_: FastAPI):
     scout = asyncio.create_task(pipeline.scout_loop())
     learning = asyncio.create_task(pipeline.learning_loop())
     network = asyncio.create_task(pipeline.network_loop())
+    from app import consumo
+    gpu_meter = asyncio.create_task(consumo.sample_loop())
     try:
         health = await get_engine().health()
     except Exception as e:
@@ -48,6 +50,7 @@ async def lifespan(_: FastAPI):
     scout.cancel()
     learning.cancel()
     network.cancel()
+    gpu_meter.cancel()
     await pipeline.stop_workers()
 
 
@@ -58,6 +61,8 @@ app.include_router(auth_router)
 app.include_router(panel_router)
 from app.api_extra import router as extra_router  # noqa: E402
 app.include_router(extra_router)
+from app.consumo import router as consumo_router  # noqa: E402
+app.include_router(consumo_router)
 app.mount("/static", StaticFiles(directory=ROOT / "web"), name="static")
 app.mount("/media", StaticFiles(directory=settings.media_dir), name="media")
 (settings.DATA_DIR / "voices").mkdir(parents=True, exist_ok=True)

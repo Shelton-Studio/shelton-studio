@@ -294,7 +294,7 @@ class OpenRouterImageEngine(_Base):
         parts = [{"type": "image_url", "image_url": {"url": _data_uri(i)}} for i in images[:3]]
         ratio = _ratio(width, height) if width and height else None
         text = prompt + (f"\n\nAspect ratio {ratio}, high detail, no watermark." if ratio else "")
-        body = {"model": model, "modalities": ["image", "text"],
+        body = {"model": model, "modalities": ["image", "text"], "usage": {"include": True},
                 "messages": [{"role": "user", "content": [{"type": "text", "text": text}, *parts]}]}
         if ratio:
             body["image_config"] = {"aspect_ratio": ratio}
@@ -303,6 +303,8 @@ class OpenRouterImageEngine(_Base):
                                                            "X-Title": "Shelton Studio"})
         if r.status_code >= 400:
             raise RuntimeError(f"OpenRouter imagen {r.status_code}: {r.text[:300]}")
+        from app.consumo import report_cost
+        report_cost((r.json().get("usage") or {}).get("cost"))
         msg = r.json()["choices"][0]["message"]
         urls = [im.get("image_url", {}).get("url") for im in msg.get("images") or []]
         if not urls and isinstance(msg.get("content"), list):
@@ -426,6 +428,8 @@ class OpenRouterVideoEngine(_Base):
                 job = pr.json()
             else:
                 raise RuntimeError("OpenRouter video: tiempo de espera agotado")
+            from app.consumo import report_cost
+            report_cost((job.get("usage") or {}).get("cost") or job.get("cost"))
             urls = job.get("unsigned_urls") or job.get("urls") or []
             url = urls[0] if urls else f"{self.BASE}/videos/{job_id}/content?index=0"
             v = await c.get(url, headers=self._headers(), follow_redirects=True, timeout=300)

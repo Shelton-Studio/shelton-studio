@@ -297,3 +297,38 @@ class Feedback(Base):
 def record_feedback(post_id: str, action: str, **detail) -> None:
     with session() as s:
         s.add(Feedback(post_id=post_id, action=action, detail=detail))
+
+
+class UsageEvent(Base):
+    """Cada consumo (cerebro, imagen, video, voz, transcripción, LoRA…): de dónde sale y cuánto cuesta.
+    cost_source: «real» (lo informó el proveedor), «estimado» (tabla de precios) o «local» (luz de tu GPU)."""
+    __tablename__ = "usage_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
+    kind: Mapped[str] = mapped_column(String, index=True)
+    provider: Mapped[str] = mapped_column(String, default="", index=True)
+    model: Mapped[str] = mapped_column(String, default="")
+    agent: Mapped[str] = mapped_column(String, default="")
+    post_id: Mapped[str] = mapped_column(String, default="")
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0)
+    seconds: Mapped[float] = mapped_column(Float, default=0)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0)
+    cost_source: Mapped[str] = mapped_column(String, default="estimado")
+    energy_wh: Mapped[float] = mapped_column(Float, default=0)
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+
+
+class GpuSample(Base):
+    """Lectura de la GPU cada 30 s (para saber cuánta luz gasta y cuánto se usa)."""
+    __tablename__ = "gpu_samples"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
+    gpu: Mapped[int] = mapped_column(Integer, default=0)
+    util: Mapped[float] = mapped_column(Float, default=0)
+    mem_used_mb: Mapped[float] = mapped_column(Float, default=0)
+    mem_total_mb: Mapped[float] = mapped_column(Float, default=0)
+    power_w: Mapped[float] = mapped_column(Float, default=0)
+    temp_c: Mapped[float] = mapped_column(Float, default=0)
+    who: Mapped[dict] = mapped_column(JSON, default=dict)     # {"ComfyUI": MB, "Entrenador LoRA": MB, ...}

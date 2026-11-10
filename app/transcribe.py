@@ -69,9 +69,14 @@ async def _cloud(path: str, language: str) -> dict:
     body = {"model": settings.OPENROUTER_AUDIO_MODEL, "temperature": 0,
             "messages": [{"role": "user", "content": [{"type": "text", "text": prompt},
                                                       {"type": "input_audio", "input_audio": {"data": b64, "format": "mp3"}}]}]}
-    async with httpx.AsyncClient(timeout=90, transport=transport) as c:
-        r = await c.post("https://openrouter.ai/api/v1/chat/completions", json=body,
-                         headers={"Authorization": f"Bearer {key}", "X-Title": "Shelton Studio"})
+    body["usage"] = {"include": True}
+    from app.consumo import measure, report_cost
+    with measure("transcripcion", "openrouter", settings.OPENROUTER_AUDIO_MODEL):
+        async with httpx.AsyncClient(timeout=90, transport=transport) as c:
+            r = await c.post("https://openrouter.ai/api/v1/chat/completions", json=body,
+                             headers={"Authorization": f"Bearer {key}", "X-Title": "Shelton Studio"})
+        if r.status_code < 400:
+            report_cost((r.json().get("usage") or {}).get("cost"))
     if r.status_code >= 400:
         raise RuntimeError(f"No pude transcribir (OpenRouter {r.status_code}): {r.text[:200]}")
     msg = r.json()["choices"][0]["message"]["content"]
