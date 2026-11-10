@@ -1092,7 +1092,7 @@ def last_review() -> dict:
 async def run_network_review() -> dict:
     """Sale a la red con el scout de tendencias y el de tools (lo de afuera para traerlo acá) y recalcula la mejor
     hora para publicar de cada modelo con lo de adentro y lo de afuera."""
-    from app import timing
+    from app import consumo, timing
     started = now()
     events.publish({"type": "network_review", "status": "running"})
     with session() as s:
@@ -1105,19 +1105,21 @@ async def run_network_review() -> dict:
         log.warning("mejor hora para publicar falló: %s", e)
         timing_ok, summary = False, str(e)[:200]
     out = {"at": started.isoformat() + "Z", "findings": found, "timing": timing_ok, "summary": summary,
-           "every_hours": settings.NETWORK_REVIEW_HOURS}
+           "every_hours": consumo.network_hours()}
     _review_path().write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     events.publish({"type": "network_review", "status": "done", **out})
     return out
 
 
 async def network_loop() -> None:
+    from app import consumo
     await asyncio.sleep(90)   # deja arrancar tranquilo al servidor
     while True:
         try:
-            every = settings.NETWORK_REVIEW_HOURS
+            every = consumo.network_hours()
             last = last_review().get("at")
-            due = every > 0 and (not last or (now() - datetime.fromisoformat(last.rstrip("Z"))).total_seconds() >= every * 3600)
+            due = every > 0 and not consumo.night_paused() and \
+                (not last or (now() - datetime.fromisoformat(last.rstrip("Z"))).total_seconds() >= every * 3600)
             if due:
                 await run_network_review()
         except Exception:

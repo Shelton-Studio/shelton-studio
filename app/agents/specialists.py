@@ -324,6 +324,9 @@ _FINDINGS_SCHEMA = obj({"findings": {"type": "array", "items": obj({
 })}})
 
 
+SCOUT_SEARCHES = 5   # resultados por búsqueda de los scouts (antes 8): los mejores 5 rinden igual y cuestan menos
+
+
 async def scout(kind: str, brand: Brand | None, subjects: list[Subject], known_titles: list[str]) -> list[dict]:
     """Investiga con búsqueda web y devuelve hallazgos estructurados (2 pasos: investigar y ordenar)."""
     from app.llm import create, text_of
@@ -337,7 +340,7 @@ async def scout(kind: str, brand: Brand | None, subjects: list[Subject], known_t
     for _ in range(4):  # la búsqueda web puede pausar el turno; se continúa
         resp = await create(agent=key, summary=f"scout {kind}", system=registry.prompt(key), messages=messages,
                             max_tokens=16000, output_config={"effort": registry.effort(key, "medium")},
-                            tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": 8}])
+                            tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": SCOUT_SEARCHES}])
         report += text_of(resp)
         if resp.stop_reason != "pause_turn":
             break

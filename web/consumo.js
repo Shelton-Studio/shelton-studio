@@ -197,8 +197,16 @@ function renderAhorro(box, a, reload) {
         ${t.quality ? `<div class="small" style="margin-top:4px">✅ Calidad: ${esc(t.quality)}</div>` : ""}
         ${t.detail ? `<div class="faint small" style="margin-top:3px">${esc(t.detail)}</div>` : ""}</div>
         <div class="cs-tip-side">${t.saved ? `<div class="small">Ahorrado</div><b>${usd(t.saved)}</b>` : t.potential ? `<div class="small">Ahorro posible</div><b>~${usd(t.potential)}</b>` : ""}
-          ${t.action ? `<button class="btn sm ${t.on ? "ghost" : "primary"}" data-act="${esc(t.action)}">${t.on ? "Deshacer" : "Activar"}</button>` : ""}</div></div></div>`).join("")}</div>
+          ${t.action ? `<button class="btn sm ${t.on ? "ghost" : "primary"}" data-act="${esc(t.action)}">${t.on ? "Deshacer" : "Activar"}</button>` : ""}
+          ${t.choices ? `<label class="small">Cada <select data-net>${t.choices.map((h) => `<option value="${h}" ${h === t.value ? "selected" : ""}>${h} h</option>`).join("")}</select></label>
+            <label class="small row" style="gap:6px"><input type="checkbox" data-night ${t.night_pause ? "checked" : ""}> Descansa de noche</label>` : ""}</div></div></div>`).join("")}</div>
     ${(a.keep || []).length ? `<div class="faint small" style="margin-top:10px">🔒 No se tocan (de ellos depende la calidad): ${a.keep.map((k) => `<b>${esc(k.agent)}</b> (${esc(k.why)})`).join(", ")}.</div>` : ""}</div>`;
+  const send = async (action) => {
+    try { await api("/api/consumo/ahorro", { method: "POST", body: { action } }); toast("Guardado. Se puede cambiar cuando quieras.", "good", "🛰️"); reload(); }
+    catch (e) { toast(esc(e.message), "bad"); }
+  };
+  $$("[data-net]", box).forEach((s) => s.onchange = () => send(`network:${s.value}`));
+  $$("[data-night]", box).forEach((c) => c.onchange = () => send(c.checked ? "night_on" : "night_off"));
   $$("[data-act]", box).forEach((b) => b.onclick = async () => {
     b.disabled = true;
     try { await api("/api/consumo/ahorro", { method: "POST", body: { action: b.dataset.act } }); toast("Listo. Se puede deshacer cuando quieras.", "good", "🌱"); reload(); }

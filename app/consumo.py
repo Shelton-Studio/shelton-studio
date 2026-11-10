@@ -63,7 +63,8 @@ def _settings_file() -> Path:
 
 
 def get_settings() -> dict:
-    base = {"kwh_price": 0.15, "currency": "USD", "prompt_cache": True, "restore_models": {}}
+    base = {"kwh_price": 0.15, "currency": "USD", "prompt_cache": True, "restore_models": {},
+            "network_hours": 6, "night_pause": True}
     try:
         f = _settings_file()
         if f.exists():
@@ -522,6 +523,41 @@ KEEP_AGENTS = {"shelton": "dirige todo", "art_director": "de su prompt depende l
                "subject_analyst": "mira las fotos del banco", "planner": "diseña campañas"}
 
 
+NETWORK_OPTIONS = [2, 4, 6, 8, 12, 24]
+NIGHT = (0, 7)     # de 00:00 a 07:00 (hora del estudio) la revisión de la red descansa
+
+
+def network_hours() -> float:
+    """Cada cuántas horas Shelton revisa la red (scouts + mejor hora). Ajustable en Consumo → Ahorro inteligente."""
+    import os
+    saved = {}
+    try:
+        if _settings_file().exists():
+            saved = json.loads(_settings_file().read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        saved = {}
+    try:
+        if "network_hours" in saved:                # lo eligieron en el panel: manda eso
+            return float(saved["network_hours"])
+    except (TypeError, ValueError):
+        pass
+    env = os.getenv("NETWORK_REVIEW_HOURS", "").strip()
+    if env and env != "2":                          # un valor propio en .env (0 = apagado); el 2 viejo de fábrica no cuenta
+        return settings.NETWORK_REVIEW_HOURS
+    return 6.0
+
+
+def night_paused() -> bool:
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+        from app.timing import tz_name
+        hour = datetime.now(ZoneInfo(tz_name())).hour          # la noche del estudio, no la del servidor
+    except Exception:  # noqa: BLE001
+        hour = datetime.now().hour
+    return bool(get_settings().get("night_pause", True)) and NIGHT[0] <= hour < NIGHT[1]
+
+
 def use_cache(agent: str) -> bool:
     return bool(get_settings().get("prompt_cache", True)) and agent not in NO_CACHE_AGENTS
 
@@ -562,7 +598,22 @@ def ahorro(days: int = 30) -> dict:
                  "detail": f"{num_es(cached)} de {num_es(tin)} tokens de entrada salieron de la caché en el período.",
                  "action": "cache_off" if cfg.get("prompt_cache", True) else "cache_on"})
 
-    # 2) Modelo económico para trabajos simples
+    # 2) Revisión de la red (scouts): la tarea automática que más gasta
+    scouts = [r for r in brain if r.agent in ("trend_scout", "tool_scout")]
+    sc_cost = sum(r.cost_usd for r in scouts)
+    hours = network_hours()
+    runs_day = (24 - (NIGHT[1] - NIGHT[0] if cfg.get("night_pause", True) else 0)) / hours if hours else 0
+    tips.append({"id": "network", "icon": "🛰️", "on": hours >= 6,
+                 "title": f"Revisión de la red: cada {hours:g} h" + (" · descansa de 0 a 7 h" if cfg.get("night_pause", True) else ""),
+                 "quality": "Las tendencias no cambian cada 2 horas: revisando 2-3 veces al día se encuentra lo mismo.",
+                 "text": ("Los scouts salen a internet a buscar tendencias y herramientas y leen muchas páginas: "
+                          "es la tarea automática que más gasta."),
+                 "saved": None, "potential": None,
+                 "detail": (f"Ahora: ~{runs_day:.0f} revisiones por día. Gastaron {usd_es(sc_cost)} en {len(scouts)} llamadas en el período."),
+                 "action": None, "choices": NETWORK_OPTIONS, "value": hours,
+                 "night_pause": bool(cfg.get("night_pause", True))})
+
+    # 3) Modelo económico para trabajos simples
     if provider() == "openrouter":
         restore = cfg.get("restore_models") or {}
         for key, why in SIMPLE_AGENTS.items():
@@ -626,6 +677,15 @@ def aplicar(action: str) -> dict:
     cfg = get_settings()
     if action in ("cache_on", "cache_off"):
         save_settings(prompt_cache=action == "cache_on")
+        return {"ok": True}
+    if action.startswith("network:"):
+        h = float(action.split(":", 1)[1])
+        if h not in NETWORK_OPTIONS:
+            raise ValueError("Elige 2, 4, 6, 8, 12 o 24 horas")
+        save_settings(network_hours=h)
+        return {"ok": True}
+    if action in ("night_on", "night_off"):
+        save_settings(night_pause=action == "night_on")
         return {"ok": True}
     kind, _, key = action.partition(":")
     if key not in SIMPLE_AGENTS:
