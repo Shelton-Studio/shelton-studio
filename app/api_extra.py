@@ -429,16 +429,25 @@ async def lora_status(sid: str):
 
 
 class LoraTrainIn(BaseModel):
-    steps: int | None = None
+    steps: int | None = None         # pasos MÁS en esta sesión
+    minutes: float | None = None     # o tiempo más (se convierte con la velocidad real)
+    mode: str = "auto"               # continue | restart | auto
 
 
 @router.post("/subjects/{sid}/lora/train")
 async def lora_train(sid: str, body: LoraTrainIn):
     from app import lora
     try:
-        return lora.start(sid, body.steps)
+        return lora.start(sid, body.steps, body.mode, body.minutes)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@router.get("/subjects/{sid}/lora/plan")
+async def lora_plan(sid: str, mode: str = "auto", steps: int | None = None, minutes: float | None = None):
+    """Cuántos pasos y cuánto tiempo, antes de empezar (para el diálogo)."""
+    from app import lora
+    return lora.plan(sid, mode, steps, minutes)
 
 
 @router.post("/subjects/{sid}/lora/cancel")

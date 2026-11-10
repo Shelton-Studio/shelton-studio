@@ -23,6 +23,7 @@ from app.engines.comfy import inject_loras  # noqa: E402
 from app.comfyui.client import load_workflow  # noqa: E402
 
 FAKE_TRAINER = r'''#!/usr/bin/env python3
+# Entrenador simulado que se comporta como ai-toolkit: retoma desde el paso guardado y la barra cuenta el TOTAL.
 import json, sys, time, pathlib
 cfg = json.load(open(next(a for a in sys.argv[1:] if a.endswith(".json"))))
 p = cfg["config"]["process"][0]
@@ -30,11 +31,22 @@ name, steps = cfg["config"]["name"], p["train"]["steps"]
 assert p["model"]["arch"] == "zimage:turbo" and p["model"]["assistant_lora_path"].endswith(".safetensors")
 imgs = list(pathlib.Path(p["datasets"][0]["folder_path"]).glob("*.jpg"))
 assert len(imgs) >= 8 and all(i.with_suffix(".txt").read_text().startswith("a photo of " + p["trigger_word"]) for i in imgs)
-for s in (0, steps // 2, steps):
-    print(f"{name}:  {100*s//steps}%|####| {s}/{steps} [00:01<00:01, 1.0s/it, loss: 0.1]", flush=True)
 out = pathlib.Path(p["training_folder"]) / name
 out.mkdir(parents=True, exist_ok=True)
-(out / f"{name}.safetensors").write_bytes(b"LORA")
+
+def read_step(f):
+    data = f.read_bytes(); n = int.from_bytes(data[:8], "little")
+    meta = json.loads(data[8:8 + n]).get("__metadata__", {})
+    return json.loads(meta.get("training_info", "{}")).get("step", 0)
+
+start = max([read_step(f) for f in out.glob("*.safetensors")] or [0])
+print(f"resuming from step {start}" if start else "starting fresh", flush=True)
+for s in range(start, steps + 1, max(1, (steps - start) // 20)):
+    print(f"{name}:  {100*s//steps}%|####| {s}/{steps} [00:01<00:01, 1.0s/it, loss: 0.1]", flush=True)
+    time.sleep(0.01)
+print(f"{name}:  100%|####| {steps}/{steps} [00:01<00:00, 1.0s/it, loss: 0.1]", flush=True)
+header = json.dumps({"__metadata__": {"training_info": json.dumps({"step": steps})}}).encode()
+(out / f"{name}.safetensors").write_bytes(len(header).to_bytes(8, "little") + header + b"PESOS")
 '''
 
 
@@ -111,7 +123,7 @@ def test_full_training_cycle_and_use_in_generation(monkeypatch, tmp_path):
         sub = s.get(Subject, sid)
         assert sub.lora_status == "ready", sub.lora_info
         assert sub.lora_progress == 100 and sub.lora_trigger.startswith("shlcamilatest")
-        assert (loras_dir / sub.lora_name).read_bytes() == b"LORA"
+        assert (loras_dir / sub.lora_name).read_bytes().endswith(b"PESOS")
         name, trig = sub.lora_name, sub.lora_trigger
 
     # En una foto local, el modelo usa su LoRA (y la palabra clave va en el prompt)
@@ -182,3 +194,44 @@ def test_queue_trains_one_after_another(monkeypatch, tmp_path):
         assert s.get(Subject, a).lora_status == "ready"
         assert s.get(Subject, b).lora_status == "ready"
         assert s.get(Subject, c).lora_status == "canceled"
+
+
+def test_continue_adds_steps_and_restart_keeps_old(monkeypatch, tmp_path):
+    """«Entrena 2 horas más» suma a lo aprendido (no repite ni inventa pasos); «de cero» guarda lo viejo aparte."""
+    init_db()
+    _setup(monkeypatch, tmp_path)
+    sid = _subject(9)
+
+    async def run(**kw):
+        r = lora.start(sid, **kw)
+        await lora._worker
+        return r
+    r1 = asyncio.run(run(steps=400))
+    assert r1["mode"] == "restart" and r1["total_steps"] == 400
+    assert lora.saved_step(sid) == 400
+    spp = lora.sec_per_step(sid)
+    assert spp > 0
+
+    # Seguir entrenando +200 pasos: sigue desde 400 y llega a 600
+    p = lora.plan(sid, "continue", steps=200)
+    assert p == {**p, "mode": "continue", "from_step": 400, "add_steps": 200, "total_steps": 600}
+    r2 = asyncio.run(run(steps=200, mode="continue"))
+    assert r2["from_step"] == 400 and r2["total_steps"] == 600
+    assert lora.saved_step(sid) == 600
+    with session() as s:
+        info = s.get(Subject, sid).lora_info
+        assert info["trained_steps"] == 600 and info["step"] == 600 and s.get(Subject, sid).lora_status == "ready"
+    log = (settings.DATA_DIR / "lora" / sid / "train.log").read_text()
+    assert "resuming from step 400" in log
+
+    # Pedido en tiempo: se convierte con la velocidad real medida (no se inventa)
+    pm = lora.plan(sid, "continue", minutes=1)
+    expected = max(100, min(int(60 / lora.sec_per_step(sid)), lora.MAX_SESSION_STEPS))
+    assert pm["add_steps"] == expected and pm["from_step"] == 600 and pm["total_steps"] == 600 + expected
+
+    # Empezar de cero: lo viejo se guarda aparte (no se borra) y arranca desde 0
+    r3 = asyncio.run(run(steps=300, mode="restart"))
+    assert r3["from_step"] == 0 and r3["total_steps"] == 300
+    out = settings.DATA_DIR / "lora" / sid / "output"
+    assert any("_anterior_" in d.name for d in out.iterdir())
+    assert lora.saved_step(sid) == 300
