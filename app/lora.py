@@ -293,6 +293,25 @@ def plan(subject_id: str, mode: str = "auto", steps: int | None = None, minutes:
             "measured": spp != DEFAULT_SEC_PER_STEP}
 
 
+def _snapshot_before(subject_id: str, job: str) -> str | None:
+    """Antes de entrenar más, guarda la LoRA que hay ahora como versión (si todavía no estaba guardada).
+    Así, aunque la sesión nueva saliera peor, la que ya funcionaba nunca se pierde."""
+    work = settings.DATA_DIR / "lora" / subject_id
+    candidates = [Path(settings.COMFY_LORA_DIR).expanduser() / f"{job}.safetensors",
+                  work / "output" / job / f"{job}.safetensors"]
+    src = next((c for c in candidates if c.exists()), None)
+    if not src:
+        return None
+    step = _read_saved_step(src)
+    vdir = work / "versiones"
+    vdir.mkdir(parents=True, exist_ok=True)
+    if step and any(f"_{step}pasos_" in f.name for f in vdir.glob("*.safetensors")):
+        return None                                  # esa ya está guardada
+    name = f"{job}_{step or 'sin-dato'}pasos_{datetime.now():%Y%m%d_%H%M}_antes.safetensors"
+    shutil.copy2(src, vdir / name)
+    return name
+
+
 def _archive_old_output(subject_id: str, job: str) -> None:
     """Empezar de cero sin borrar nada: el entrenamiento viejo se guarda aparte."""
     folder = settings.DATA_DIR / "lora" / subject_id / "output" / job
@@ -330,6 +349,10 @@ async def _run(subject_id: str, steps: int, base: int = 0, mode: str = "restart"
     work = settings.DATA_DIR / "lora" / subject_id
     work.mkdir(parents=True, exist_ok=True)
     job_name = job_name_for(subject_id, name_human)
+    try:
+        await asyncio.to_thread(_snapshot_before, subject_id, job_name)
+    except Exception:  # noqa: BLE001
+        log.warning("No pude guardar la LoRA anterior como versión", exc_info=True)
     if mode == "restart":
         await asyncio.to_thread(_archive_old_output, subject_id, job_name)
         base = 0

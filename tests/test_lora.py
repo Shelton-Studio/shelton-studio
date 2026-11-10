@@ -278,3 +278,22 @@ def test_each_session_studies_new_photos(monkeypatch, tmp_path):
     assert set(lora.dataset_images(sid)) - set(first) <= set(second)   # las 4 que faltaban entran ahora
     asyncio.run(run(steps=200, mode="continue"))
     assert lora.status(sid)["images_new"] == 0 and lora.saved_step(sid) == 400
+
+
+def test_current_lora_is_saved_before_training_more(monkeypatch, tmp_path):
+    """La LoRA que ya funcionaba se guarda como versión ANTES de seguir entrenando (aunque venga de antes)."""
+    init_db()
+    loras_dir = _setup(monkeypatch, tmp_path)
+    sid = _subject(9)
+
+    async def run(**kw):
+        lora.start(sid, **kw)
+        await lora._worker
+    asyncio.run(run(steps=300))
+    vdir = settings.DATA_DIR / "lora" / sid / "versiones"
+    for f in vdir.glob("*.safetensors"):          # como una LoRA entrenada antes de existir las versiones
+        f.unlink()
+    asyncio.run(run(steps=200, mode="continue"))
+    steps = sorted(v["steps"] for v in lora.versions(sid))
+    assert steps == [300, 500]
+    assert any(v["file"].endswith("_antes.safetensors") for v in lora.versions(sid))
