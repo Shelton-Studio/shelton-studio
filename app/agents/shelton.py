@@ -601,9 +601,10 @@ async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
             return "Entrenamiento cancelado."
         if action == "start":
             r = lora.start(sids[0], args.get("steps"))
-            await emit({"type": "status", "text": f"Entrenando la LoRA con {r['images']} fotos ({r['steps']} pasos)…"})
-            return json.dumps({**r, "note": "Corre en segundo plano en la GPU local (1-2 h). Se ve en el Banco y en En vivo."},
-                              ensure_ascii=False)
+            await emit({"type": "status", "text": (f"En la fila de entrenamiento (#{r['position']})…" if r.get("queued")
+                                                   else f"Entrenando la LoRA con {r['images']} fotos ({r['steps']} pasos)…")})
+            return json.dumps({**r, "note": "Corre en segundo plano en la GPU local (1-2 h cada uno; si hay otros, espera su "
+                                            "turno en la fila). Se ve en el Banco y en En vivo."}, ensure_ascii=False)
         return json.dumps(lora.status(sids[0]), ensure_ascii=False)
 
     if name == "studio_capacity":

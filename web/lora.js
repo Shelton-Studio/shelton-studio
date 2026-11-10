@@ -12,7 +12,11 @@ VIEWS.banco = async (el) => {
     if (!s || $(".lora-box", card)) return;
     const L = s.lora || {}, info = L.info || {};
     const box = document.createElement("div"); box.className = "lora-box";
-    if (L.status === "training") {
+    if (L.status === "queued") {
+      box.innerHTML = `<div class="row" style="gap:8px"><span class="chip warn">⏳ En fila${info.position ? ` #${info.position}` : ""}</span>
+        <span class="faint small">Entrena solo cuando termine el anterior (la GPU entrena uno a la vez)</span></div>
+        <button class="btn sm ghost" data-lcancel="${sid}">Sacar de la fila</button>`;
+    } else if (L.status === "training") {
       box.innerHTML = `<div class="row" style="gap:8px"><span class="chip accent">🎓 Aprendiendo… ${Math.round(L.progress || 0)}%</span>
         <span class="faint small">${esc(info.phase || "")}${info.eta_min != null ? ` · faltan ~${info.eta_min} min` : ""}</span></div>
         <div class="lora-bar"><i style="width:${Math.max(2, L.progress || 0)}%"></i></div>
@@ -30,7 +34,7 @@ VIEWS.banco = async (el) => {
     $(".body", card)?.append(box);
   });
   $$("[data-ltrain]").forEach((b) => b.onclick = () => loraDialog(b.dataset.ltrain, b.dataset.lname));
-  $$("[data-lcancel]").forEach((b) => b.onclick = async () => { if (confirm("¿Cancelar el entrenamiento?")) { await api(`/api/subjects/${b.dataset.lcancel}/lora/cancel`, { method: "POST" }); } });
+  $$("[data-lcancel]").forEach((b) => b.onclick = async () => { if (confirm("¿Cancelar? (si está en la fila, solo sale de la fila)")) { await api(`/api/subjects/${b.dataset.lcancel}/lora/cancel`, { method: "POST" }); route(); } });
   $$("[data-lon]").forEach((c) => c.onchange = () => api(`/api/subjects/${c.dataset.lon}/lora/enabled`, { method: "POST", body: { enabled: c.checked } })
     .then(() => toast(c.checked ? "Se usará su LoRA en modo Local" : "Se usarán sus fotos de referencia", "good", "🎓")));
 };
@@ -47,7 +51,10 @@ async function loraDialog(sid, name) {
     <div class="hint">Mientras entrena, las fotos en modo Local esperan su turno (la nube sigue funcionando). Se puede cancelar.</div>`,
     `<button class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn primary" id="lgo" ${enough && st.trainer_ready ? "" : "disabled"}>Empezar a entrenar</button>`);
   $("#lgo", box).onclick = async () => {
-    try { const r = await api(`/api/subjects/${sid}/lora/train`, { method: "POST", body: { steps: +$("#lsteps").value } }); closeModal(); toast(`Entrenando a <b>${esc(name)}</b> con ${r.images} fotos. Lo ves en el Banco y en En vivo.`, "good", "🎓"); route(); }
+    try {
+      const r = await api(`/api/subjects/${sid}/lora/train`, { method: "POST", body: { steps: +$("#lsteps").value } }); closeModal();
+      toast(r.queued ? `<b>${esc(name)}</b> quedó en la fila (#${r.position}): se entrena solo cuando termine el anterior.` : `Entrenando a <b>${esc(name)}</b> con ${r.images} fotos. Lo ves en el Banco y en En vivo.`, "good", "🎓"); route();
+    }
     catch (e) { toast(esc(e.message), "bad"); }
   };
 }

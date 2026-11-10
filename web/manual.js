@@ -82,7 +82,8 @@ async function manualSubject() {
       if (train) {
         try {
           const r = await api(`/api/subjects/${sub.id}/lora/train`, { method: "POST", body: {} });
-          toast(`<b>${esc(name)}</b> guardado con ${files.length} fotos y su LoRA ya se está entrenando (${r.steps} pasos). Lo ves en el Banco y en En vivo.`, "good", "🎓");
+          toast(r.queued ? `<b>${esc(name)}</b> guardado con ${files.length} fotos y en la fila para entrenar (#${r.position}). Se entrena solo cuando termine el anterior.`
+            : `<b>${esc(name)}</b> guardado con ${files.length} fotos y su LoRA ya se está entrenando (${r.steps} pasos). Lo ves en el Banco y en En vivo.`, "good", "🎓");
         } catch (e) { toast(`<b>${esc(name)}</b> guardado. No se pudo empezar la LoRA: ${esc(e.message)}`, "warn", "🎓"); }
       } else {
         toast(files.length ? `<b>${esc(name)}</b> guardado con ${files.length} fotos. Ya puedes pedir contenido con su nombre.` : `El diseñador está creando la imagen de referencia de <b>${esc(name)}</b>…`, "good", "👤");
