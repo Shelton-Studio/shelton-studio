@@ -429,3 +429,13 @@ audio { width: 100%; height: 40px; }
 .link-hint { font-size: 12.5px; line-height: 1.45; padding: 8px 11px; border-radius: 12px; margin-bottom: 8px;
   background: rgba(34, 211, 238, .1); border: 1px solid rgba(34, 211, 238, .35); color: var(--text); }
 .b-linkbox:empty { display: none; }
+/* Copiar mensajes del chat */
+.copy-btn { align-self: flex-start; margin-top: 4px; background: none; border: 0; color: var(--faint, #8a8798); font-size: 12px; cursor: pointer; padding: 2px 6px; border-radius: 6px; opacity: .55; transition: opacity .15s; }
+.msg:hover .copy-btn, .copy-btn:focus { opacity: 1; }
+.copy-btn:hover { color: var(--text, #fff); background: var(--panel-2, rgba(255,255,255,.06)); }
+.msg.user .copy-btn { align-self: flex-end; }
+@media (hover: none) { .copy-btn { opacity: .7; } }
+.bubble { user-select: text; -webkit-user-select: text; }
+.bubble.long { max-height: 260px; overflow: hidden; -webkit-mask-image: linear-gradient(180deg, #000 70%, transparent); mask-image: linear-gradient(180deg, #000 70%, transparent); }
+.more-btn { opacity: 1 !important; color: var(--accent, #8b5cf6); }
+.copy-btn, .msg .who, .steps { user-select: none; -webkit-user-select: none; }

@@ -429,16 +429,39 @@ async def lora_status(sid: str):
 
 
 class LoraTrainIn(BaseModel):
-    steps: int | None = None
+    steps: int | None = None         # pasos MÁS en esta sesión
+    minutes: float | None = None     # o tiempo más (se convierte con la velocidad real)
+    mode: str = "auto"               # continue | restart | auto
 
 
 @router.post("/subjects/{sid}/lora/train")
 async def lora_train(sid: str, body: LoraTrainIn):
     from app import lora
     try:
-        return lora.start(sid, body.steps)
+        return lora.start(sid, body.steps, body.mode, body.minutes)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@router.get("/subjects/{sid}/lora/plan")
+async def lora_plan(sid: str, mode: str = "auto", steps: int | None = None, minutes: float | None = None):
+    """Cuántos pasos y cuánto tiempo, antes de empezar (para el diálogo)."""
+    from app import lora
+    return lora.plan(sid, mode, steps, minutes)
+
+
+class LoraVersionIn(BaseModel):
+    file: str
+
+
+@router.post("/subjects/{sid}/lora/version")
+async def lora_use_version(sid: str, body: LoraVersionIn):
+    """Volver a una versión anterior de la LoRA (ninguna se borra)."""
+    from app import lora
+    try:
+        return lora.use_version(sid, body.file)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
 
 
 @router.post("/subjects/{sid}/lora/cancel")

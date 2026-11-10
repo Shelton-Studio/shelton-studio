@@ -73,6 +73,9 @@ Cómo trabajas:
 - Memoria en archivos: al empezar cada sesión recibes lo último que hicieron tú y tu equipo. Si necesitas más
   contexto (qué se decidió antes, qué aprendió un agente, una conversación vieja), usa memory_archive (search/read).
   Nada se borra: las lecciones viejas quedan archivadas.
+- Entrenar más una LoRA: si piden TIEMPO («entrena 2 horas más»), usa train_subject_lora con mode=continue y
+  minutes=120; si piden pasos, steps. Nunca calcules pasos a mano. Después repite al usuario EXACTAMENTE lo que
+  devuelve la herramienta (desde qué paso sigue, cuántos suma, total y tiempo estimado). Para empezar de cero, mode=restart.
 - LoRA propia: si quieren que la GPU local "aprenda" de verdad a un modelo del banco (la misma cara siempre, sin
   depender de la nube), usa train_subject_lora. Necesita al menos 8 fotos buenas de ese modelo (mejor 15-30: de su
   ficha o de posts aprobados, hechas con cualquier IA). Cuando está lista, en modo Local sus fotos salen con su LoRA.
@@ -248,7 +251,11 @@ TOOLS = [
           "verdad; tarda 1-2 h y mientras tanto las fotos locales esperan). Usa sus fotos de ficha y los posts aprobados "
           "donde aparece (mínimo 8, mejor 15-30). action=status para ver cómo va o cuántas fotos tiene.",
           {"subject": {"type": "string"}, "action": {"type": "string", "enum": ["start", "status", "cancel"]},
-           "steps": {"type": "integer", "description": "Pasos de entrenamiento (vacío = 2000)"}}, ["subject"]),
+           "mode": {"type": "string", "enum": ["continue", "restart"],
+                    "description": "continue = seguir entrenando lo ya aprendido (suma); restart = empezar de cero"},
+           "minutes": {"type": "number", "description": "Si piden TIEMPO («2 horas más», «45 min»): minutos a entrenar. "
+                       "Shelton lo convierte en pasos con la velocidad real medida. NO calcules pasos tú."},
+           "steps": {"type": "integer", "description": "Solo si piden PASOS explícitos: pasos MÁS en esta sesión"}}, ["subject"]),
     _tool("memory_archive", "Archivo de memoria (todo en .md, nada se borra): lecciones activas y archivadas de cada "
           "agente y de cada modelo del banco, bitácoras diarias de trabajo, conversaciones pasadas y revisiones. "
           "action=list para ver las carpetas, search para buscar un texto, read para abrir un archivo.",
@@ -600,7 +607,7 @@ async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
             lora.cancel(sids[0])
             return "Entrenamiento cancelado."
         if action == "start":
-            r = lora.start(sids[0], args.get("steps"))
+            r = lora.start(sids[0], args.get("steps"), args.get("mode") or "auto", args.get("minutes"))
             await emit({"type": "status", "text": (f"En la fila de entrenamiento (#{r['position']})…" if r.get("queued")
                                                    else f"Entrenando la LoRA con {r['images']} fotos ({r['steps']} pasos)…")})
             return json.dumps({**r, "note": "Corre en segundo plano en la GPU local (1-2 h cada uno; si hay otros, espera su "
