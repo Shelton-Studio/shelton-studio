@@ -55,7 +55,10 @@ async function loraDialog(sid, name) {
       <option value="s:${st.default_steps}" ${has ? "" : "selected"}>${st.default_steps} pasos (normal para empezar)</option><option value="s:custom">Otra cantidad de pasos…</option></select></label>
     <input id="lcustom" type="number" min="100" max="${st.max_session_steps}" placeholder="pasos" style="display:none">
     <div class="card" style="padding:12px" id="lplan">Calculando…</div>
-    <div class="hint">Más pasos no siempre es mejor: si se pasa, la LoRA "copia" demasiado las fotos. Prueben fotos entre sesiones.</div>`,
+    <div class="hint">Más pasos no siempre es mejor: si se pasa, la LoRA "copia" demasiado las fotos. Prueben fotos entre sesiones.</div>
+    ${(st.versions || []).length ? `<details class="card" style="padding:12px"><summary style="cursor:pointer">🗂️ Versiones guardadas (${st.versions.length}) · nunca se borran</summary>
+      <div class="grid" style="gap:6px;margin-top:8px">${st.versions.map((v) => `<div class="row" style="gap:8px"><span class="grow small mono ellipsis">${esc(v.file)}</span>
+        <span class="faint small">${v.steps ? v.steps + " pasos" : ""}</span>${(st.info || {}).active_version === v.file ? '<span class="chip good">En uso</span>' : `<button class="btn sm" data-lver="${esc(v.file)}">Usar esta</button>`}</div>`).join("")}</div></details>` : ""}`,
     `<button class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn primary" id="lgo" ${enough && st.trainer_ready ? "" : "disabled"}>Empezar</button>`);
   let mode = has ? "continue" : "restart";
   const params = () => {
@@ -75,6 +78,10 @@ async function loraDialog(sid, name) {
   };
   $$("#lmode button", box).forEach((btn) => btn.onclick = () => { mode = btn.dataset.m; $$("#lmode button", box).forEach((x) => x.classList.toggle("on", x === btn)); refresh(); });
   $("#lamount", box).onchange = refresh; $("#lcustom", box).oninput = refresh;
+  $$("[data-lver]", box).forEach((b) => b.onclick = async () => {
+    try { await api(`/api/subjects/${sid}/lora/version`, { method: "POST", body: { file: b.dataset.lver } }); closeModal(); toast("Listo: se usa esa versión. Las demás siguen guardadas.", "good", "🗂️"); route(); }
+    catch (e) { toast(esc(e.message), "bad"); }
+  });
   refresh();
   $("#lgo", box).onclick = async () => {
     try {

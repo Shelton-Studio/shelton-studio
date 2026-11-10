@@ -235,3 +235,26 @@ def test_continue_adds_steps_and_restart_keeps_old(monkeypatch, tmp_path):
     out = settings.DATA_DIR / "lora" / sid / "output"
     assert any("_anterior_" in d.name for d in out.iterdir())
     assert lora.saved_step(sid) == 300
+
+
+def test_every_finished_training_is_kept_as_a_version(monkeypatch, tmp_path):
+    """Lo aprendido nunca se pierde: cada entrenamiento terminado queda como versión y se puede volver a ella."""
+    init_db()
+    loras_dir = _setup(monkeypatch, tmp_path)
+    sid = _subject(9)
+
+    async def run(**kw):
+        lora.start(sid, **kw)
+        await lora._worker
+    asyncio.run(run(steps=300))
+    asyncio.run(run(steps=200, mode="continue"))
+    vs = lora.versions(sid)
+    assert [v["steps"] for v in vs] == [500, 300]          # las dos versiones, la más nueva primero
+    st = lora.status(sid)
+    assert len(st["versions"]) == 2 and st["saved_step"] == 500
+    r = lora.use_version(sid, vs[1]["file"])                 # volver a la de 300 pasos
+    with session() as s:
+        sub = s.get(Subject, sid)
+        assert sub.lora_status == "ready" and sub.lora_info["active_version"] == vs[1]["file"]
+        assert lora._read_saved_step(loras_dir / sub.lora_name) == 300
+    assert len(lora.versions(sid)) == 2                      # no se borró ninguna

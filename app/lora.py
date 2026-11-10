@@ -90,7 +90,8 @@ def status(subject_id: str) -> dict:
         data = subject_dict(sub)["lora"]
     return {**data, "trainer_ready": ok, "trainer_msg": why, "images": len(imgs), "min_images": MIN_IMAGES,
             "max_images": MAX_IMAGES, "default_steps": settings.LORA_STEPS, "saved_step": saved_step(subject_id),
-            "sec_per_step": round(sec_per_step(subject_id), 2), "max_session_steps": MAX_SESSION_STEPS}
+            "sec_per_step": round(sec_per_step(subject_id), 2), "max_session_steps": MAX_SESSION_STEPS,
+            "versions": versions(subject_id)}
 
 
 def _update(subject_id: str, **fields) -> None:
@@ -136,7 +137,7 @@ def _config(name: str, work: Path, trigger: str, steps: int) -> Path:
     cfg = {"job": "extension", "config": {"name": name, "process": [{
         "type": "sd_trainer", "training_folder": str(work / "output"), "device": "cuda:0", "trigger_word": trigger,
         "network": {"type": "lora", "linear": 16, "linear_alpha": 16},
-        "save": {"dtype": "float16", "save_every": 500, "max_step_saves_to_keep": 2},
+        "save": {"dtype": "float16", "save_every": 500, "max_step_saves_to_keep": 4},
         "datasets": [{"folder_path": str(work / "dataset"), "caption_ext": "txt", "caption_dropout_rate": 0.05,
                       "shuffle_tokens": False, "cache_latents_to_disk": True, "resolution": [512, 768, 1024]}],
         "train": {"batch_size": 1, "steps": int(steps), "gradient_accumulation": 1, "train_unet": True,
@@ -206,6 +207,33 @@ def sec_per_step(subject_id: str | None = None) -> float:
         return DEFAULT_SEC_PER_STEP
     mine = [v for is_me, v in vals if is_me]
     return mine[0] if mine else sorted(v for _, v in vals)[len(vals) // 2]
+
+
+def versions(subject_id: str) -> list[dict]:
+    """Todas las versiones terminadas de la LoRA de un modelo (la más nueva primero)."""
+    vdir = settings.DATA_DIR / "lora" / subject_id / "versiones"
+    if not vdir.exists():
+        return []
+    out = []
+    for f in sorted(vdir.glob("*.safetensors"), key=lambda p: p.stat().st_mtime, reverse=True):
+        out.append({"file": f.name, "steps": _read_saved_step(f) or None,
+                    "date": datetime.fromtimestamp(f.stat().st_mtime).isoformat(timespec="minutes")})
+    return out
+
+
+def use_version(subject_id: str, file: str) -> dict:
+    """Vuelve a una versión anterior: la copia a ComfyUI como la LoRA activa (las demás siguen guardadas)."""
+    vfile = settings.DATA_DIR / "lora" / subject_id / "versiones" / Path(file).name
+    if not vfile.exists():
+        raise ValueError("Esa versión no existe")
+    with session() as s:
+        sub = s.get(Subject, subject_id)
+        job = job_name_for(subject_id, sub.name)
+    dest_name = f"{job}.safetensors"
+    shutil.copy2(vfile, Path(settings.COMFY_LORA_DIR).expanduser() / dest_name)
+    _update(subject_id, lora_status="ready", lora_name=dest_name, lora_enabled=True,
+            info={"active_version": vfile.name, "phase": "", "error": ""})
+    return {"ok": True, "active_version": vfile.name}
 
 
 def plan(subject_id: str, mode: str = "auto", steps: int | None = None, minutes: float | None = None) -> dict:
@@ -366,6 +394,11 @@ async def _run(subject_id: str, steps: int, base: int = 0, mode: str = "restart"
     dest_name = f"{job_name}.safetensors"
     dest = Path(settings.COMFY_LORA_DIR).expanduser() / dest_name
     await asyncio.to_thread(shutil.copy2, final, dest)
+    # Cada entrenamiento terminado queda guardado como versión: lo aprendido nunca se pierde
+    vdir = work / "versiones"
+    vdir.mkdir(exist_ok=True)
+    vname = f"{job_name}_{steps}pasos_{datetime.now():%Y%m%d_%H%M}.safetensors"
+    await asyncio.to_thread(shutil.copy2, final, vdir / vname)
     mins = round((time.time() - t0) / 60)
     _update(subject_id, lora_status="ready", lora_progress=100, lora_name=dest_name, lora_enabled=True,
             info={"phase": "", "finished": datetime.now().isoformat(timespec="seconds"), "minutes": mins, "eta_min": None,

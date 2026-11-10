@@ -450,6 +450,20 @@ async def lora_plan(sid: str, mode: str = "auto", steps: int | None = None, minu
     return lora.plan(sid, mode, steps, minutes)
 
 
+class LoraVersionIn(BaseModel):
+    file: str
+
+
+@router.post("/subjects/{sid}/lora/version")
+async def lora_use_version(sid: str, body: LoraVersionIn):
+    """Volver a una versión anterior de la LoRA (ninguna se borra)."""
+    from app import lora
+    try:
+        return lora.use_version(sid, body.file)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
 @router.post("/subjects/{sid}/lora/cancel")
 async def lora_cancel(sid: str):
     from app import lora
