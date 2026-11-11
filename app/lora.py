@@ -199,6 +199,66 @@ def job_name_for(subject_id: str, name: str) -> str:
     return f"shelton_{_slug(name)}_{subject_id[:6]}"
 
 
+def _work(subject_id: str) -> Path:
+    return settings.DATA_DIR / "lora" / subject_id
+
+
+def _live_folders(subject_id: str) -> list[tuple[int, Path]]:
+    """Carpetas de entrenamiento en uso (no las archivadas al «empezar de cero»), con su paso más alto."""
+    out = _work(subject_id) / "output"
+    if not out.exists():
+        return []
+    res = []
+    for d in out.iterdir():
+        if d.is_dir() and "_anterior_" not in d.name:
+            steps = [_read_saved_step(f) for f in d.glob("*.safetensors")]
+            if steps:
+                res.append((max(steps), d))
+    return sorted(res, key=lambda x: -x[0])
+
+
+def job_for(subject_id: str, name: str | None = None) -> str:
+    """Nombre de la carpeta/archivo de la LoRA de este modelo. Se fija la primera vez y no cambia aunque
+    le cambien el nombre al modelo (antes, renombrarlo hacía que empezara de cero en otra carpeta)."""
+    with session() as s:
+        sub = s.get(Subject, subject_id)
+        info = dict(sub.lora_info or {}) if sub else {}
+        name = name or (sub.name if sub else "")
+    if info.get("job"):
+        return info["job"]
+    live = _live_folders(subject_id)
+    if live:
+        return live[0][1].name          # la que más aprendió
+    return job_name_for(subject_id, name)
+
+
+def best_checkpoint(subject_id: str) -> tuple[int, Path | None]:
+    """Desde dónde sigue aprendiendo este modelo:
+    1) la versión que eligieron con «Usar esta» (si eligieron una);
+    2) si no, la carpeta en uso que más aprendió;
+    3) si no hay ninguna carpeta en uso (y no pidieron empezar de cero), el respaldo más avanzado."""
+    with session() as s:
+        sub = s.get(Subject, subject_id)
+        info = dict(sub.lora_info or {}) if sub else {}
+    vdir = _work(subject_id) / "versiones"
+    if info.get("resume_from"):
+        f = vdir / Path(info["resume_from"]).name
+        if f.exists():
+            return _read_saved_step(f), f
+    live = _live_folders(subject_id)
+    if live:
+        step, d = live[0]
+        return step, max(d.glob("*.safetensors"), key=_read_saved_step)
+    if info.get("mode") == "restart" or not vdir.exists():
+        return 0, None
+    best: tuple[int, Path | None] = (0, None)
+    for f in vdir.glob("*.safetensors"):
+        st = _read_saved_step(f)
+        if st > best[0]:
+            best = (st, f)
+    return best
+
+
 def _read_saved_step(path: Path) -> int:
     """Paso guardado dentro de un .safetensors de ai-toolkit (metadata training_info.step)."""
     try:
@@ -221,13 +281,8 @@ def saved_step(subject_id: str) -> int:
         if not sub:
             return 0
         name = sub.name
-    folder = settings.DATA_DIR / "lora" / subject_id / "output" / job_name_for(subject_id, name)
-    if not folder.exists():
-        return 0
-    files = [p for p in folder.glob("*.safetensors")]
-    if not files:
-        return 0
-    return max(_read_saved_step(p) for p in files)
+    # Lo que de verdad va a retomar el entrenador al «seguir» (ver best_checkpoint): nunca vuelve a cero solo
+    return best_checkpoint(subject_id)[0]
 
 
 def sec_per_step(subject_id: str | None = None) -> float:
@@ -264,12 +319,13 @@ def use_version(subject_id: str, file: str) -> dict:
         raise ValueError("Esa versión no existe")
     with session() as s:
         sub = s.get(Subject, subject_id)
-        job = job_name_for(subject_id, sub.name)
+        sub_name = sub.name
+    job = job_for(subject_id, sub_name)
     dest_name = f"{job}.safetensors"
     shutil.copy2(vfile, Path(settings.COMFY_LORA_DIR).expanduser() / dest_name)
     _update(subject_id, lora_status="ready", lora_name=dest_name, lora_enabled=True,
-            info={"active_version": vfile.name, "phase": "", "error": ""})
-    return {"ok": True, "active_version": vfile.name}
+            info={"active_version": vfile.name, "resume_from": vfile.name, "job": job, "phase": "", "error": ""})
+    return {"ok": True, "active_version": vfile.name, "resume_step": _read_saved_step(vfile)}
 
 
 def plan(subject_id: str, mode: str = "auto", steps: int | None = None, minutes: float | None = None) -> dict:
@@ -312,6 +368,26 @@ def _snapshot_before(subject_id: str, job: str) -> str | None:
     return name
 
 
+def _seed_from_best(subject_id: str, job: str) -> None:
+    """Deja en la carpeta de entrenamiento el punto desde el que hay que seguir (ver best_checkpoint).
+    Si eligieron una versión, lo que había en la carpeta se archiva aparte (no se borra) y se sigue desde esa."""
+    step, src = best_checkpoint(subject_id)
+    folder = _work(subject_id) / "output" / job
+    if not src or src.parent == folder:
+        return
+    with session() as s:
+        chosen = bool((s.get(Subject, subject_id).lora_info or {}).get("resume_from"))
+    here = max((_read_saved_step(f) for f in folder.glob("*.safetensors")), default=0) if folder.exists() else 0
+    if chosen and here:
+        _archive_old_output(subject_id, job)
+    elif here >= step:
+        return
+    folder.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, folder / f"{job}.safetensors")
+    _update(subject_id, info={"resume_from": ""})
+    log.info("LoRA %s: sigo desde el paso %s (%s)", job, step, src)
+
+
 def _archive_old_output(subject_id: str, job: str) -> None:
     """Empezar de cero sin borrar nada: el entrenamiento viejo se guarda aparte."""
     folder = settings.DATA_DIR / "lora" / subject_id / "output" / job
@@ -348,7 +424,10 @@ async def _run(subject_id: str, steps: int, base: int = 0, mode: str = "restart"
         name_human, trigger = sub.name, sub.lora_trigger or trigger_for(sub)
     work = settings.DATA_DIR / "lora" / subject_id
     work.mkdir(parents=True, exist_ok=True)
-    job_name = job_name_for(subject_id, name_human)
+    job_name = job_for(subject_id, name_human)
+    _update(subject_id, info={"job": job_name})
+    if mode == "continue":
+        await asyncio.to_thread(_seed_from_best, subject_id, job_name)
     try:
         await asyncio.to_thread(_snapshot_before, subject_id, job_name)
     except Exception:  # noqa: BLE001

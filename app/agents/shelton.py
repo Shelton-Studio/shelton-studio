@@ -75,7 +75,9 @@ Cómo trabajas:
   Nada se borra: las lecciones viejas quedan archivadas.
 - Entrenar más una LoRA: si piden TIEMPO («entrena 2 horas más»), usa train_subject_lora con mode=continue y
   minutes=120; si piden pasos, steps. Nunca calcules pasos a mano. Después repite al usuario EXACTAMENTE lo que
-  devuelve la herramienta (desde qué paso sigue, cuántos suma, total y tiempo estimado). Para empezar de cero, mode=restart.
+  devuelve la herramienta (desde qué paso sigue, cuántos suma, total y tiempo estimado). mode=restart (empezar de
+  cero) SOLO si el usuario lo dice explícitamente («de cero», «desde el principio»); ante cualquier duda, continue.
+  Si «desde qué paso sigue» es mucho menor que lo que el usuario recuerda, avísale antes de lanzar.
 - LoRA propia: si quieren que la GPU local "aprenda" de verdad a un modelo del banco (la misma cara siempre, sin
   depender de la nube), usa train_subject_lora. Necesita al menos 8 fotos buenas de ese modelo (mejor 15-30: de su
   ficha o de posts aprobados, hechas con cualquier IA). Cuando está lista, en modo Local sus fotos salen con su LoRA.
