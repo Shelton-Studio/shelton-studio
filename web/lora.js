@@ -80,7 +80,7 @@ async function loraDialog(sid, name) {
   $$("#lmode button", box).forEach((btn) => btn.onclick = () => { mode = btn.dataset.m; $$("#lmode button", box).forEach((x) => x.classList.toggle("on", x === btn)); refresh(); });
   $("#lamount", box).onchange = refresh; $("#lcustom", box).oninput = refresh;
   $$("[data-lver]", box).forEach((b) => b.onclick = async () => {
-    try { await api(`/api/subjects/${sid}/lora/version`, { method: "POST", body: { file: b.dataset.lver } }); closeModal(); toast("Listo: se usa esa versión. Las demás siguen guardadas.", "good", "🗂️"); route(); }
+    try { await api(`/api/subjects/${sid}/lora/version`, { method: "POST", body: { file: b.dataset.lver } }); closeModal(); toast("Listo: se usa esa versión y el próximo «seguir entrenando» sigue desde ahí. Las demás siguen guardadas.", "good", "🗂️"); route(); }
     catch (e) { toast(esc(e.message), "bad"); }
   });
   refresh();

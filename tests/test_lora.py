@@ -297,3 +297,61 @@ def test_current_lora_is_saved_before_training_more(monkeypatch, tmp_path):
     steps = sorted(v["steps"] for v in lora.versions(sid))
     assert steps == [300, 500]
     assert any(v["file"].endswith("_antes.safetensors") for v in lora.versions(sid))
+
+
+def test_renaming_the_model_does_not_restart_training(monkeypatch, tmp_path):
+    """Si le cambian el nombre al modelo, sigue aprendiendo desde donde iba (antes arrancaba de cero en otra carpeta)."""
+    init_db()
+    _setup(monkeypatch, tmp_path)
+    sid = _subject(9)
+
+    async def run(**kw):
+        r = lora.start(sid, **kw)
+        await lora._worker
+        return r
+    asyncio.run(run(steps=400))
+    with session() as s:
+        s.get(Subject, sid).name = "Camila Rossi Nueva"
+        info = dict(s.get(Subject, sid).lora_info)
+        info.pop("job", None)                      # como una LoRA entrenada antes de este arreglo
+        s.get(Subject, sid).lora_info = info
+    assert lora.saved_step(sid) == 400
+    r = asyncio.run(run(steps=200))                 # «auto»: tiene que seguir, no empezar de cero
+    assert r["mode"] == "continue" and r["from_step"] == 400 and r["total_steps"] == 600
+    assert lora.saved_step(sid) == 600
+
+
+def test_use_version_then_continue_resumes_from_that_version(monkeypatch, tmp_path):
+    init_db()
+    _setup(monkeypatch, tmp_path)
+    sid = _subject(9)
+
+    async def run(**kw):
+        r = lora.start(sid, **kw)
+        await lora._worker
+        return r
+    asyncio.run(run(steps=300))
+    asyncio.run(run(steps=300, mode="continue"))       # 600
+    v300 = next(v["file"] for v in lora.versions(sid) if v["steps"] == 300)
+    lora.use_version(sid, v300)
+    assert lora.saved_step(sid) == 300
+    r = asyncio.run(run(steps=100, mode="continue"))
+    assert r["from_step"] == 300 and lora.saved_step(sid) == 400
+    out = settings.DATA_DIR / "lora" / sid / "output"
+    assert any("_anterior_" in d.name for d in out.iterdir())     # lo de 600 quedó archivado, no borrado
+    assert any(v["steps"] == 600 for v in lora.versions(sid))
+
+
+def test_restart_then_continue_keeps_the_new_line(monkeypatch, tmp_path):
+    init_db()
+    _setup(monkeypatch, tmp_path)
+    sid = _subject(9)
+
+    async def run(**kw):
+        r = lora.start(sid, **kw)
+        await lora._worker
+        return r
+    asyncio.run(run(steps=500))
+    asyncio.run(run(steps=200, mode="restart"))
+    r = asyncio.run(run(steps=100, mode="continue"))
+    assert r["from_step"] == 200 and lora.saved_step(sid) == 300
