@@ -80,9 +80,31 @@ def sse(ev: dict) -> str:
     return f"data: {json.dumps(ev, ensure_ascii=False, default=str)}\n\n"
 
 
+def _web_version() -> str:
+    """Huella de la versión de la web: cambia cuando se actualiza cualquier archivo de web/."""
+    web = ROOT / "web"
+    return str(int(max((f.stat().st_mtime for f in web.iterdir() if f.is_file()), default=0)))
+
+
 @app.get("/")
 async def index():
-    return FileResponse(ROOT / "web" / "index.html")
+    """La página con los .js/.css marcados con la versión: después de actualizar, el navegador baja los nuevos
+    (antes podía quedarse con los viejos guardados y no mostrar lo nuevo)."""
+    import re as _re
+    from fastapi.responses import HTMLResponse
+    html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+    v = _web_version()
+    html = _re.sub(r'(/static/[\w.-]+\.(?:js|css))"', rf'\1?v={v}"', html)
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
+
+@app.middleware("http")
+async def _fresh_static(request, call_next):
+    """Los archivos de la web se revalidan siempre (si no cambiaron, el navegador usa su copia sin bajarla)."""
+    resp = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
 
 
 # ------------------------------------------------------------------ Estado
