@@ -45,6 +45,8 @@ else git clone -q https://github.com/comfyanonymous/ComfyUI "$COMFY" && ok "Desc
 "$COMFY/venv/bin/pip" install -q torch torchvision torchaudio --extra-index-url "https://download.pytorch.org/whl/${CUDA_WHEEL:-cu128}"
 "$COMFY/venv/bin/pip" install -q -r "$COMFY/requirements.txt" huggingface_hub
 "$COMFY/venv/bin/python" -c "import torch;assert torch.cuda.is_available(),'CUDA no disponible';print('  GPU para PyTorch:',torch.cuda.get_device_name(0))"
+say "Calidad máxima: mejora de rostro (Impact Pack)"
+bash "$SHELTON_DIR/scripts/quality_nodes.sh" "$COMFY" || echo "  ⚠ No se pudo instalar la mejora de rostro: la calidad máxima funciona sin ella"
 
 cat > /etc/systemd/system/shelton-studio-comfy.service <<UNIT
 [Unit]

@@ -7,6 +7,7 @@ Categorías:
   voice     -> motores de voz (local Chatterbox, ElevenLabs, API genérica)
   publisher -> destinos de publicación (Telegram, Instagram, Facebook, Discord, webhook)
   webhook   -> avisos salientes de eventos (n8n, Make, Zapier, tu propio servidor)
+  gpu       -> nodos de la granja de GPUs (tarjetas alquiladas u otras PCs con el trabajador)
 """
 from app.db import Connection, session
 
@@ -32,7 +33,8 @@ TYPES: dict[str, dict] = {
                            F("preset", "Perfil de imagen (fast / quality / lite)", placeholder="fast"),
                            F("video_preset", "Perfil de video (cinema / fast)", placeholder="cinema"),
                            F("gen_unet", "Modelo de generación (opcional)", placeholder="z_image_turbo_bf16.safetensors"),
-                           F("gen_scale", "Escala de resolución", placeholder="1.0")]},
+                           F("gen_scale", "Escala de resolución", placeholder="1.0"),
+                           F("gpu", "GPU de la placa (si hay varias: 0, 1, 2)", placeholder="0")]},
     "openrouter_image": {"category": "engine", "name": "OpenRouter (imagen)",
                          "help": "Modelos de imagen de OpenRouter (Gemini Nano Banana, GPT Image...). Usa la clave del cerebro si no pones otra. "
                                  "Sirve para generar, editar y escenas con modelos del banco. No hace video.",
@@ -99,6 +101,16 @@ TYPES: dict[str, dict] = {
                                      F("public_base_url", "URL pública de Shelton (para mandar link en vez de base64)")]},
 
     # --- avisos de eventos
+    # --- granja de GPUs: tarjetas alquiladas u otras PCs con el trabajador de Shelton (scripts/node_setup.sh)
+    "gpu_node": {"category": "gpu", "name": "Nodo de GPU (trabajador)",
+                 "help": "Tarjeta alquilada (RunPod, Vast…) u otra PC con GPU, preparada con scripts/node_setup.sh. "
+                         "Shelton le manda entrenamientos de LoRA y la usa cuando la placa está ocupada.",
+                 "fields": [F("url", "URL del trabajador (Tailscale)", placeholder="http://100.x.x.x:8299", required=True),
+                            F("token", "Token del trabajador", "secret", required=True),
+                            F("slots", "Entrenamientos a la vez", placeholder="3"),
+                            F("profile", "Perfil (pro / estandar)", placeholder="pro"),
+                            F("cost_hour", "Costo por hora en US$ (para Consumo)", placeholder="2.0"),
+                            F("comfy_url", "ComfyUI de ese nodo (opcional)", placeholder="http://100.x.x.x:8288")]},
     "event_webhook": {"category": "webhook", "name": "Webhook de eventos",
                       "help": "Recibe un POST cada vez que pasa algo (post listo, aprobado, publicado, campaña terminada...).",
                       "fields": [F("url", "URL", required=True), F("headers", "Cabeceras (JSON)", "json"),

@@ -493,3 +493,18 @@ audio { width: 100%; height: 40px; }
 .cs-tip-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; min-width: 110px; text-align: right; color: var(--muted); }
 .cs-tip-side b { color: var(--text); font-size: 16px; font-variant-numeric: tabular-nums; }
 @media (max-width: 700px) { .cs-tips { grid-template-columns: 1fr; } }
+/* Calidad, comparador y granja */
+.q-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border-radius: 10px; background: var(--panel-2); cursor: pointer; }
+.q-row input[type=checkbox] { margin-top: 3px; }
+.tn-card { margin-bottom: 14px; }
+.tn-row { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
+.tn-name { min-width: 120px; font-weight: 600; }
+.cmp-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.cmp-opt { display: flex; gap: 6px; align-items: center; padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); cursor: pointer; font-size: 13px; }
+.cmp-grid { display: grid; gap: 12px; }
+.cmp-row { background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 10px; }
+.cmp-head { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.cmp-head .btn { margin-left: auto; }
+.cmp-imgs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.cmp-imgs img, .cmp-ph { width: 100%; aspect-ratio: 896 / 1152; object-fit: cover; border-radius: 8px; background: var(--panel-3); cursor: zoom-in; display: grid; place-items: center; color: var(--faint); }
+@media (max-width: 700px) { .cmp-imgs { grid-template-columns: repeat(2, 1fr); } }

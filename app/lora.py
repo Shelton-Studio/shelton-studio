@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import logging
 import re
 import shutil
@@ -142,8 +143,9 @@ def _update(subject_id: str, **fields) -> None:
     events.publish({"type": "subject", "subject": data})
 
 
-def _prepare(subject_id: str, work: Path, trigger: str) -> int:
-    """Copia las fotos (recortadas a 1024 px como máximo) con un texto simple por foto."""
+def _prepare(subject_id: str, work: Path, trigger: str, captions: dict | None = None, max_side: int = 1024) -> int:
+    """Copia las fotos (recortadas a max_side px) con su texto: el simple de siempre o, si hay, una descripción
+    detallada de la escena (pose, ropa, luz, fondo) para que la LoRA aprenda a la persona y no la ropa ni el fondo."""
     ds = work / "dataset"
     if ds.exists():
         shutil.rmtree(ds)
@@ -159,33 +161,51 @@ def _prepare(subject_id: str, work: Path, trigger: str) -> int:
             img = ImageOps.exif_transpose(Image.open(src)).convert("RGB")
         except Exception:  # noqa: BLE001
             continue
-        img.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+        img.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
         img.save(ds / f"{i:03d}.jpg", "JPEG", quality=95)
-        (ds / f"{i:03d}.txt").write_text(f"a photo of {trigger}, a {kind}", encoding="utf-8")
+        extra = (captions or {}).get(src, "").strip()
+        (ds / f"{i:03d}.txt").write_text(f"a photo of {trigger}, a {kind}" + (f", {extra}" if extra else ""),
+                                         encoding="utf-8")
         used.append(src)
         n += 1
     (work / "fotos_sesion.json").write_text(json.dumps(used, ensure_ascii=False), encoding="utf-8")
     return n
 
 
-def _config(name: str, work: Path, trigger: str, steps: int) -> Path:
-    """Configuración de ai-toolkit para Z-Image Turbo (la misma que usa su interfaz para este modelo)."""
-    cfg = {"job": "extension", "config": {"name": name, "process": [{
-        "type": "sd_trainer", "training_folder": str(work / "output"), "device": "cuda:0", "trigger_word": trigger,
-        "network": {"type": "lora", "linear": 16, "linear_alpha": 16},
-        "save": {"dtype": "float16", "save_every": 500, "max_step_saves_to_keep": 4},
-        "datasets": [{"folder_path": str(work / "dataset"), "caption_ext": "txt", "caption_dropout_rate": 0.05,
-                      "shuffle_tokens": False, "cache_latents_to_disk": True, "resolution": [512, 768, 1024]}],
+PROFILES = {
+    # 3090 (24 GB): comprimido y en modo de poca memoria, como siempre
+    "estandar": {"rank": 16, "resolution": [512, 768, 1024], "quantize": True, "low_vram": True, "max_side": 1024,
+                 "keep": 4, "label": "Estándar (24 GB)"},
+    # Tarjetas grandes (32 GB o más): LoRA más detallada, más resolución y el modelo sin comprimir
+    "pro": {"rank": 32, "resolution": [768, 1024, 1280], "quantize": False, "low_vram": False, "max_side": 1536,
+            "keep": 6, "label": "Pro (32 GB o más)"},
+}
+
+
+def config_dict(name: str, root: str, trigger: str, steps: int, profile: str = "estandar") -> dict:
+    """Configuración de ai-toolkit para Z-Image Turbo. root = carpeta de trabajo (local o la del nodo remoto).
+    Siempre sobre Z-Image Turbo: así la LoRA sirve para generar en las 3090 de la placa."""
+    pf = PROFILES.get(profile, PROFILES["estandar"])
+    return {"job": "extension", "config": {"name": name, "process": [{
+        "type": "sd_trainer", "training_folder": f"{root}/output", "device": "cuda:0", "trigger_word": trigger,
+        "network": {"type": "lora", "linear": pf["rank"], "linear_alpha": pf["rank"]},
+        "save": {"dtype": "float16", "save_every": 500, "max_step_saves_to_keep": pf["keep"]},
+        "datasets": [{"folder_path": f"{root}/dataset", "caption_ext": "txt", "caption_dropout_rate": 0.05,
+                      "shuffle_tokens": False, "cache_latents_to_disk": True, "resolution": pf["resolution"]}],
         "train": {"batch_size": 1, "steps": int(steps), "gradient_accumulation": 1, "train_unet": True,
                   "train_text_encoder": False, "gradient_checkpointing": True, "noise_scheduler": "flowmatch",
                   "timestep_type": "weighted", "optimizer": "adamw8bit", "lr": 1e-4, "dtype": "bf16",
                   "unload_text_encoder": False, "disable_sampling": True},
-        "model": {"name_or_path": "Tongyi-MAI/Z-Image-Turbo", "arch": "zimage:turbo", "quantize": True,
-                  "qtype": "qfloat8", "quantize_te": True, "low_vram": True,
+        "model": {"name_or_path": "Tongyi-MAI/Z-Image-Turbo", "arch": "zimage:turbo", "quantize": pf["quantize"],
+                  "qtype": "qfloat8", "quantize_te": pf["quantize"], "low_vram": pf["low_vram"],
                   "assistant_lora_path": "ostris/zimage_turbo_training_adapter/zimage_turbo_training_adapter_v2.safetensors"},
         "sample": {"sampler": "flowmatch", "sample_every": 100000, "width": 1024, "height": 1024,
                    "prompts": [f"a photo of {trigger}"], "guidance_scale": 1, "sample_steps": 9},
     }]}, "meta": {"name": name, "version": "1.0"}}
+
+
+def _config(name: str, work: Path, trigger: str, steps: int, profile: str = "estandar") -> Path:
+    cfg = config_dict(name, str(work), trigger, steps, profile)
     path = work / "config.json"
     path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     return path
@@ -416,9 +436,8 @@ def _comfy_urls() -> list[str]:
     return sorted(urls)
 
 
-async def _run(subject_id: str, steps: int, base: int = 0, mode: str = "restart") -> None:
-    from app import working
-    from app.engines import gpu_slot
+async def _pre(subject_id: str, mode: str, base: int, profile: str = "estandar") -> dict | None:
+    """Todo lo que se hace antes de entrenar (igual en la placa que en una tarjeta alquilada)."""
     with session() as s:
         sub = s.get(Subject, subject_id)
         name_human, trigger = sub.name, sub.lora_trigger or trigger_for(sub)
@@ -435,12 +454,31 @@ async def _run(subject_id: str, steps: int, base: int = 0, mode: str = "restart"
     if mode == "restart":
         await asyncio.to_thread(_archive_old_output, subject_id, job_name)
         base = 0
-    n = await asyncio.to_thread(_prepare, subject_id, work, trigger)
+    captions = None
+    if profile == "pro" or _detailed_captions_on():
+        try:
+            _update(subject_id, info={"phase": "Describiendo cada foto (pose, ropa, luz, fondo)"})
+            captions = await caption_photos(subject_id, trigger)
+        except Exception:  # noqa: BLE001
+            log.warning("No pude describir las fotos: sigo con el texto simple", exc_info=True)
+    pf = PROFILES.get(profile, PROFILES["estandar"])
+    n = await asyncio.to_thread(_prepare, subject_id, work, trigger, captions, pf["max_side"])
     if n < MIN_IMAGES:
         _update(subject_id, lora_status="failed",
                 info={"error": f"Hay {n} fotos y hacen falta al menos {MIN_IMAGES}. Agrega fotos a la ficha o aprueba posts con este modelo."})
+        return None
+    return {"name": name_human, "trigger": trigger, "work": work, "job": job_name, "base": base, "n": n}
+
+
+async def _run(subject_id: str, steps: int, base: int = 0, mode: str = "restart", gpu: str | None = None) -> None:
+    from app import working
+    from app.engines import gpu_slot
+    ctx = await _pre(subject_id, mode, base, _local_profile())
+    if not ctx:
         return
-    cfg = _config(job_name, work, trigger, steps)
+    name_human, trigger, work, job_name, base, n = (ctx["name"], ctx["trigger"], ctx["work"], ctx["job"],
+                                                     ctx["base"], ctx["n"])
+    cfg = _config(job_name, work, trigger, steps, _local_profile())
     t0 = time.time()
     _update(subject_id, lora_status="training", lora_progress=0, lora_trigger=trigger,
             info={"images": n, "steps": steps, "from_step": base, "mode": mode,
@@ -448,7 +486,7 @@ async def _run(subject_id: str, steps: int, base: int = 0, mode: str = "restart"
                   "phase": "Esperando la GPU", "error": "", "eta_min": None})
     logf = work / "train.log"
     async with AsyncExitStack() as stack:
-        for url in _comfy_urls():                      # nuestras fotos locales esperan mientras entrena
+        for url in _comfy_urls_for_gpu(gpu):           # nuestras fotos locales esperan mientras entrena (en esa GPU)
             await stack.enter_async_context(gpu_slot(url))
         await _free_comfy_vram()
         _update(subject_id, info={"phase": "Preparando (la primera vez baja Z-Image para entrenar, ~20 GB)"})
@@ -456,6 +494,8 @@ async def _run(subject_id: str, steps: int, base: int = 0, mode: str = "restart"
         with working.track("lora_trainer", f"Entrenando la LoRA de {name_human} ({n} fotos, {what})", "ai-toolkit · Z-Image Turbo"):
             import os as _os
             env = {**_os.environ, "PYTHONUNBUFFERED": "1"}   # que escriba cada línea al momento (log y avance en vivo)
+            if gpu is not None and len(local_gpus()) > 1:
+                env["CUDA_VISIBLE_DEVICES"] = str(gpu)           # varias GPU en la placa: cada entrenamiento en la suya
             proc = await asyncio.create_subprocess_exec(
                 str(trainer_python()), "-u", "run.py", str(cfg), cwd=str(Path(settings.AITK_DIR).expanduser()),
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, env=env)
@@ -526,6 +566,14 @@ async def _run(subject_id: str, steps: int, base: int = 0, mode: str = "restart"
         return
     outs = sorted((work / "output" / job_name).glob(f"{job_name}*.safetensors"), key=lambda p: p.stat().st_mtime)
     final = next((p for p in outs if p.stem == job_name), outs[-1] if outs else None)
+    await _finish(subject_id, ctx, steps, final, t0, spp_now)
+
+
+async def _finish(subject_id: str, ctx: dict, steps: int, final: Path | None, t0: float, spp_now: float | None,
+                  provider: str = "ai-toolkit", cost_usd: float | None = None, where: str = "") -> None:
+    """Todo lo que se hace al terminar (igual en la placa que en una tarjeta alquilada): dejarla activa, respaldo,
+    fotos estudiadas, consumo y aviso. Además la copia a las demás tarjetas que generan."""
+    work, job_name, name_human, base, n = ctx["work"], ctx["job"], ctx["name"], ctx["base"], ctx["n"]
     if not final:
         _update(subject_id, lora_status="failed", info={"error": "El entrenamiento terminó pero no encontré la LoRA", "phase": ""})
         return
@@ -545,14 +593,83 @@ async def _run(subject_id: str, steps: int, base: int = 0, mode: str = "restart"
     mins = round((time.time() - t0) / 60)
     try:
         from app.consumo import record
-        record("lora", "ai-toolkit", "Z-Image Turbo", seconds=time.time() - t0, agent="lora_trainer",
-               note=f"LoRA de {name_human}: {base} → {steps} pasos ({n} fotos)")
+        record("lora", provider, "Z-Image Turbo", seconds=time.time() - t0, agent="lora_trainer", cost_usd=cost_usd,
+               note=f"LoRA de {name_human}: {base} → {steps} pasos ({n} fotos){' · ' + where if where else ''}")
     except Exception:  # noqa: BLE001
         log.warning("No pude registrar el consumo del entrenamiento", exc_info=True)
     _update(subject_id, lora_status="ready", lora_progress=100, lora_name=dest_name, lora_enabled=True,
             info={"phase": "", "finished": datetime.now().isoformat(timespec="seconds"), "minutes": mins, "eta_min": None,
                   "trained_steps": steps, "step": steps, **({"sec_per_step": round(spp_now, 3)} if spp_now else {})})
     events.publish({"type": "lora_ready", "subject_id": subject_id, "name": name_human, "minutes": mins})
+    try:
+        from app import granja
+        await granja.push_lora(dest)        # que todas las tarjetas que generan la tengan
+    except Exception:  # noqa: BLE001
+        log.warning("No pude copiar la LoRA a las otras tarjetas", exc_info=True)
+
+
+# ------------------------------------------------------------------ varias GPU (placa y alquiladas)
+def local_gpus() -> list[str]:
+    """GPU de la placa que pueden entrenar (LORA_GPUS=0,1,2). Por defecto la primera."""
+    raw = os.getenv("LORA_GPUS", "0").strip()
+    return [g.strip() for g in raw.split(",") if g.strip()] or ["0"]
+
+
+def _local_profile() -> str:
+    p = os.getenv("LORA_LOCAL_PROFILE", "estandar").strip().lower()
+    return p if p in PROFILES else "estandar"
+
+
+def _detailed_captions_on() -> bool:
+    from app import calidad
+    return bool(calidad.get().get("detailed_captions"))
+
+
+def _comfy_urls_for_gpu(gpu: str | None) -> list[str]:
+    """ComfyUI que hay que pausar mientras se entrena en esa GPU. Con una sola GPU, todos los de la placa (como antes);
+    con varias, solo el que corre en esa misma GPU (campo «gpu» de la conexión ComfyUI)."""
+    if gpu is None or len(local_gpus()) <= 1:
+        return _comfy_urls()
+    from app.connections import list_enabled
+    same = [c.config["url"].rstrip("/") for c in list_enabled("engine")
+            if c.type == "comfyui" and c.config.get("url") and str(c.config.get("gpu", "0")) == str(gpu)]
+    if str(gpu) == "0" and settings.COMFYUI_URL not in same:
+        same.append(settings.COMFYUI_URL)
+    return sorted(set(same))
+
+
+CAPTION_PROMPT = ("You write training captions for a LoRA of ONE recurring subject. For each photo, in order, write ONE "
+                  "short English caption (max 30 words) describing ONLY what changes between photos: pose, framing "
+                  "(close-up, half body, full body), clothing, accessories, expression, background/place, lighting and "
+                  "camera angle. NEVER describe the subject's identity traits (face shape, eye color, skin tone, hair "
+                  "color, body type, age): those must be learned from the trigger word. No names. "
+                  "Return JSON {\"captions\": [..]} with exactly one caption per photo.")
+
+
+async def caption_photos(subject_id: str, trigger: str) -> dict:
+    """Descripción detallada de cada foto del dataset (se guarda y no se repite si la foto no cambió)."""
+    from app import llm
+    from app.media import image_block
+    cache_f = _work(subject_id) / "descripciones.json"
+    try:
+        cache = json.loads(cache_f.read_text(encoding="utf-8")) if cache_f.exists() else {}
+    except Exception:  # noqa: BLE001
+        cache = {}
+    paths = session_images(subject_id)
+    todo = [p for p in paths if p not in cache]
+    for i in range(0, len(todo), 5):
+        batch = todo[i:i + 5]
+        content = []
+        for p in batch:
+            content.append(image_block(p, 768))
+        content.append({"type": "text", "text": f"{len(batch)} photos. Trigger word: {trigger}."})
+        out = await llm.json_call(CAPTION_PROMPT, content, llm.obj({"captions": {"type": "array", "items": {"type": "string"}}}),
+                                  agent="subject_analyst", max_tokens=2000)
+        caps = [str(c).strip().strip(".") for c in (out.get("captions") or [])]
+        for p, c in zip(batch, caps):
+            cache[p] = c[:300]
+        cache_f.write_text(json.dumps(cache, ensure_ascii=False, indent=1), encoding="utf-8")
+    return {p: cache.get(p, "") for p in paths}
 
 
 _worker: asyncio.Task | None = None
@@ -573,29 +690,64 @@ def ensure_worker() -> None:
         _worker = asyncio.create_task(_drain())
 
 
-async def _drain() -> None:
-    while True:
-        ids = queue_ids()
-        if not ids:
-            return
-        sid = ids[0]
-        with session() as s:
-            inf = s.get(Subject, sid).lora_info or {}
-            steps = int(inf.get("steps") or settings.LORA_STEPS)
-            base, mode = int(inf.get("from_step") or 0), inf.get("mode") or "restart"
-        _tasks[sid] = asyncio.current_task()
-        try:
-            await _run(sid, steps, base, mode)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:  # noqa: BLE001
-            log.exception("LoRA %s", sid)
-            _update(sid, lora_status="failed", info={"error": str(e)[:400], "phase": ""})
-        with session() as s:   # si algo lo dejó en «queued» por error, no volver a tomarlo en bucle
-            sub = s.get(Subject, sid)
-            if sub and sub.lora_status in ("queued", "training"):
-                sub.lora_status = "failed"
+async def _one(sid: str, slot: dict) -> None:
+    """Entrena un modelo en el lugar asignado (GPU de la placa o tarjeta alquilada)."""
+    from app import granja
+    with session() as s:
+        inf = s.get(Subject, sid).lora_info or {}
+        steps = int(inf.get("steps") or settings.LORA_STEPS)
+        base, mode = int(inf.get("from_step") or 0), inf.get("mode") or "restart"
+    _update(sid, info={"where": slot.get("label", "")})
+    try:
+        if slot["kind"] == "local":
+            await _run(sid, steps, base, mode, slot.get("gpu"))
+        else:
+            await granja.run_remote(sid, steps, base, mode, slot)
+    except granja.NodeUnavailable as e:   # la tarjeta alquilada no respondió: vuelve a la fila, sin perder nada
+        _update(sid, lora_status="queued", info={"where": ""})
         _publish_queue()
+        _update(sid, info={"phase": f"En fila: {e} no respondió, espera otro lugar"})
+        return
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        log.exception("LoRA %s", sid)
+        _update(sid, lora_status="failed", info={"error": str(e)[:400], "phase": ""})
+    with session() as s:   # si algo lo dejó en «queued» por error, no volver a tomarlo en bucle
+        sub = s.get(Subject, sid)
+        if sub and sub.lora_status in ("queued", "training"):
+            sub.lora_status = "failed"
+    _publish_queue()
+
+
+async def _drain() -> None:
+    """Reparte la fila entre todos los lugares libres (cada GPU entrena uno a la vez). Con una sola GPU y sin
+    tarjetas alquiladas, es exactamente como antes: uno detrás de otro."""
+    from app import granja
+    running: dict[str, tuple[asyncio.Task, str]] = {}
+    while True:
+        used: dict[str, int] = {}
+        for _t, slot_id in running.values():
+            used[slot_id] = used.get(slot_id, 0) + 1
+        for sid in queue_ids():
+            if sid in running:
+                continue
+            slot = await granja.free_slot(used)
+            if not slot:
+                break
+            used[slot["id"]] = used.get(slot["id"], 0) + 1
+            task = asyncio.create_task(_one(sid, slot))
+            _tasks[sid] = task
+            running[sid] = (task, slot["id"])
+        if not running:
+            if not queue_ids():
+                return
+            await asyncio.sleep(30)     # nadie libre (p. ej. la tarjeta alquilada todavía no prendió): reintenta
+            continue
+        done, _ = await asyncio.wait([t for t, _ in running.values()], timeout=15,
+                                     return_when=asyncio.FIRST_COMPLETED)
+        for sid in [k for k, (t, _) in running.items() if t in done]:
+            running.pop(sid)
 
 
 def _publish_queue() -> None:
@@ -610,7 +762,9 @@ def start(subject_id: str, steps: int | None = None, mode: str = "auto", minutes
     steps/minutes = cuánto MÁS entrenar en esta sesión (minutes se convierte con la velocidad real medida)."""
     ok, why = available()
     if not ok:
-        raise ValueError(why)
+        from app import granja
+        if not granja.remote_nodes():
+            raise ValueError(why)
     with session() as s:
         sub = s.get(Subject, subject_id)
         if not sub:
@@ -637,6 +791,8 @@ def cancel(subject_id: str) -> None:
     _update(subject_id, lora_status="canceled", info={"phase": "", "error": "Cancelado por una persona"})
     if proc and proc.returncode is None:
         proc.terminate()
+    from app import granja
+    granja.cancel_remote(subject_id)
     _publish_queue()
 
 
@@ -648,6 +804,18 @@ def recover_after_restart() -> None:
             sub.lora_info = {**(sub.lora_info or {}), "error": "Se interrumpió (Shelton se reinició). Vuelve a entrenar.",
                              "phase": ""}
     # La fila sigue: los que esperaban su turno se entrenan solos al volver a arrancar
+
+
+def strength_of(subject: Subject) -> float:
+    try:
+        v = float((subject.lora_info or {}).get("strength") or 0)
+    except (TypeError, ValueError):
+        v = 0
+    return v if 0 < v <= 1.5 else settings.LORA_STRENGTH
+
+
+def strengths_for(subjects: list[Subject]) -> list[float]:
+    return [strength_of(s) for s in subjects]
 
 
 def loras_for(subjects: list[Subject]) -> list[tuple[str, str]]:

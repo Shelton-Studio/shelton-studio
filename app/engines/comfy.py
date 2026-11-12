@@ -72,15 +72,20 @@ class ComfyEngine:
     async def generate(self, prompt, width, height, seed, on_progress: Progress = None) -> bytes:
         w, h = self._size(width, height)
         wf = self._wf("generate", {"prompt": prompt, "width": w, "height": h, "seed": seed})
+        from app import calidad
+        await calidad.apply(wf, self.client)
         async with gpu_slot(self.url):
             return (await self.client.run(wf, on_progress))[0]
 
     async def generate_with_loras(self, loras: list[tuple[str, float]], prompt, width, height, seed,
-                                  on_progress: Progress = None) -> bytes:
+                                  on_progress: Progress = None, quality: bool | None = None) -> bytes:
         """Generar con LoRAs propias del banco (aprendidas en la GPU): se enchufan después del modelo base."""
         w, h = self._size(width, height)
         wf = self._wf("generate", {"prompt": prompt, "width": w, "height": h, "seed": seed})
         inject_loras(wf, loras)
+        if quality is not False:          # el comparador de versiones genera sin calidad máxima (más rápido y parejo)
+            from app import calidad
+            await calidad.apply(wf, self.client)
         async with gpu_slot(self.url):
             return (await self.client.run(wf, on_progress))[0]
 
