@@ -33,7 +33,7 @@ from app.serialize import subject_dict
 log = logging.getLogger("shelton.lora")
 MIN_IMAGES = 8
 MAX_IMAGES = 30
-_procs: dict[str, asyncio.subprocess.Process] = {}
+LOG_POLL = 2.0                  # cada cuántos segundos se lee el avance del entrenador
 _tasks: dict[str, asyncio.Task] = {}
 STEP_RE = re.compile(r"(\d+)\s*/\s*(\d+)\s*\[")      # barra de progreso de ai-toolkit: " 120/2000 ["
 
@@ -471,102 +471,212 @@ async def _pre(subject_id: str, mode: str, base: int, profile: str = "estandar")
 
 
 async def _run(subject_id: str, steps: int, base: int = 0, mode: str = "restart", gpu: str | None = None) -> None:
-    from app import working
-    from app.engines import gpu_slot
     ctx = await _pre(subject_id, mode, base, _local_profile())
     if not ctx:
         return
-    name_human, trigger, work, job_name, base, n = (ctx["name"], ctx["trigger"], ctx["work"], ctx["job"],
-                                                     ctx["base"], ctx["n"])
-    cfg = _config(job_name, work, trigger, steps, _local_profile())
+    cfg = _config(ctx["job"], ctx["work"], ctx["trigger"], steps, _local_profile())
     t0 = time.time()
-    _update(subject_id, lora_status="training", lora_progress=0, lora_trigger=trigger,
-            info={"images": n, "steps": steps, "from_step": base, "mode": mode,
+    _update(subject_id, lora_status="training", lora_progress=0, lora_trigger=ctx["trigger"],
+            info={"images": ctx["n"], "steps": steps, "from_step": ctx["base"], "mode": mode, "requeued": False,
                   "started": datetime.now().isoformat(timespec="seconds"),
                   "phase": "Esperando la GPU", "error": "", "eta_min": None})
-    logf = work / "train.log"
+    await _train_local(subject_id, ctx, steps, t0, gpu, cfg=cfg)
+
+
+# ------------------------------------------------------------------ entrenador independiente (sobrevive reinicios)
+# El entrenador corre por su cuenta (en su propia unidad de systemd si existe), escribe su avance en train.log y su
+# código de salida en un archivo. Si Shelton se reinicia (por ejemplo al actualizar), al volver lo encuentra y se
+# reconecta: el entrenamiento NO se corta.
+def _state_file(subject_id: str) -> Path:
+    return _work(subject_id) / "entrenando.json"
+
+
+def _read_state(subject_id: str) -> dict | None:
+    f = _state_file(subject_id)
+    try:
+        return json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _use_systemd() -> bool:
+    return (os.getenv("LORA_DETACH", "auto") != "process" and Path("/run/systemd/system").exists()
+            and shutil.which("systemd-run") is not None and hasattr(os, "geteuid") and os.geteuid() == 0)
+
+
+def _launch(subject_id: str, ctx: dict, cfg: Path, steps: int, gpu: str | None, t0: float) -> dict:
+    """Arranca el entrenador separado de Shelton y guarda cómo encontrarlo."""
+    import shlex
+    import subprocess
+    work = ctx["work"]
+    logf, rcf = work / "train.log", work / "train.rc"
+    rcf.unlink(missing_ok=True)
+    logf.write_text("[Shelton] Entrenador iniciado. Primero baja Z-Image (~20 GB) la primera vez…\n", encoding="utf-8")
+    offset = logf.stat().st_size
+    env = {"PYTHONUNBUFFERED": "1"}
+    if gpu is not None and len(local_gpus()) > 1:
+        env["CUDA_VISIBLE_DEVICES"] = str(gpu)          # varias GPU en la placa: cada entrenamiento en la suya
+    for k in ("HF_HOME", "HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HOME", "PATH", "CUDA_VISIBLE_DEVICES"):
+        if k in os.environ and k not in env:
+            env[k] = os.environ[k]
+    aitk = str(Path(settings.AITK_DIR).expanduser())
+    script = (f"{shlex.quote(str(trainer_python()))} -u run.py {shlex.quote(str(cfg))} >> {shlex.quote(str(logf))} 2>&1; "
+              f"echo $? > {shlex.quote(str(rcf))}")
+    state = {"job": ctx["job"], "steps": steps, "base": ctx["base"], "n": ctx["n"], "name": ctx["name"],
+             "trigger": ctx["trigger"], "gpu": gpu, "t0": t0, "log": str(logf), "rc": str(rcf), "offset": offset}
+    if _use_systemd():
+        unit = f"shelton-lora-{subject_id[:8]}-{int(t0)}"
+        cmd = ["systemd-run", f"--unit={unit}", "--collect", "--quiet", f"--working-directory={aitk}",
+               *[f"--setenv={k}={v}" for k, v in env.items()], "/bin/sh", "-c", script]
+        subprocess.run(cmd, check=True, timeout=30)
+        state["unit"] = unit
+    else:
+        p = subprocess.Popen(["/bin/sh", "-c", script], cwd=aitk, env={**os.environ, **env}, start_new_session=True,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        state["pid"] = p.pid
+    _state_file(subject_id).write_text(json.dumps(state), encoding="utf-8")
+    return state
+
+
+def _alive(state: dict) -> bool:
+    import subprocess
+    if state.get("unit"):
+        r = subprocess.run(["systemctl", "is-active", "--quiet", state["unit"]], timeout=10)
+        return r.returncode == 0
+    pid = state.get("pid")
+    if not pid:
+        return False
+    try:
+        os.waitpid(pid, os.WNOHANG)      # si es hijo nuestro y ya terminó, que no quede «zombi»
+    except ChildProcessError:
+        pass
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _kill(state: dict) -> None:
+    import signal
+    import subprocess
+    if state.get("unit"):
+        subprocess.run(["systemctl", "stop", state["unit"]], timeout=30)
+    elif state.get("pid"):
+        try:
+            os.killpg(state["pid"], signal.SIGTERM)
+        except OSError:
+            pass
+
+
+async def _train_local(subject_id: str, ctx: dict, steps: int, t0: float, gpu: str | None,
+                       cfg: Path | None = None, state: dict | None = None) -> None:
+    """Entrena (o se reconecta a un entrenamiento que ya corría) y lo cierra al terminar."""
+    from app import working
+    from app.engines import gpu_slot
+    name_human, n, base = ctx["name"], ctx["n"], ctx["base"]
     async with AsyncExitStack() as stack:
         for url in _comfy_urls_for_gpu(gpu):           # nuestras fotos locales esperan mientras entrena (en esa GPU)
             await stack.enter_async_context(gpu_slot(url))
-        await _free_comfy_vram()
-        _update(subject_id, info={"phase": "Preparando (la primera vez baja Z-Image para entrenar, ~20 GB)"})
+        if state is None:
+            await _free_comfy_vram()
+            _update(subject_id, info={"phase": "Preparando (la primera vez baja Z-Image para entrenar, ~20 GB)"})
+            state = await asyncio.to_thread(_launch, subject_id, ctx, cfg, steps, gpu, t0)
         what = (f"siguiendo desde el paso {base} hasta el {steps}" if base else f"{steps} pasos")
         with working.track("lora_trainer", f"Entrenando la LoRA de {name_human} ({n} fotos, {what})", "ai-toolkit · Z-Image Turbo"):
-            import os as _os
-            env = {**_os.environ, "PYTHONUNBUFFERED": "1"}   # que escriba cada línea al momento (log y avance en vivo)
-            if gpu is not None and len(local_gpus()) > 1:
-                env["CUDA_VISIBLE_DEVICES"] = str(gpu)           # varias GPU en la placa: cada entrenamiento en la suya
-            proc = await asyncio.create_subprocess_exec(
-                str(trainer_python()), "-u", "run.py", str(cfg), cwd=str(Path(settings.AITK_DIR).expanduser()),
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, env=env)
-            logf.write_text(f"[Shelton] Entrenador iniciado (pid {proc.pid}). Primero baja Z-Image (~20 GB) la primera vez…\n",
-                            encoding="utf-8")
-            _procs[subject_id] = proc
-            last_pub, tail = 0.0, []
-            phase = ""
-            first_seen: tuple[int, float] | None = None   # (paso, hora) del primer paso de ESTA sesión
-            spp_now = None
-            with open(logf, "a", encoding="utf-8") as lf:
-                buf = b""
-                while True:
-                    chunk = await proc.stdout.read(4096)
-                    if not chunk:
-                        break
-                    buf += chunk
-                    parts = re.split(rb"[\r\n]", buf)
-                    buf = parts.pop()
-                    for raw in parts:
-                        line = raw.decode(errors="ignore").strip()
-                        if not line:
-                            continue
-                        lf.write(line + "\n")
-                        lf.flush()
-                        tail = (tail + [line])[-40:]
-                        low = line.lower()
-                        new_phase = ("Bajando Z-Image para entrenar (solo la primera vez)" if ("download" in low or "fetching" in low)
-                                     else "Preparando las fotos" if "caching" in low or "latent" in low
-                                     else "Cargando el modelo en la GPU" if ("loading" in low and "model" in low) or "quantiz" in low
-                                     else "")
-                        if new_phase and new_phase != phase and time.time() - last_pub > 3:
-                            phase = new_phase
-                            _update(subject_id, info={"phase": phase})
-                            last_pub = time.time()
-                        m = STEP_RE.search(line)
-                        if m and int(m.group(2)) == steps:
-                            done = int(m.group(1))
-                            now_t = time.time()
-                            if first_seen is None or done < first_seen[0]:
-                                first_seen = (done, now_t)
-                            start_at = first_seen[0]
-                            session_total = max(1, steps - start_at)
-                            pct = 100.0 * max(0, done - start_at) / session_total   # avance de ESTA sesión
-                            did = done - start_at
-                            if did >= 10:
-                                spp_now = (now_t - first_seen[1]) / did
-                            if now_t - last_pub > 5:
-                                eta = round(spp_now * (steps - done) / 60) if spp_now else None
-                                label = (f"Entrenando: paso {done} de {steps} (esta sesión: {did} de {session_total})"
-                                         if start_at else f"Entrenando: paso {done} de {steps}")
-                                _update(subject_id, lora_progress=pct,
-                                        info={"phase": label, "eta_min": eta, "step": done,
-                                              **({"sec_per_step": round(spp_now, 3)} if spp_now else {})})
-                                last_pub = now_t
-            rc = await proc.wait()
-            _procs.pop(subject_id, None)
-    if rc != 0:
-        with session() as s:
-            canceled = (s.get(Subject, subject_id).lora_status == "canceled")
-        if canceled:
-            return
-        err = next((ln for ln in reversed(tail) if "Error" in ln or "error" in ln), tail[-1] if tail else "sin detalle")
-        if "out of memory" in " ".join(tail).lower():
-            err = ("La GPU se quedó sin memoria (otros programas la están usando). Prueba cuando esté más libre o "
-                   "con menos pasos.")
-        _update(subject_id, lora_status="failed", info={"error": err[-400:], "phase": "", "log": str(logf)})
+            rc, tail, spp_now = await _follow(subject_id, state, steps)
+    _state_file(subject_id).unlink(missing_ok=True)
+    with session() as s:
+        canceled = (s.get(Subject, subject_id).lora_status == "canceled")
+    if canceled:
         return
+    if rc is None and auto_resume(subject_id, "el entrenador se detuvo sin terminar"):
+        return
+    if rc != 0:
+        if rc is None:
+            err = "El entrenador se cortó varias veces seguidas. Revisa la placa y vuelve a entrenar: sigue desde lo último guardado."
+        else:
+            err = next((ln for ln in reversed(tail) if "Error" in ln or "error" in ln), tail[-1] if tail else "sin detalle")
+            if "out of memory" in " ".join(tail).lower():
+                err = ("La GPU se quedó sin memoria (otros programas la están usando). Prueba cuando esté más libre o "
+                       "con menos pasos.")
+        _update(subject_id, lora_status="failed", info={"error": err[-400:], "phase": "", "log": state["log"]})
+        return
+    job_name, work = ctx["job"], ctx["work"]
     outs = sorted((work / "output" / job_name).glob(f"{job_name}*.safetensors"), key=lambda p: p.stat().st_mtime)
     final = next((p for p in outs if p.stem == job_name), outs[-1] if outs else None)
     await _finish(subject_id, ctx, steps, final, t0, spp_now)
+
+
+async def _follow(subject_id: str, state: dict, steps: int) -> tuple[int | None, list[str], float | None]:
+    """Lee el avance del archivo de log mientras el entrenador trabaja. Devuelve (código de salida, últimas líneas,
+    segundos por paso). Si Shelton se detiene a mitad, el entrenador sigue igual."""
+    logf, rcf = Path(state["log"]), Path(state["rc"])
+    pos = int(state.get("offset") or 0)
+    last_pub, tail, phase = 0.0, [], ""
+    first_seen: tuple[int, float] | None = None   # (paso, hora) del primer paso visto en esta conexión
+    spp_now = None
+    buf = b""
+    dead_checks = 0
+    while True:
+        chunk = b""
+        try:
+            with open(logf, "rb") as f:
+                f.seek(pos)
+                chunk = f.read()
+        except OSError:
+            pass
+        pos += len(chunk)
+        buf += chunk
+        parts = re.split(rb"[\r\n]", buf)
+        buf = parts.pop()
+        for raw in parts:
+            line = raw.decode(errors="ignore").strip()
+            if not line:
+                continue
+            tail = (tail + [line])[-40:]
+            low = line.lower()
+            new_phase = ("Bajando Z-Image para entrenar (solo la primera vez)" if ("download" in low or "fetching" in low)
+                         else "Preparando las fotos" if "caching" in low or "latent" in low
+                         else "Cargando el modelo en la GPU" if ("loading" in low and "model" in low) or "quantiz" in low
+                         else "")
+            if new_phase and new_phase != phase and time.time() - last_pub > 3:
+                phase = new_phase
+                _update(subject_id, info={"phase": phase})
+                last_pub = time.time()
+            m = STEP_RE.search(line)
+            if m and int(m.group(2)) == steps:
+                done = int(m.group(1))
+                now_t = time.time()
+                if first_seen is None or done < first_seen[0]:
+                    first_seen = (done, now_t)
+                start_at = int(state.get("base") or 0) or first_seen[0]
+                session_total = max(1, steps - start_at)
+                pct = 100.0 * max(0, done - start_at) / session_total   # avance de ESTA sesión
+                did = done - first_seen[0]
+                if did >= 10:
+                    spp_now = (now_t - first_seen[1]) / did
+                if now_t - last_pub > 5:
+                    eta = round(spp_now * (steps - done) / 60) if spp_now else None
+                    label = (f"Entrenando: paso {done} de {steps} (esta sesión: {done - start_at} de {session_total})"
+                             if start_at else f"Entrenando: paso {done} de {steps}")
+                    _update(subject_id, lora_progress=min(99.9, pct),
+                            info={"phase": label, "eta_min": eta, "step": done,
+                                  **({"sec_per_step": round(spp_now, 3)} if spp_now else {})})
+                    last_pub = now_t
+        if rcf.exists():
+            try:
+                return int(rcf.read_text().strip() or 1), tail, spp_now
+            except ValueError:
+                return 1, tail, spp_now
+        if not chunk:
+            if await asyncio.to_thread(_alive, state):
+                dead_checks = 0
+            else:
+                dead_checks += 1
+                if dead_checks >= 3 and not rcf.exists():   # se cortó sin dejar código (apagón, lo mataron)
+                    return None, tail, spp_now
+        await asyncio.sleep(LOG_POLL)
 
 
 async def _finish(subject_id: str, ctx: dict, steps: int, final: Path | None, t0: float, spp_now: float | None,
@@ -599,6 +709,7 @@ async def _finish(subject_id: str, ctx: dict, steps: int, final: Path | None, t0
         log.warning("No pude registrar el consumo del entrenamiento", exc_info=True)
     _update(subject_id, lora_status="ready", lora_progress=100, lora_name=dest_name, lora_enabled=True,
             info={"phase": "", "finished": datetime.now().isoformat(timespec="seconds"), "minutes": mins, "eta_min": None,
+                  "auto_retries": 0, "requeued": False,
                   "trained_steps": steps, "step": steps, **({"sec_per_step": round(spp_now, 3)} if spp_now else {})})
     events.publish({"type": "lora_ready", "subject_id": subject_id, "name": name_human, "minutes": mins})
     try:
@@ -706,6 +817,10 @@ async def _one(sid: str, slot: dict) -> None:
             await _run(sid, steps, base, mode, slot.get("gpu"))
         else:
             await granja.run_remote(sid, steps, base, mode, slot)
+    except granja.NodeLost as e:          # la tarjeta alquilada se cayó a mitad: retoma solo desde lo guardado
+        if not auto_resume(sid, str(e)):
+            _update(sid, lora_status="failed", info={"error": str(e), "phase": ""})
+        return
     except granja.NodeUnavailable as e:   # la tarjeta alquilada no respondió: vuelve a la fila, sin perder nada
         _update(sid, lora_status="queued", info={"where": ""})
         _publish_queue()
@@ -718,7 +833,8 @@ async def _one(sid: str, slot: dict) -> None:
         _update(sid, lora_status="failed", info={"error": str(e)[:400], "phase": ""})
     with session() as s:   # si algo lo dejó en «queued» por error, no volver a tomarlo en bucle
         sub = s.get(Subject, sid)
-        if sub and sub.lora_status in ("queued", "training"):
+        requeued = bool((sub.lora_info or {}).get("requeued")) if sub else False
+        if sub and (sub.lora_status == "training" or (sub.lora_status == "queued" and not requeued)):
             sub.lora_status = "failed"
     _publish_queue()
 
@@ -728,6 +844,13 @@ async def _drain() -> None:
     tarjetas alquiladas, es exactamente como antes: uno detrás de otro."""
     from app import granja
     running: dict[str, tuple[asyncio.Task, str]] = {}
+    for sid, item in list(_reattach.items()):
+        _reattach.pop(sid, None)
+        slot_id = (f"local:{item['state'].get('gpu') or local_gpus()[0]}" if item["kind"] == "local"
+                   else item["node"]["id"])
+        task = asyncio.create_task(_resume(sid, item))
+        _tasks[sid] = task
+        running[sid] = (task, slot_id)
     while True:
         used: dict[str, int] = {}
         for _t, slot_id in running.values():
@@ -782,6 +905,7 @@ def start(subject_id: str, steps: int | None = None, mode: str = "auto", minutes
     busy = any(x != subject_id for x in queue_ids()) or (_worker is not None and not _worker.done())
     _update(subject_id, lora_status="queued", lora_progress=0,
             info={"steps": p["total_steps"], "from_step": p["from_step"], "mode": p["mode"], "images": n,
+                  "auto_retries": 0, "requeued": False, "remote_job": None,
                   "queued_at": datetime.now().isoformat(timespec="seconds"), "error": "", "eta_min": p["eta_min"]})
     _publish_queue()
     ensure_worker()
@@ -790,23 +914,95 @@ def start(subject_id: str, steps: int | None = None, mode: str = "auto", minutes
 
 
 def cancel(subject_id: str) -> None:
-    proc = _procs.get(subject_id)
     _update(subject_id, lora_status="canceled", info={"phase": "", "error": "Cancelado por una persona"})
-    if proc and proc.returncode is None:
-        proc.terminate()
+    state = _read_state(subject_id)
+    if state:
+        _kill(state)
     from app import granja
     granja.cancel_remote(subject_id)
     _publish_queue()
 
 
-def recover_after_restart() -> None:
-    """Si Shelton se reinició en medio de un entrenamiento, lo marca como interrumpido (se puede relanzar)."""
+MAX_AUTO_RESUME = 3
+
+
+def auto_resume(sid: str, reason: str) -> bool:
+    """Si un entrenamiento se cortó (apagón, reinicio de la PC, tarjeta alquilada caída), vuelve solo a la fila y
+    sigue desde el último punto guardado, sin que nadie apriete nada. Hasta 3 veces seguidas."""
     with session() as s:
-        for sub in s.query(Subject).filter(Subject.lora_status == "training"):
-            sub.lora_status = "failed"
-            sub.lora_info = {**(sub.lora_info or {}), "error": "Se interrumpió (Shelton se reinició). Vuelve a entrenar.",
-                             "phase": ""}
+        sub = s.get(Subject, sid)
+        if not sub or sub.lora_status == "canceled":
+            return False
+        info = dict(sub.lora_info or {})
+    tries = int(info.get("auto_retries") or 0)
+    if tries >= MAX_AUTO_RESUME:
+        return False
+    done = saved_step(sid)
+    target = max(int(info.get("steps") or settings.LORA_STEPS), done + 100)
+    _state_file(sid).unlink(missing_ok=True)
+    _update(sid, lora_status="queued", lora_progress=0,
+            info={"mode": "continue", "from_step": done, "steps": target, "requeued": True, "remote_job": None,
+                  "auto_retries": tries + 1, "queued_at": "0-" + datetime.now().isoformat(timespec="seconds"),
+                  "error": "", "phase": f"Se cortó ({reason}): retoma solo desde el paso {done}"})
+    log.warning("LoRA %s: %s; retoma sola desde el paso %s (intento %s)", sid, reason, done, tries + 1)
+    _publish_queue()
+    _update(sid, info={"phase": f"Se cortó ({reason}): retoma solo desde el paso {done}"})
+    return True
+
+
+_reattach: dict[str, dict] = {}     # entrenamientos que seguían corriendo al reiniciar Shelton: sid -> lugar
+
+
+def recover_after_restart() -> None:
+    """Al arrancar Shelton: los entrenamientos que siguen corriendo (en la placa o en una tarjeta alquilada) se
+    reconectan solos. Solo los que de verdad se cortaron quedan como interrumpidos (se relanzan y siguen desde lo
+    último guardado)."""
+    from app import granja
+    with session() as s:
+        rows = [(x.id, dict(x.lora_info or {})) for x in s.query(Subject).filter(Subject.lora_status == "training")]
+    for sid, info in rows:
+        st = _read_state(sid)
+        if st and (Path(st["rc"]).exists() or _alive(st)):
+            _reattach[sid] = {"kind": "local", "state": st}
+            continue
+        rj = info.get("remote_job") or {}
+        node = next((n for n in granja.remote_nodes() if n["conn_id"] == rj.get("conn_id")), None) if rj else None
+        if node and rj.get("jid"):
+            _reattach[sid] = {"kind": "remote", "node": node, "jid": rj["jid"]}
+            continue
+        if auto_resume(sid, "se apagó o reinició la placa"):
+            continue
+        _state_file(sid).unlink(missing_ok=True)
+        _update(sid, lora_status="failed", info={"error": "Se interrumpió varias veces. Vuelve a entrenar: "
+                                                          "sigue desde lo último guardado.", "phase": ""})
+    if _reattach:
+        ensure_worker()
     # La fila sigue: los que esperaban su turno se entrenan solos al volver a arrancar
+
+
+async def _resume(sid: str, item: dict) -> None:
+    """Se reconecta a un entrenamiento que siguió corriendo mientras Shelton se reiniciaba."""
+    from app import granja
+    with session() as s:
+        info = dict(s.get(Subject, sid).lora_info or {})
+    _update(sid, info={"phase": "Reconectado: el entrenamiento siguió mientras Shelton se reiniciaba"})
+    try:
+        if item["kind"] == "local":
+            st = item["state"]
+            ctx = {"name": st["name"], "trigger": st["trigger"], "work": _work(sid), "job": st["job"],
+                   "base": st["base"], "n": st["n"]}
+            await _train_local(sid, ctx, int(st["steps"]), float(st["t0"]), st.get("gpu"), state=st)
+        else:
+            await granja.resume_remote(sid, item["node"], item["jid"], info)
+    except granja.NodeLost as e:
+        if not auto_resume(sid, str(e)):
+            _update(sid, lora_status="failed", info={"error": str(e), "phase": ""})
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        log.exception("LoRA %s (reconexión)", sid)
+        _update(sid, lora_status="failed", info={"error": str(e)[:400], "phase": ""})
+    _publish_queue()
 
 
 def strength_of(subject: Subject) -> float:

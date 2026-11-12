@@ -22,6 +22,8 @@ from app.db import Post, Subject, init_db, session  # noqa: E402
 from app.engines.comfy import inject_loras  # noqa: E402
 from app.comfyui.client import load_workflow  # noqa: E402
 
+lora.LOG_POLL = 0.1          # en las pruebas el avance se lee rápido
+
 FAKE_TRAINER = r'''#!/usr/bin/env python3
 # Entrenador simulado que se comporta como ai-toolkit: retoma desde el paso guardado y la barra cuenta el TOTAL.
 import json, sys, time, pathlib
@@ -158,16 +160,25 @@ def test_full_training_cycle_and_use_in_generation(monkeypatch, tmp_path):
         assert lora.loras_for([s.get(Subject, sid)]) == []
 
 
-def test_restart_marks_interrupted():
+def test_restart_resumes_by_itself():
+    """Si el entrenamiento se cortó de verdad (se apagó la placa), al volver Shelton lo retoma solo, desde lo
+    último guardado. Si se corta muchas veces seguidas, ahí sí queda para revisar."""
     init_db()
     with session() as s:
-        sub = Subject(name="Otro", kind="person", lora_status="training")
+        sub = Subject(name="Otro", kind="person", lora_status="training", lora_info={"steps": 800})
         s.add(sub)
         s.flush()
         sid = sub.id
     lora.recover_after_restart()
     with session() as s:
-        assert s.get(Subject, sid).lora_status == "failed"
+        sub = s.get(Subject, sid)
+        assert sub.lora_status == "queued" and sub.lora_info["mode"] == "continue"
+        assert sub.lora_info["steps"] == 800 and "retoma solo" in sub.lora_info["phase"]
+    for _ in range(lora.MAX_AUTO_RESUME):
+        lora._update(sid, lora_status="training")
+        lora.recover_after_restart()
+    with session() as s:
+        assert s.get(Subject, sid).lora_status == "failed"           # no queda en un bucle infinito
 
 
 def test_queue_trains_one_after_another(monkeypatch, tmp_path):
@@ -355,3 +366,75 @@ def test_restart_then_continue_keeps_the_new_line(monkeypatch, tmp_path):
     asyncio.run(run(steps=200, mode="restart"))
     r = asyncio.run(run(steps=100, mode="continue"))
     assert r["from_step"] == 200 and lora.saved_step(sid) == 300
+
+
+SLOW_TRAINER = FAKE_TRAINER.replace("time.sleep(0.01)", "time.sleep(0.15)")
+
+
+def _slow(monkeypatch, tmp_path):
+    loras = _setup(monkeypatch, tmp_path)
+    py = Path(settings.AITK_DIR) / "venv" / "bin" / "python"
+    py.write_text(SLOW_TRAINER)
+    return loras
+
+
+def test_training_survives_shelton_restart(monkeypatch, tmp_path):
+    """Si Shelton se reinicia (por ejemplo al actualizar) en medio de un entrenamiento, el entrenamiento sigue y al
+    volver Shelton se reconecta solo: termina «lista» sin que nadie haga nada."""
+    init_db()
+    loras_dir = _slow(monkeypatch, tmp_path)
+    sid = _subject(9)
+
+    async def first_life():
+        lora.start(sid, 300)
+        for _ in range(200):
+            await asyncio.sleep(0.05)
+            st = lora._read_state(sid)
+            if st and st.get("pid"):
+                break
+        await asyncio.sleep(0.5)
+        for t in list(lora._tasks.values()) + [lora._worker]:      # «Shelton se apaga»
+            if t and not t.done():
+                t.cancel()
+        return lora._read_state(sid)
+    st = asyncio.run(first_life())
+    assert st and lora._alive(st)                                    # el entrenador siguió corriendo solo
+    with session() as s:
+        assert s.get(Subject, sid).lora_status == "training"
+
+    async def second_life():                                         # «Shelton vuelve»
+        lora.recover_after_restart()
+        assert sid in lora._reattach
+        await lora._worker
+    asyncio.run(second_life())
+    with session() as s:
+        sub = s.get(Subject, sid)
+        assert sub.lora_status == "ready", sub.lora_info
+        assert lora._read_saved_step(loras_dir / sub.lora_name) == 300
+    assert lora._read_state(sid) is None
+
+
+def test_cut_training_resumes_by_itself(monkeypatch, tmp_path):
+    """Si el entrenador se corta de golpe (apagón, lo matan), vuelve solo a la fila y termina."""
+    init_db()
+    _slow(monkeypatch, tmp_path)
+    sid = _subject(9)
+    import os as _os
+    import signal as _sig
+
+    async def main():
+        lora.start(sid, 300)
+        killed = False
+        while not lora._worker.done():
+            st = lora._read_state(sid)
+            if not killed and st and st.get("pid"):
+                await asyncio.sleep(0.4)
+                _os.killpg(st["pid"], _sig.SIGKILL)                  # corte de golpe: sin código de salida
+                killed = True
+            await asyncio.sleep(0.05)
+        return killed
+    assert asyncio.run(main())
+    with session() as s:
+        sub = s.get(Subject, sid)
+        assert sub.lora_status == "ready", sub.lora_info
+        assert sub.lora_info.get("auto_retries") == 0                # terminó bien: contador en cero

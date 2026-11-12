@@ -27,6 +27,7 @@ _health: dict[str, tuple[float, dict]] = {}
 _remote_jobs: dict[str, tuple[dict, str]] = {}     # subject_id -> (nodo, job_id en el nodo)
 _transport = None                                  # las pruebas inyectan un transporte simulado
 POLL = 5                                           # cada cuántos segundos pregunta el avance al nodo
+LOST_AFTER = 180                                   # segundos sin respuesta para darlo por caído
 
 
 def remote_nodes() -> list[dict]:
@@ -121,6 +122,7 @@ async def run_remote(subject_id: str, steps: int, base: int, mode: str, node: di
     t0 = time.time()
     _update(subject_id, lora_status="training", lora_progress=0, lora_trigger=trigger,
             info={"images": ctx["n"], "steps": steps, "from_step": ctx["base"], "mode": mode, "where": node["label"],
+                  "requeued": False,
                   "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "phase": f"Subiendo fotos a {node['label']}",
                   "error": "", "eta_min": None})
     cfg = config_dict(job, "__JOB__", trigger, steps, node["profile"])
@@ -139,15 +141,56 @@ async def run_remote(subject_id: str, steps: int, base: int, mode: str, node: di
             r = await c.post(f"{node['url']}/jobs/{jid}/start", json={"config": cfg}, headers=_headers(node))
             if r.status_code != 200:
                 raise RuntimeError(f"{node['label']} no pudo arrancar: {r.text[:200]}")
-            spp, first = None, None
+        except BaseException:
+            _remote_jobs.pop(subject_id, None)
+            await _drop(node, jid)
+            raise
+    # Se guarda dónde corre: si Shelton se reinicia, al volver se reconecta a este mismo trabajo
+    _update(subject_id, info={"remote_job": {"conn_id": node.get("conn_id"), "jid": jid, "t0": t0, "steps": steps,
+                                             "ctx": {k: ctx[k] for k in ("name", "trigger", "job", "base", "n")}}})
+    await _follow_remote(subject_id, node, jid, ctx, steps, t0)
+
+
+async def resume_remote(subject_id: str, node: dict, jid: str, info: dict) -> None:
+    """Shelton se reinició mientras entrenaba en una tarjeta alquilada: se reconecta al mismo trabajo."""
+    from app.lora import _work
+    rj = info.get("remote_job") or {}
+    ctx = {**rj.get("ctx", {}), "work": _work(subject_id)}
+    _remote_jobs[subject_id] = (node, jid)
+    await _follow_remote(subject_id, node, jid, ctx, int(rj.get("steps") or info.get("steps") or 0),
+                         float(rj.get("t0") or time.time()))
+
+
+class NodeLost(RuntimeError):
+    """La tarjeta alquilada dejó de responder (o perdió el trabajo) a mitad del entrenamiento."""
+
+
+async def _follow_remote(subject_id: str, node: dict, jid: str, ctx: dict, steps: int, t0: float) -> None:
+    from app.lora import STEP_RE, _finish, _update
+    work, job = ctx["work"], ctx["job"]
+    finished = False
+    async with _client(120) as c:
+        try:
+            spp, first, fails = None, None, 0
             while True:
                 await asyncio.sleep(POLL)
                 with session() as s:
                     if s.get(Subject, subject_id).lora_status == "canceled":
                         await c.post(f"{node['url']}/jobs/{jid}/cancel", headers=_headers(node))
+                        finished = True
                         return
-                st = (await c.get(f"{node['url']}/jobs/{jid}", headers=_headers(node))).json()
-                done, total = int(st.get("step") or 0), int(st.get("total") or steps)
+                try:
+                    r = await c.get(f"{node['url']}/jobs/{jid}", headers=_headers(node))
+                except httpx.HTTPError:
+                    fails += 1
+                    if fails * POLL >= LOST_AFTER:
+                        raise NodeLost(f"{node['label']} dejó de responder")
+                    continue
+                if r.status_code == 404:          # el nodo se reinició y perdió el trabajo
+                    raise NodeLost(f"{node['label']} perdió el trabajo (se reinició)")
+                fails = 0
+                st = r.json()
+                done = int(st.get("step") or 0)
                 if not done:
                     for line in reversed(st.get("tail") or []):
                         m = STEP_RE.search(line)
@@ -161,7 +204,7 @@ async def run_remote(subject_id: str, steps: int, base: int, mode: str, node: di
                     did = done - first[0]
                     if did >= 10:
                         spp = (now_t - first[1]) / did
-                    start_at = ctx["base"]
+                    start_at = int(ctx.get("base") or 0)
                     pct = 100.0 * max(0, done - start_at) / max(1, steps - start_at)
                     _update(subject_id, lora_progress=min(99.0, pct),
                             info={"phase": f"Entrenando en {node['label']}: paso {done} de {steps}", "step": done,
@@ -171,6 +214,7 @@ async def run_remote(subject_id: str, steps: int, base: int, mode: str, node: di
                 if st.get("status") == "done":
                     break
                 if st.get("status") in ("failed", "canceled"):
+                    finished = True
                     raise RuntimeError(st.get("error") or "El entrenamiento falló en el nodo")
             _update(subject_id, info={"phase": f"Trayendo la LoRA desde {node['label']}"})
             res = await c.get(f"{node['url']}/jobs/{jid}/result", headers=_headers(node), timeout=600)
@@ -180,16 +224,19 @@ async def run_remote(subject_id: str, steps: int, base: int, mode: str, node: di
             out_dir.mkdir(parents=True, exist_ok=True)
             final = out_dir / f"{job}.safetensors"
             final.write_bytes(res.content)
+            finished = True
             hours = (time.time() - t0) / 3600
+            _update(subject_id, info={"remote_job": None})
             await _finish(subject_id, ctx, steps, final, t0, spp, provider="gpu_node",
                           cost_usd=round(hours * node["cost_hour"], 4) if node["cost_hour"] else None,
                           where=node["label"])
         finally:
             _remote_jobs.pop(subject_id, None)
-            try:   # las fotos de la modelo no se quedan en la tarjeta alquilada
-                await c.delete(f"{node['url']}/jobs/{jid}", headers=_headers(node))
-            except Exception:  # noqa: BLE001
-                log.warning("No pude borrar el trabajo %s en %s", jid, node["label"])
+            if finished:
+                try:   # las fotos de la modelo no se quedan en la tarjeta alquilada
+                    await c.delete(f"{node['url']}/jobs/{jid}", headers=_headers(node))
+                except Exception:  # noqa: BLE001
+                    log.warning("No pude borrar el trabajo %s en %s", jid, node["label"])
 
 
 class NodeUnavailable(RuntimeError):
