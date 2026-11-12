@@ -650,6 +650,9 @@ async def caption_photos(subject_id: str, trigger: str) -> dict:
     """Descripción detallada de cada foto del dataset (se guarda y no se repite si la foto no cambió)."""
     from app import llm
     from app.media import image_block
+    from app.agents import registry
+    if not registry.is_on("subject_analyst"):
+        return {}
     cache_f = _work(subject_id) / "descripciones.json"
     try:
         cache = json.loads(cache_f.read_text(encoding="utf-8")) if cache_f.exists() else {}

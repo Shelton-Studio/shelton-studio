@@ -508,3 +508,9 @@ audio { width: 100%; height: 40px; }
 .cmp-imgs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .cmp-imgs img, .cmp-ph { width: 100%; aspect-ratio: 896 / 1152; object-fit: cover; border-radius: 8px; background: var(--panel-3); cursor: zoom-in; display: grid; place-items: center; color: var(--faint); }
 @media (max-width: 700px) { .cmp-imgs { grid-template-columns: repeat(2, 1fr); } }
+.ag-switch { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--muted); border-radius: 999px; padding: 3px 10px 3px 4px; font-size: 12px; cursor: pointer; }
+.ag-switch i { width: 26px; height: 14px; border-radius: 99px; background: var(--panel-3); position: relative; transition: background .15s; }
+.ag-switch i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: var(--faint); transition: left .15s, background .15s; }
+.ag-switch.on { color: var(--text); border-color: rgba(34, 197, 94, .45); }
+.ag-switch.on i { background: rgba(34, 197, 94, .35); }
+.ag-switch.on i::after { left: 14px; background: var(--good); }

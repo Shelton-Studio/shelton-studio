@@ -94,8 +94,15 @@ def subjects_context(subjects: list[Subject], offset: int = 0, limit: int = 3) -
     return "\n".join(rows)
 
 
+def on(key: str) -> bool:
+    return registry.is_on(key)
+
+
 async def art_direct(idea: str, platform: Platform, brand: Brand | None, feedback: list[str] | None = None,
                      subjects: list[Subject] | None = None, base_note: str = "", ref_limit: int = 3) -> dict:
+    if not on("art_director"):      # apagado: la idea va directa al motor, con un estilo fotográfico base
+        return {"prompt": f"{idea}. Photorealistic photo, natural light, sharp focus, high detail, {platform.aspect}",
+                "concept": idea}
     content = (f"{brand_context(brand)}\n\nTarget format: {platform.name} ({platform.aspect})\n"
                f"Content idea: {idea}")
     if base_note:
@@ -117,6 +124,8 @@ of the post rather than the picture, set image_change to false.""")
 
 
 async def edit_instruction(request: str, original_prompt: str) -> dict:
+    if not on("edit_director"):     # apagado: el pedido va tal cual al editor de imágenes
+        return {"instruction": request, "image_change": True}
     return await _call("edit_director", f"Original image prompt: {original_prompt}\n\nUser request: {request}", obj({
         "instruction": {"type": "string"},
         "image_change": {"type": "boolean"},
@@ -137,6 +146,9 @@ List concrete issues; `fix_hint` explains how to change the prompt to avoid them
 
 async def judge(image_path: str, idea: str, prompt: str, brand: Brand | None,
                 subjects: list[Subject] | None = None, original_path: str | None = None) -> dict:
+    if not on("judge"):             # apagado: sin revisión automática; igual pasa por Aprobaciones (decide una persona)
+        return {"score": 80, "issues": [], "summary": "Juez apagado: sin revisión automática (revísala tú en Aprobaciones)",
+                "fix_hint": ""}
     content = [{"type": "text", "text": "Image to judge:"}, image_block(image_path, 1024)]
     text = f"{brand_context(brand)}\n\nContent idea: {idea}\n\nPrompt used: {prompt}"
     if original_path:
@@ -166,6 +178,8 @@ Do not put the hashtags inside `caption`; return them separately. `alt_text` is 
 
 
 async def write_post(image_path: str, idea: str, platform: Platform, brand: Brand | None, extra: str = "") -> dict:
+    if not on("copywriter"):        # apagado: el texto es la idea (se puede editar antes de aprobar)
+        return {"caption": idea, "hashtags": list((brand.base_hashtags if brand else None) or []), "alt_text": idea}
     text = (f"{brand_context(brand)}\n\nPlatform: {platform.name}\nPlatform style: {platform.caption_style}\n"
             f"Content idea: {idea}")
     if extra:
@@ -187,6 +201,8 @@ including the ideas already planned that you are given.""")
 
 async def plan_ideas(brief: str, count: int, platforms: list[str], brand: Brand | None,
                      already: list[str] | None = None, subjects: list[Subject] | None = None) -> list[dict]:
+    if not on("planner"):
+        raise ValueError("El Planificador está apagado: enciéndelo en Agentes para planificar campañas")
     text = (f"{brand_context(brand)}\n\nBrief: {brief or 'Contenido variado de la marca'}\n"
             f"Number of ideas: {count}\nAllowed platforms (pick the best one per idea): {', '.join(platforms)}")
     item = {
@@ -223,6 +239,8 @@ Never base a character on a real, identifiable person.""")
 
 
 async def design_subject(name: str, kind: str, request: str, brand: Brand | None) -> dict:
+    if not on("subject_designer"):
+        raise ValueError("El Diseñador de modelos está apagado: enciéndelo en Agentes o crea el modelo a mano con sus fotos")
     return await _call("subject_designer",
                            f"{brand_context(brand)}\n\nSubject name: {name}\nKind: {kind}\nRequest: {request}",
                            obj({"description": {"type": "string"}, "reference_prompt": {"type": "string"},
@@ -239,6 +257,8 @@ SUBJECT_KINDS_DETECT = ["person", "car", "vehicle", "place", "product", "pet", "
 
 async def describe_subject_photos(image_paths: list[str], name: str, kind: str = "auto", hint: str = "") -> dict:
     """Analiza VARIAS fotos del mismo modelo: ficha de identidad detallada y tipo detectado."""
+    if not on("subject_analyst"):
+        return {"description": hint or name, "kind": kind if kind != "auto" else "person"}
     content = []
     for i, p in enumerate(image_paths[:6], 1):
         content += [{"type": "text", "text": f"Photo {i}:"}, image_block(p, 768)]
@@ -255,6 +275,8 @@ async def describe_subject_photos(image_paths: list[str], name: str, kind: str =
 
 
 async def describe_subject(image_path: str, name: str, kind: str, hint: str = "") -> str:
+    if not on("subject_analyst"):
+        return hint or name
     data = await _call("subject_analyst", [image_block(image_path, 1024), {
         "type": "text", "text": f"Subject name: {name}\nKind: {kind}\nUser notes: {hint or '-'}"}],
         obj({"description": {"type": "string"}}), effort="low")
@@ -271,6 +293,9 @@ no on-screen text. Make it eye-catching in the first second. `negative`: things 
 
 
 async def direct_video(image_path: str, idea: str, motion_hint: str = "") -> dict:
+    if not on("video_producer"):
+        return {"motion_prompt": motion_hint or "subtle natural movement, gentle slow camera push-in, realistic motion",
+                "negative": "distorted, morphing, extra limbs, blurry"}
     text = f"Content idea: {idea}" + (f"\nUser's motion request: {motion_hint}" if motion_hint else "")
     return await _call("video_producer", [image_block(image_path, 768), {"type": "text", "text": text}], obj({
         "motion_prompt": {"type": "string"}, "negative": {"type": "string"}}), effort="low")
@@ -288,6 +313,8 @@ in Spanish. `audio` in Spanish: what the audio seems to be (trending song, voice
 
 
 async def analyze_reference(frames: list[tuple[str, float]], title: str = "", duration: float = 0) -> dict:
+    if not on("video_analyst"):
+        raise ValueError("El Analista de videos está apagado: enciéndelo en Agentes para recrear videos de referencia")
     content = []
     for i, (path, t) in enumerate(frames[:8], 1):
         content += [{"type": "text", "text": f"Frame {i} (t={t:.1f}s):"}, image_block(path, 768)]
@@ -328,6 +355,8 @@ SCOUT_SEARCHES = 5   # resultados por búsqueda de los scouts (antes 8): los mej
 
 
 async def scout(kind: str, brand: Brand | None, subjects: list[Subject], known_titles: list[str]) -> list[dict]:
+    if not on("trend_scout" if kind == "trend" else "tool_scout"):
+        return []                   # apagado: no sale a buscar (y no gasta)
     """Investiga con búsqueda web y devuelve hallazgos estructurados (2 pasos: investigar y ordenar)."""
     from app.llm import create, text_of
     key = "trend_scout" if kind == "trend" else "tool_scout"
@@ -372,6 +401,8 @@ Keep "sensual/sexy" tasteful (warm, slow, intimate) — never explicit.""")
 
 async def direct_voice(idea: str, request: str, seconds: float, voices: list[dict], subject_notes: str = "",
                        script: str = "") -> dict:
+    if not on("voice_director"):    # apagado: se lee el guion del usuario (o la idea) con la voz por defecto
+        return {"script": script or request or idea, "spec": {}}
     text = (f"Content idea: {idea}\nTarget duration: {seconds:.0f} seconds\nUser's voice request: {request or '-'}\n"
             f"Speaker (if a recurring model): {subject_notes or '-'}\n"
             f"Voice library: {', '.join(v['name'] + (' (' + v['description'] + ')' if v['description'] else '') for v in voices) or 'empty'}")
@@ -395,6 +426,8 @@ No music unless asked. `negative`: what to avoid (e.g. "music, speech, distortio
 
 
 async def design_sound(request: str, idea: str = "") -> dict:
+    if not on("sound_designer"):
+        return {"prompt": request or idea, "negative": "music, speech, distortion, low quality"}
     return await _call("sound_designer", f"Sound request: {request}\nScene: {idea or '-'}", obj({
         "prompt": {"type": "string"}, "negative": {"type": "string"}}), effort="low")
 
@@ -407,6 +440,8 @@ Write in {LANG}. End with a one-line recommendation. Be factual; only report wha
 
 
 async def research(question: str) -> str:
+    if not on("researcher"):
+        return "El Investigador está apagado (se enciende en Agentes)."
     from app.llm import create, text_of
     messages = [{"role": "user", "content": question}]
     out = ""

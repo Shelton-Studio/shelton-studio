@@ -671,9 +671,42 @@ def usd_es(n) -> str:
     return "US$ " + f"{float(n):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
+def apply_all_savers() -> list[str]:
+    """Prende todos los ahorros que no bajan la calidad: caché de instrucciones, revisión de la red cada 6 h con
+    descanso nocturno y el modelo económico (Haiku) para los trabajos de texto simples. Todo se puede deshacer."""
+    from app.llm import provider
+    done = []
+    save_settings(prompt_cache=True)
+    done.append("caché de instrucciones")
+    hours = max(6.0, float(network_hours() or 6))
+    save_settings(network_hours=hours, night_pause=True)
+    done.append(f"revisión de la red cada {hours:g} h con descanso nocturno")
+    if provider() == "openrouter":
+        from app.agents import registry
+        for key in SIMPLE_AGENTS:
+            if registry.model(key) != CHEAP_MODEL:
+                aplicar(f"model_cheap:{key}")
+        done.append("modelo económico para " + ", ".join(registry.AGENTS[k]["name"] for k in SIMPLE_AGENTS))
+    return done
+
+
+def apply_savers_once() -> None:
+    """Al instalar esta versión, los ahorros quedan prendidos una vez (después cada uno se puede apagar)."""
+    if get_settings().get("savers_v1"):
+        return
+    try:
+        done = apply_all_savers()
+        save_settings(savers_v1=True)
+        log.info("Ahorros prendidos: %s", "; ".join(done))
+    except Exception:  # noqa: BLE001
+        log.warning("No pude prender los ahorros", exc_info=True)
+
+
 def aplicar(action: str) -> dict:
     """Aplicar o deshacer una optimización (todo se puede deshacer)."""
     from app.agents import registry
+    if action == "all_on":
+        return {"ok": True, "done": apply_all_savers()}
     cfg = get_settings()
     if action in ("cache_on", "cache_off"):
         save_settings(prompt_cache=action == "cache_on")
