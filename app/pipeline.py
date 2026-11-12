@@ -1106,7 +1106,10 @@ async def run_network_review() -> dict:
     with session() as s:
         get_or_create_brand(s).scout_last = started   # el scout de siempre no repite este trabajo
     found = await run_scout()
+    from app.agents import registry as _reg
     try:
+        if not _reg.is_on("trend_scout"):
+            raise RuntimeError("Scout de tendencias apagado")
         t = await timing.refresh()
         timing_ok, summary = True, t.get("summary", "")
     except Exception as e:  # noqa: BLE001

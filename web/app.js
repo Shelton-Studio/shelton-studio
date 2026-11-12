@@ -307,7 +307,7 @@ function kpi(label, value, sub, ico, series, color, extra) {
 }
 function agentCard(a, stats) {
   const runs = stats ? stats.runs : a.runs;
-  return `<div class="card agent-card">${avatar(a.key)}<div class="info"><div class="row" style="gap:8px"><b>${esc(a.name)}</b><div class="grow"></div><span class="chip ${a.enabled ? "good" : ""}">${a.enabled ? "Activo" : "Pausado"}</span></div>
+  return `<div class="card agent-card">${avatar(a.key)}<div class="info"><div class="row" style="gap:8px"><b>${esc(a.name)}</b><div class="grow"></div>${a.key === "shelton" ? `<span class="chip good">Siempre activo</span>` : `<button class="ag-switch ${a.enabled ? "on" : ""}" data-agon="${a.key}" title="${a.enabled ? "Encendido: clic para apagar" : "Apagado: clic para encender"}"><i></i>${a.enabled ? "Encendido" : "Apagado"}</button>`}</div>
     <div class="meta">${esc(a.role)} · v${a.version} · ${fmtN(runs)} ejecuciones${a.lessons_active ? ` · 🧠 ${a.lessons_active} lecciones` : ""}</div>
     <div class="meta">${a.last ? `Última actividad ${when(a.last)}` : "Sin actividad todavía"}${stats?.cost ? ` · ${fmtMoney(stats.cost)}` : ""}</div>
     <div class="acts"><button class="btn sm" data-chat="${a.key}">Chatear</button><button class="btn sm ghost" data-ficha="${a.key}">Ficha</button></div></div></div>`;
@@ -315,6 +315,14 @@ function agentCard(a, stats) {
 function bindAgentCards(el) {
   $$("[data-chat]", el).forEach((b) => b.onclick = () => { S.chatAgent = b.dataset.chat; S.conv = null; go("chat"); });
   $$("[data-ficha]", el).forEach((b) => b.onclick = () => openAgent(b.dataset.ficha));
+  $$("[data-agon]", el).forEach((b) => b.onclick = async () => {
+    const turnOn = !b.classList.contains("on"), name = b.closest(".agent-card")?.querySelector("b")?.textContent || "";
+    try {
+      await api(`/api/agents/${b.dataset.agon}`, { method: "PUT", body: { enabled: turnOn } });
+      toast(turnOn ? `<b>${esc(name)}</b> encendido` : `<b>${esc(name)}</b> apagado. Shelton sigue trabajando: ese paso se hace simple sin él.`, turnOn ? "good" : "warn", "🤖");
+      route();
+    } catch (e) { toast(esc(e.message), "bad"); }
+  });
 }
 
 // ------------------------------------------------------------------ CHAT

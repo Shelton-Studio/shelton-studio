@@ -50,6 +50,18 @@ def prompt(key: str) -> str:
     return base_prompt(key) + training.knowledge(key) + cont
 
 
+def is_on(key: str) -> bool:
+    """¿Está encendido este subagente? Shelton (el jefe) siempre está encendido."""
+    if key == "shelton" or key not in AGENTS:
+        return True
+    p = profile(key)
+    return True if p is None or p.enabled is None else bool(p.enabled)
+
+
+def paused() -> list[str]:
+    return [AGENTS[k]["name"] for k in AGENTS if not is_on(k)]
+
+
 def model(key: str) -> str:
     p = profile(key)
     return (p.model if p and p.model else settings.CLAUDE_MODEL)
@@ -63,6 +75,8 @@ def effort(key: str, default: str) -> str:
 def save(key: str, **fields) -> AgentProfile:
     if key not in AGENTS:
         raise ValueError(f"Agente desconocido: {key}")
+    if key == "shelton" and fields.get("enabled") is False:
+        raise ValueError("Shelton es el jefe del estudio: no se puede apagar")
     with session() as s:
         p = s.get(AgentProfile, key) or AgentProfile(key=key, version=1)
         if s.get(AgentProfile, key) is None:

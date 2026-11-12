@@ -290,7 +290,15 @@ def studio_context(engine: str) -> str:
     return (f"[Estado del estudio — {brand}. Banco de modelos: {bank}. Motor de imagen de esta conversación: {label}. "
             f"Switch de herramientas: {mode} (Local = solo máquinas propias; Nube = solo APIs en la nube). "
             f"Si una herramienta falta en este modo, explícale al usuario que la conecte en el botón APIs o cambie el switch. "
-            f"{_capacity_line()}]")
+            f"{_capacity_line()}{_paused_line()}]")
+
+
+def _paused_line() -> str:
+    from app.agents import registry as _r
+    off = _r.paused()
+    return (f" Subagentes APAGADOS por el equipo: {', '.join(off)}. Igual sigues trabajando: cada paso de ellos se hace "
+            "simple sin ellos (por ejemplo, sin Juez la foto va directo a Aprobaciones). Si el usuario necesita lo que "
+            "hacía uno de ellos, dile que lo encienda en Agentes." if off else "")
 
 
 def _capacity_line() -> str:

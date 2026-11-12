@@ -188,6 +188,7 @@ function renderAhorro(box, a, reload) {
   const tips = a.tips || [];
   box.innerHTML = `<div class="card cs-ahorro"><div class="row" style="gap:10px;flex-wrap:wrap"><b>🌱 Ahorro inteligente</b>
       <span class="faint small grow">Optimizar sin bajar la calidad. Todo se puede deshacer.</span>
+      <button class="btn sm primary" data-act="all_on" title="Caché, revisión de la red cada 6 h con descanso nocturno y modelo económico en tareas simples">⚡ Prender todos los ahorros</button>
       ${a.saved_total > 0 ? `<span class="chip good">Ya ahorrado: ${usd(a.saved_total)}</span>` : ""}
       ${a.potential_total > 0 ? `<span class="chip warn">Podrías ahorrar ~${usd(a.potential_total)} más en ${a.days} días</span>` : ""}</div>
     <div class="cs-tips">${tips.map((t) => `<div class="cs-tip-card ${t.on ? "on" : ""}">
