@@ -63,6 +63,12 @@ from app.api_extra import router as extra_router  # noqa: E402
 app.include_router(extra_router)
 from app.consumo import router as consumo_router  # noqa: E402
 app.include_router(consumo_router)
+from app.calidad import router as calidad_router  # noqa: E402
+from app.granja import router as granja_router  # noqa: E402
+from app.lora_compare import router as compare_router  # noqa: E402
+app.include_router(calidad_router)
+app.include_router(granja_router)
+app.include_router(compare_router)
 app.mount("/static", StaticFiles(directory=ROOT / "web"), name="static")
 app.mount("/media", StaticFiles(directory=settings.media_dir), name="media")
 (settings.DATA_DIR / "voices").mkdir(parents=True, exist_ok=True)

@@ -289,8 +289,8 @@ async def _create_post(post_id: str, payload: dict) -> None:
         refs = reference_images(subjects)
     # LoRA propia: si todos los modelos del post ya fueron aprendidos en la GPU local, se usan sus LoRAs
     loras, lora_note = [], ""
+    from app import lora as lora_mod
     if subjects and not base_note:
-        from app import lora as lora_mod
         found = lora_mod.loras_for(subjects)
         if found:
             gen_engine = get_engine("generate", choice)
@@ -320,27 +320,35 @@ async def _create_post(post_id: str, payload: dict) -> None:
                     ad["prompt"] = f"{trig}, {ad['prompt']}"
         else:
             ad = await sp.art_direct(post.idea, platform, brand, feedback, subjects, base_note, 2 if base_note else 3)
-        seed = random.randint(1, 2**31 - 1)
-
-        step = _progress(post_id, f"Generando imagen (intento {attempt})")
-        from app import working
+        from app import calidad, working
         from app.engines import engine_label as _el
-        with working.track("motor_imagen", f"{post.idea[:120]} (intento {attempt})", _el(engine, "generate"), post_id, log=True):
-            if loras:
-                raw = await engine.generate_with_loras([(n, settings.LORA_STRENGTH) for n, _ in loras], ad["prompt"],
-                                                       width, height, seed, step)
-            elif refs:
-                raw = await engine.generate_with_refs(refs, ad["prompt"], width, height, seed, step)
-            else:
-                raw = await engine.generate(ad["prompt"], width, height, seed, step)
-        raw_path = save_bytes(raw, f"{post_id}_a{attempt}_raw.png")
-        final_path = fit_to_platform(raw_path, platform.width, platform.height, f"{post_id}_a{attempt}.jpg")
+        # Calidad máxima en local: varias fotos con semillas distintas y el Juez se queda con la mejor
+        n_cand = calidad.candidates() if getattr(engine, "name", "") == "comfyui" else 1
+        strengths = lora_mod.strengths_for(subjects) if loras else []
+        round_scores = []
+        for cand in range(1, n_cand + 1):
+            seed = random.randint(1, 2**31 - 1)
+            tag = f"intento {attempt}" + (f", foto {cand}/{n_cand}" if n_cand > 1 else "")
+            step = _progress(post_id, f"Generando imagen ({tag})")
+            with working.track("motor_imagen", f"{post.idea[:120]} ({tag})", _el(engine, "generate"), post_id, log=True):
+                if loras:
+                    raw = await engine.generate_with_loras([(n, st) for (n, _), st in zip(loras, strengths)], ad["prompt"],
+                                                           width, height, seed, step)
+                elif refs:
+                    raw = await engine.generate_with_refs(refs, ad["prompt"], width, height, seed, step)
+                else:
+                    raw = await engine.generate(ad["prompt"], width, height, seed, step)
+            suffix = f"a{attempt}" + (f"c{cand}" if n_cand > 1 else "")
+            raw_path = save_bytes(raw, f"{post_id}_{suffix}_raw.png")
+            final_path = fit_to_platform(raw_path, platform.width, platform.height, f"{post_id}_{suffix}.jpg")
 
-        events.publish({"type": "progress", "id": post_id, "text": f"Juez de calidad revisando (intento {attempt})"})
-        qa = await sp.judge(final_path, post.idea, ad["prompt"], brand, subjects)
-        score = int(qa.get("score", 0))
-        tries.append({"prompt": ad["prompt"], "seed": seed, "raw": raw_path, "final": final_path, "score": score,
-                      "issues": qa.get("issues", []), "summary": qa.get("summary", ""), "fix_hint": qa.get("fix_hint", "")})
+            events.publish({"type": "progress", "id": post_id, "text": f"Juez de calidad revisando ({tag})"})
+            qa = await sp.judge(final_path, post.idea, ad["prompt"], brand, subjects)
+            score = int(qa.get("score", 0))
+            round_scores.append(score)
+            tries.append({"prompt": ad["prompt"], "seed": seed, "raw": raw_path, "final": final_path, "score": score,
+                          "issues": qa.get("issues", []), "summary": qa.get("summary", ""), "fix_hint": qa.get("fix_hint", "")})
+        score = max(round_scores)
         best = max(tries, key=lambda t: t["score"])
         _update_post(post_id, prompt=best["prompt"], image_path=best["final"], raw_path=best["raw"],
                      qa_score=best["score"], qa_notes=_qa_text(best, best["score"] >= settings.QA_MIN_SCORE),

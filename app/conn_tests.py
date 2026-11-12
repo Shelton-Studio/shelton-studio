@@ -142,7 +142,15 @@ async def _openrouter_tts(cfg):
     return msg.split(". Modelo:")[0] + f". Voz: {m['id']} ({len(voices)} voces)"
 
 
-_TESTS = {"anthropic": _anthropic, "openrouter": _openrouter, "openrouter_image": _openrouter_image,
+async def _gpu_node(cfg):
+    r = await _get(cfg["url"].rstrip("/") + "/health", headers={"Authorization": f"Bearer {cfg.get('token', '')}"})
+    d = r.json()
+    gpus = ", ".join(g.get("name", "GPU") for g in d.get("gpus", [])) or "GPU"
+    return (f"Nodo conectado: {gpus} · {d.get('slots', 1)} lugar(es) de entrenamiento · "
+            + ("ai-toolkit listo" if d.get("trainer") else "falta ai-toolkit (corre node_setup.sh)"))
+
+
+_TESTS = {"gpu_node": _gpu_node, "anthropic": _anthropic, "openrouter": _openrouter, "openrouter_image": _openrouter_image,
           "openrouter_tts": _openrouter_tts, "comfyui": _comfyui, "telegram": _telegram, "instagram": _instagram,
           "facebook": _facebook, "discord": _discord, "webhook_publisher": _webhook, "event_webhook": _webhook,
           "fal": _fal, "replicate": _replicate, "openai_images": _openai, "gemini_image": _gemini}

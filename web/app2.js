@@ -246,7 +246,7 @@ VIEWS.memoria = async (el) => {
 };
 
 // ------------------------------------------------------------------ CONEXIONES
-const CATS = { brain: ["🧠", "Cerebro"], engine: ["🎨", "Motores de imagen, video y sonido"], voice: ["🎙️", "Voz"], publisher: ["📣", "Publicación"], webhook: ["🔗", "Avisos (webhooks)"] };
+const CATS = { brain: ["🧠", "Cerebro"], engine: ["🎨", "Motores de imagen, video y sonido"], voice: ["🎙️", "Voz"], publisher: ["📣", "Publicación"], webhook: ["🔗", "Avisos (webhooks)"], gpu: ["🖥️", "Granja de GPUs (tarjetas alquiladas u otras PCs)"] };
 VIEWS.conexiones = async (el) => {
   const [types, conns] = await Promise.all([api("/api/connection-types"), api("/api/connections")]);
   S.connTypes = types;
