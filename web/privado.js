@@ -54,18 +54,33 @@ VIEWS.privado = async (el) => {
         <div class="faint small" style="margin-top:6px">Si la GPU está entrenando, espera su turno. Para desnudos rinden mejor checkpoints SDXL como Pony o CyberRealistic.</div>
       </div>
     </div></details>
-    <div class="card" style="margin-top:16px"><b>Galería privada</b> <span class="faint small">(solo administradores · no se publica)</span>
+    <div class="card" style="margin-top:16px"><div class="row" style="gap:8px;flex-wrap:wrap"><b>Galería privada</b> <span class="faint small grow">(solo administradores · no se publica)</span>
+      <select id="pv-filter" style="width:auto"><option value="">Todas</option><option value="pending">Por revisar</option><option value="approved">✔ Aprobadas</option><option value="rejected">✖ Rechazadas</option></select></div>
       <div class="pv-grid" id="pv-grid"></div></div>`;
-  const paintGrid = (list) => {
+  let lastList = st.entries || [];
+  const paintGrid = (all) => {
     const g = $("#pv-grid", el); if (!g) return;
+    lastList = all;
+    const f = $("#pv-filter", el)?.value || "";
+    const list = !f ? all : all.filter((e) => f === "pending" ? e.status === "done" && !e.review : e.review === f);
     g.innerHTML = list.length ? list.map((e) => `<div class="pv-item">${e.status === "done"
       ? `<img src="/api/privado/imagen/${esc(e.id)}" loading="lazy" data-pvzoom="${esc(e.id)}">`
       : `<div class="pv-ph">${e.status === "failed" ? `⚠ ${esc(e.error || "falló")}` : `<div><div class="spinner"></div>${e.status === "waiting" ? esc(e.note || "Esperando la GPU…") : e.status === "queued" ? esc(e.note || "En fila…") : "Generando…"}</div>`}</div>`}
+      ${e.status === "done" ? `<div class="row small" style="gap:6px;margin-top:6px">
+        ${e.review === "approved" ? '<span class="chip good">✔ Aprobada</span>' : e.review === "rejected" ? '<span class="chip bad">✖ Rechazada</span>' : '<span class="chip">Por revisar</span>'}
+        <span class="grow"></span>
+        <button class="btn sm ${e.review === "approved" ? "" : "ghost"}" data-pvrev="${esc(e.id)}" data-ok="${e.review === "approved" ? "" : "1"}" title="Aprobar">✔</button>
+        <button class="btn sm ${e.review === "rejected" ? "" : "ghost"}" data-pvrev="${esc(e.id)}" data-ok="${e.review === "rejected" ? "" : "0"}" title="Rechazar">✖</button></div>` : ""}
       <div class="row small" style="gap:6px;margin-top:4px"><span class="grow faint ellipsis" title="${esc(e.prompt || "")}">${esc(e.subject || "—")} · ${esc((e.preset || "").toUpperCase())}</span>
       ${e.status === "done" ? `<a class="btn sm ghost" href="/api/privado/imagen/${esc(e.id)}" download="privado-${esc(e.id)}.png">${icon("download", 13)}</a>` : ""}
       ${e.status === "done" && e.subject_id ? `<button class="btn sm ghost" data-pvtoref="${esc(e.id)}" data-pvsid="${esc(e.subject_id)}" title="Guardarla en sus fotos privadas (Banco)">➕</button>` : ""}
       <button class="btn sm ghost" data-pvdel="${esc(e.id)}">${icon("trash", 13)}</button></div></div>`).join("") : `<div class="faint small" style="padding:10px 0">Todavía no hay imágenes.</div>`;
     $$("[data-pvzoom]", g).forEach((im) => im.onclick = () => window.open(im.src, "_blank"));
+    $$("[data-pvrev]", g).forEach((b) => b.onclick = async () => {
+      const ok = b.dataset.ok === "1" ? true : b.dataset.ok === "0" ? false : null;
+      try { await api(`/api/privado/imagen/${b.dataset.pvrev}/revisar`, { method: "POST", body: { ok } }); refresh(); }
+      catch (e) { toast(esc(e.message), "bad"); }
+    });
     $$("[data-pvtoref]", g).forEach((b) => b.onclick = async () => {
       try { await api(`/api/privado/modelo/${b.dataset.pvsid}/fotos`, { method: "POST", body: { entry_id: b.dataset.pvtoref } }); toast("Guardada en sus fotos privadas (Banco)", "good", "🔞"); }
       catch (e) { toast(esc(e.message), "bad"); }
@@ -77,6 +92,7 @@ VIEWS.privado = async (el) => {
   };
   const refresh = async () => { try { paintGrid((await api("/api/privado/estado")).entries || []); } catch {} };
   paintGrid(st.entries || []);
+  $("#pv-filter", el).onchange = () => paintGrid(lastList);
   $$("[data-pvok]", el).forEach((b) => b.onclick = async () => {
     if (!confirm(`Confirmo que «${b.dataset.pvname}» es una modelo INVENTADA (no es una persona real) y MAYOR DE 18 años.`)) return;
     try { await api(`/api/privado/modelos/${b.dataset.pvok}/confirmar`, { method: "POST", body: { inventada: true, mayor: true } }); route(); }

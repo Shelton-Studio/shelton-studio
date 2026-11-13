@@ -103,6 +103,12 @@ def _admin(request: Request) -> dict:
 
 def subject_ok(sub: Subject) -> tuple[bool, str]:
     info = sub.lora_info or {}
+    if not info.get("adult_ok") and info.get("variant_of"):
+        # «Valentina · SDXL» hereda la confirmación de Valentina (es la misma modelo para otro motor)
+        with session() as s2:
+            orig = s2.get(Subject, info["variant_of"])
+            if orig and (orig.lora_info or {}).get("adult_ok"):
+                info = {**info, "adult_ok": (orig.lora_info or {})["adult_ok"]}
     if not info.get("adult_ok"):
         return False, "Falta confirmar en su ficha que es una modelo inventada y mayor de 18"
     why = minor_problem(" ".join([sub.name or "", sub.description or "", sub.notes or ""]))
@@ -119,7 +125,7 @@ def models() -> list[dict]:
             ok, why = subject_ok(sub)
             out.append({"id": sub.id, "name": sub.name, "confirmed": bool((sub.lora_info or {}).get("adult_ok")),
                         "usable": ok, "why": why, "base": base_of(sub.id),
-                        "lora_ready": _has_lora(sub)})
+                        "lora_ready": _has_lora(sub), "variant_of": (sub.lora_info or {}).get("variant_of", "")})
     return out
 
 
@@ -331,6 +337,16 @@ async def _resume(ids: list[str], preset: str, ckpt: str, job: dict) -> None:
     await _run_ids(ids, engine, cfg, job["full"], job["neg"], int(job["w"]), int(job["h"]), loras)
 
 
+def review(entry_id: str, ok: bool | None, by: str = "") -> dict:
+    """Aprobación interna de la Adult Zone (no publica nada: solo marca cuáles sirven y cuáles no)."""
+    e = next((x for x in entries() if x["id"] == entry_id), None)
+    if not e or e.get("status") != "done":
+        raise ValueError("Esa imagen no existe o todavía no está lista")
+    state = "approved" if ok else "rejected" if ok is False else ""
+    _append({"id": entry_id, "review": state, "review_by": by, "review_at": datetime.now().isoformat(timespec="seconds")})
+    return {"ok": True, "review": state}
+
+
 def delete(entry_id: str) -> None:
     e = next((x for x in entries() if x["id"] == entry_id), None)
     if not e:
@@ -405,6 +421,19 @@ async def api_image(entry_id: str, request: Request):
     return FileResponse(_dir() / Path(e["file"]).name, headers={"Cache-Control": "private, no-store"})
 
 
+class ReviewIn(BaseModel):
+    ok: bool | None = None          # True aprobar, False rechazar, None volver a «por revisar»
+
+
+@router.post("/imagen/{entry_id}/revisar")
+async def api_review(entry_id: str, body: ReviewIn, request: Request):
+    u = _admin(request)
+    try:
+        return review(entry_id, body.ok, u.get("username", "") if isinstance(u, dict) else "")
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
 @router.delete("/imagen/{entry_id}")
 async def api_delete(entry_id: str, request: Request):
     _admin(request)
@@ -436,9 +465,15 @@ def parse_request(text: str) -> dict:
     preset = "flux" if "flux" in low else "zimage" if re.search(r"z-?image", low) else "sdxl"
     if subject and not re.search(r"\b(flux|sdxl)\b|z-?image", low) and subject["lora_ready"] and subject["base"] in ENGINES:
         preset = subject["base"]          # usa el motor de SU LoRA (la que aprendió de sus fotos del Banco): sale con su cara
+    named = subject
+    if subject and subject["base"] != preset:
+        # «Valentina con sdxl»: usa su versión SDXL (con su propia LoRA SDXL) si ya la tiene
+        twin = next((m for m in usable if m["variant_of"] == subject["id"] and m["base"] == preset), None)
+        if twin:
+            subject = twin
     prompt = t
-    if subject:
-        prompt = re.sub(re.escape(subject["name"]), "", prompt, flags=re.IGNORECASE)
+    for who in {x["name"] for x in (named, subject) if x}:
+        prompt = re.sub(re.escape(who), "", prompt, flags=re.IGNORECASE)
     prompt = re.sub(r"\b(hazme|haz|genera|generame|créame|creame|crea|quiero|dame)\b", "", prompt, flags=re.IGNORECASE)
     prompt = re.sub(r"\b(\d|una|un|uno|dos|tres|cuatro)\s*(fotos?|im[aá]genes?|versiones?)\s*(de)?\b", "", prompt,
                     flags=re.IGNORECASE)
