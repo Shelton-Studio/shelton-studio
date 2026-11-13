@@ -584,7 +584,7 @@ async function openPost(id, refetch = true, keepScroll = false) {
     ${p.image_url && p.qa_score ? `<div class="d-sec"><h4>⚖️ Califica al juez</h4><div class="hint" style="margin-bottom:8px">El juez le puso <b>${Math.round(p.qa_score)}/100</b> a la elegida${(p.alternatives || []).length ? ` y descartó ${p.alternatives.length} intento(s) (abajo)` : ""}. ¿Acertó? Tu nota le enseña al juez.</div>
       <div class="row" style="gap:6px;flex-wrap:wrap"><button class="btn sm ${p.judge_review === "agree" ? "good" : ""}" data-jr="1">👍 Acertó</button><button class="btn sm ${p.judge_review === "disagree" ? "bad" : ""}" data-jr="0">👎 Se equivocó</button>
       <input id="jr-score" type="number" min="0" max="100" style="width:110px" placeholder="Tu nota 0-100" value="${p.human_score || ""}"><input id="jr-note" class="grow" placeholder="¿Por qué? (opcional)"><button class="btn sm primary" id="jr-save">Guardar</button></div></div>` : ""}
-    ${(p.alternatives || []).length ? `<div class="d-sec"><h4>🗂 Intentos que el juez descartó (${p.alternatives.length})</h4><div class="hint" style="margin-bottom:8px">El juez los puntuó más bajo, pero no se borran. Si crees que se equivocó, elige uno.</div><div class="grid" style="gap:8px">${p.alternatives.map((a, i) => `<div class="alt"><img src="${esc(a.image_url)}"><div class="grow"><span class="score ${scoreCls(a.score)}">${a.score}/100</span><div class="muted" style="margin:4px 0 8px">${esc((a.issues || []).join("; ") || a.summary)}</div><button class="btn sm" data-alt="${i}">Usar esta</button></div></div>`).join("")}</div></div>` : ""}
+    ${(p.alternatives || []).length ? `<div class="d-sec"><h4>🗂 Intentos que el juez descartó (${p.alternatives.length})</h4><div class="hint" style="margin-bottom:8px">El juez los puntuó más bajo, pero no se borran. Si crees que se equivocó, elige uno.</div><div class="grid" style="gap:8px">${p.alternatives.map((a, i) => `<div class="alt"><img src="${esc(a.image_url)}" data-altview="${i}" title="Ver grande y comparar con la elegida"><div class="grow"><span class="score ${scoreCls(a.score)}">${a.score}/100</span><div class="muted" style="margin:4px 0 8px">${esc((a.issues || []).join("; ") || a.summary)}</div><button class="btn sm" data-alt="${i}">Usar esta</button></div></div>`).join("")}</div></div>` : ""}
     ${p.error ? `<div class="d-sec"><h4>Error</h4><div class="qa-box" style="color:#fca5a5">${esc(p.error)}</div></div>` : ""}
     ${(p.publish_log || []).length ? `<div class="d-sec"><h4>Publicaciones</h4>${p.publish_log.map((l) => `<div class="small muted">✔ ${esc(l.target)} · ${when(l.at)}</div>`).join("")}</div>` : ""}
     <div class="d-sec"><h4>Idea</h4><div class="muted">${esc(p.idea)}</div></div>
@@ -602,6 +602,17 @@ async function openPost(id, refetch = true, keepScroll = false) {
   };
   $$("[data-jr]", d).forEach((b) => b.onclick = () => jr(b.dataset.jr === "1"));
   if ($("#jr-save", d)) $("#jr-save", d).onclick = () => jr(null);
+  $$("[data-altview]", d).forEach((im) => im.onclick = () => {      // ver grande: descartada al lado de la elegida
+    const i = +im.dataset.altview, a = p.alternatives[i];
+    const box = modal("🗂 Comparar con la elegida", `<div class="alt-cmp">
+        <figure><img src="${esc(p.image_url)}"><figcaption><b>Elegida por el juez</b> · <span class="score ${scoreCls(p.qa_score)}">${Math.round(p.qa_score || 0)}/100</span></figcaption></figure>
+        <figure><img src="${esc(a.image_url)}"><figcaption><b>Descartada</b> · <span class="score ${scoreCls(a.score)}">${a.score}/100</span><div class="muted small" style="margin-top:4px">${esc((a.issues || []).join("; ") || a.summary || "")}</div></figcaption></figure></div>`,
+      `<a class="btn ghost" href="${esc(a.image_url)}" target="_blank">Abrir en grande</a><button class="btn primary" id="alt-use">Usar la descartada</button>`, true);
+    $("#alt-use", box).onclick = async () => {
+      try { await api(`/api/posts/${id}/use-alternative`, { method: "POST", body: { index: i } }); closeModal(); toast("Listo: usando la que elegiste", "good"); openPost(id); }
+      catch (e) { toast(esc(e.message), "bad"); }
+    };
+  });
   $$("[data-alt]", d).forEach((b) => b.onclick = run(async () => { await api(`/api/posts/${id}/use-alternative`, { method: "POST", body: { index: +b.dataset.alt } }); openPost(id); }, "Usando la imagen que elegiste"));
   $("#d-ok").onclick = run(() => api(`/api/posts/${id}`, { method: "PATCH", body: { status: "approved" } }), "Aprobado");
   $("#d-no").onclick = run(() => api(`/api/posts/${id}`, { method: "PATCH", body: { status: "rejected" } }), "Rechazado");
