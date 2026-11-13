@@ -365,7 +365,7 @@ async def checkpoints() -> list[str]:
         info = await ComfyUIClient().object_info("CheckpointLoaderSimple")
         req = info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"]
         opts = req[0] if isinstance(req[0], list) else (req[1] or {}).get("options", [])
-        return sorted(opts)
+        return sorted(o for o in opts if "flux" not in o.lower())   # la lista es de SDXL: Flux va aparte
     except Exception:  # noqa: BLE001
         return []
 
