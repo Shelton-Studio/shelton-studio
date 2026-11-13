@@ -43,6 +43,14 @@ TYPES: dict[str, dict] = {
     "openrouter_video": {"category": "engine", "name": "OpenRouter (video)",
                          "help": "Video con Veo, Sora, Seedance, Kling, Wan... usando tu clave de OpenRouter. Modelo «auto» = el mejor disponible.",
                          "fields": [F("model", "Modelo de video", placeholder="auto"), F("api_key", "API key (opcional)", "secret")]},
+    "wavespeed": {"category": "engine", "name": "WaveSpeed",
+                  "help": "Más de 1.000 modelos con una sola clave (wavespeed.ai): Seedream 5.5 para fotos y edición "
+                          "con hasta 10 referencias, Wan, Seedance, Kling… para video. Marca para qué la usas.",
+                  "fields": [F("api_key", "API key", "secret", required=True),
+                             F("model_generate", "Modelo para generar", placeholder="bytedance/seedream-v5.5"),
+                             F("model_edit", "Modelo para editar / con referencias", placeholder="bytedance/seedream-v5.5/edit"),
+                             F("model_video", "Modelo de video (imagen a video)", placeholder="wavespeed-ai/wan-2.2/i2v-720p"),
+                             F("extra", "Parámetros extra (JSON, opcional)", placeholder='{"output_format": "jpeg"}')]},
     "higgsfield": {"category": "engine", "name": "Higgsfield",
                    "help": "Imágenes y video de Higgsfield (Soul, Seedream, Wan, Kling, Veo…). Clave doble de "
                            "console.higgsfield.ai: Key ID y Key Secret. Marca para qué la usas (generar, editar, video).",
