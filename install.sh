@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Instalador de Shelton Studio en un servidor Linux (Ubuntu/Debian). Un solo comando:
-#   bash <(curl -fsSL https://raw.githubusercontent.com/juancamp7777/alligator-AI/main/install.sh)
+#   bash <(curl -fsSL https://raw.githubusercontent.com/Shelton-Studio/shelton-studio/main/install.sh)
 #
 # - Instala en su propia carpeta (~/shelton-studio): NO toca otras apps ni otros Shelton.
 # - Elige un puerto libre (desde el 8010) y, si hay Tailscale, solo escucha en la red de Tailscale.
@@ -8,7 +8,7 @@
 # - Lo deja como servicio (arranca solo). Volver a correrlo = actualizar.
 set -euo pipefail
 
-REPO="https://github.com/juancamp7777/alligator-AI.git"
+REPO="https://github.com/Shelton-Studio/shelton-studio.git"
 DIR="${SHELTON_DIR:-$HOME/shelton-studio}"
 SERVICE="shelton-studio"
 say() { printf "\n\033[1;35m▶ %s\033[0m\n" "$*"; }
@@ -28,9 +28,13 @@ fi
 ok "Python $(python3 -c 'import sys;print(".".join(map(str,sys.version_info[:2])))'), ${FREE_MB} MB libres"
 
 say "Descargando Shelton Studio en $DIR"
-if [ -d "$DIR" ] && ! git -C "$DIR" remote get-url origin 2>/dev/null | grep -qi "alligator-ai"; then
+if [ -d "$DIR" ] && ! git -C "$DIR" remote get-url origin 2>/dev/null | grep -qiE "alligator-ai|shelton-studio/shelton-studio"; then
   # Otra app con la misma carpeta: no se mezcla ni se actualiza con nuestro código.
   die "$DIR es de otro proyecto. Muévelo aparte (mv $DIR ${DIR}-viejo) o instala en otra carpeta con SHELTON_DIR=/ruta y vuelve a correrlo."
+fi
+# El repo pasó a Shelton-Studio/shelton-studio: las instalaciones viejas apuntan a la dirección nueva
+if [ -d "$DIR/.git" ] && git -C "$DIR" remote get-url origin 2>/dev/null | grep -qi "alligator-ai"; then
+  git -C "$DIR" remote set-url origin "$REPO"
 fi
 if [ -d "$DIR/.git" ]; then git -C "$DIR" pull -q --ff-only origin main && ok "Actualizado"
 else git clone -q "$REPO" "$DIR" && ok "Descargado"; fi

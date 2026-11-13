@@ -90,7 +90,7 @@ export TS_AUTHKEY="tskey-auth-..."
 ```
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/juancamp7777/alligator-AI/main/scripts/node_setup.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/Shelton-Studio/shelton-studio/main/scripts/node_setup.sh)
 ```
 
    Opcionales, antes del último comando:

@@ -55,7 +55,7 @@ function renderGranja(box, d) {
       3. En la terminal de la tarjeta (root):<br>
       <code>export WORKER_TOKEN="inventa-una-clave-larga"</code><br>
       <code>export TS_AUTHKEY="tskey-auth-…"</code><br>
-      <code>bash &lt;(curl -fsSL https://raw.githubusercontent.com/juancamp7777/alligator-AI/main/scripts/node_setup.sh)</code><br>
+      <code>bash &lt;(curl -fsSL https://raw.githubusercontent.com/Shelton-Studio/shelton-studio/main/scripts/node_setup.sh)</code><br>
       Opcional: <code>WORKER_GPUS=…</code> (una PRO 6000 dividida en 3) y <code>NODE_COMFY=1</code> (para que también genere fotos).<br>
       4. Al final muestra la URL. En Shelton: <b>Conexiones → Agregar → «Nodo de GPU (trabajador)»</b> con esa URL, el token, cuántos entrenamientos a la vez y el costo por hora.<br>
       5. Listo: los operadores siguen apretando «Entrenar» como siempre y la fila usa también esta tarjeta. Al terminar, la LoRA se copia sola a la placa y las fotos se borran de la tarjeta alquilada.<br>
