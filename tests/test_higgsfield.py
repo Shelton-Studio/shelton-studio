@@ -55,7 +55,7 @@ def test_generate_submits_and_polls_until_completed():
     assert out == _png()
     post = seen[0]
     assert post[2] == "Key KID:SECRET"                                  # cabecera oficial: Key ID:SECRET
-    assert post[3] == {"prompt": "Valentina en un café", "aspect_ratio": "4:5", "resolution": "2K"}
+    assert post[3] == {"prompt": "Valentina en un café", "aspect_ratio": "4:5", "resolution": "2K"}   # lo de la conexión manda
     assert e.last_model == "higgsfield-ai/soul/v2/standard"
 
 
@@ -118,3 +118,18 @@ def test_full_key_pasted_in_one_box():
     e.transport = httpx.MockTransport(handler)
     asyncio.run(e.generate("x", 1, 1, 1))
     assert seen[0] == "Key KID:SECRET"
+
+
+def test_best_quality_defaults_and_safe_retry():
+    bodies = []
+
+    def handler(req):
+        b = json.loads(req.content)
+        bodies.append(b)
+        if "resolution" in b:
+            return httpx.Response(422, json={"detail": "unknown field resolution"})
+        return httpx.Response(200, json={"status": "completed", "images": [{"url": PNG_URI}]})
+    e = HiggsfieldEngine({"api_key": "KID:SECRET"})
+    e.transport = httpx.MockTransport(handler)
+    assert asyncio.run(e.generate("x", 1080, 1350, 1)) == _png()
+    assert bodies[0]["resolution"] == "1080p" and "resolution" not in bodies[1]     # pide lo mejor; si no se puede, sigue igual

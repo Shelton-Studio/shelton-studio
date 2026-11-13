@@ -60,13 +60,13 @@ VIEWS.privado = async (el) => {
     const g = $("#pv-grid", el); if (!g) return;
     g.innerHTML = list.length ? list.map((e) => `<div class="pv-item">${e.status === "done"
       ? `<img src="/api/privado/imagen/${esc(e.id)}" loading="lazy" data-pvzoom="${esc(e.id)}">`
-      : `<div class="pv-ph">${e.status === "failed" ? `⚠ ${esc(e.error || "falló")}` : '<div class="spinner"></div>Generando…'}</div>`}
+      : `<div class="pv-ph">${e.status === "failed" ? `⚠ ${esc(e.error || "falló")}` : `<div><div class="spinner"></div>${e.status === "waiting" ? esc(e.note || "Esperando la GPU…") : e.status === "queued" ? "En fila…" : "Generando…"}</div>`}</div>`}
       <div class="row small" style="gap:6px;margin-top:4px"><span class="grow faint ellipsis" title="${esc(e.prompt || "")}">${esc(e.subject || "—")} · ${esc((e.preset || "").toUpperCase())}</span>
       ${e.status === "done" ? `<a class="btn sm ghost" href="/api/privado/imagen/${esc(e.id)}" download="privado-${esc(e.id)}.png">${icon("download", 13)}</a>` : ""}
       <button class="btn sm ghost" data-pvdel="${esc(e.id)}">${icon("trash", 13)}</button></div></div>`).join("") : `<div class="faint small" style="padding:10px 0">Todavía no hay imágenes.</div>`;
     $$("[data-pvzoom]", g).forEach((im) => im.onclick = () => window.open(im.src, "_blank"));
     $$("[data-pvdel]", g).forEach((b) => b.onclick = async () => {
-      if (!confirm("¿Borrar esta imagen? No se puede recuperar.")) return;
+      if (!confirm(b.closest(".pv-item").querySelector("img") ? "¿Borrar esta imagen? No se puede recuperar." : "¿Cancelar esta foto?")) return;
       await api(`/api/privado/imagen/${b.dataset.pvdel}`, { method: "DELETE" }); refresh();
     });
   };

@@ -131,3 +131,27 @@ def test_chat_understands_requests_like_shelton(monkeypatch):
         assert "Bloqueado" in str(e)
     else:
         raise AssertionError
+
+
+def test_best_defaults_and_waiting_reason(monkeypatch):
+    assert privado.best_checkpoint(["RealVisXL_V5.0_fp16.safetensors", "cyberrealisticXL_v5.safetensors"]).startswith("cyber")
+    assert privado.best_checkpoint(["ponyDiffusionV6XL.safetensors"]).startswith("pony")
+    assert privado.enrich("adult, x", "sdxl", "ponyDiffusionV6XL.safetensors").startswith("score_9")
+    assert "photorealistic" in privado.enrich("adult, x", "sdxl", "RealVisXL.safetensors")
+    from app.engines import _busy
+    init_db()
+    with session() as s:
+        s.add(Subject(name="Zara", kind="person", lora_status="training"))
+    _busy["http://gpu"] = 1
+    try:
+        assert "entrenando la LoRA de Zara" in privado._gpu_reason("http://gpu")
+    finally:
+        _busy["http://gpu"] = 0
+    assert privado._gpu_reason("http://gpu") == ""
+
+
+def test_stuck_entries_are_cleared_after_restart():
+    privado._append({"id": "stuck-0", "batch": "stuck", "at": "2099", "status": "waiting"})
+    privado.recover_after_restart()
+    e = next(x for x in privado.entries() if x["id"] == "stuck-0")
+    assert e["status"] == "failed" and "reinició" in e["error"]

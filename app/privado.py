@@ -37,6 +37,31 @@ MINOR_RE = re.compile(
     r"high\s*school|middle\s*school|secundaria|primaria)\b", re.IGNORECASE)
 AGE_RE = re.compile(r"\b(\d{1,2})\s*(a[ñn]os|años|years?\s*old|yo|y/o)\b", re.IGNORECASE)
 SAFE_NEGATIVE = "child, teen, underage, minor, young-looking, childlike, school uniform"
+# Si no eligen checkpoint, se usa el mejor instalado para realismo adulto (en este orden)
+CKPT_PRIORITY = ("cyberrealistic", "realvis", "juggernaut", "epicrealism", "pony")
+QUALITY_SDXL = ("photorealistic, RAW photo, highly detailed skin texture, natural skin pores, sharp focus, "
+                "professional photography, soft natural lighting")
+QUALITY_PONY = "score_9, score_8_up, score_7_up, photo, realistic, "
+QUALITY_FLUX = "realistic photo, natural skin texture, sharp focus, professional photography"
+_cancelled: set[str] = set()
+
+
+def best_checkpoint(installed: list[str]) -> str:
+    low = [(c, c.lower()) for c in installed]
+    for key in CKPT_PRIORITY:
+        hit = next((c for c, lc in low if key in lc), None)
+        if hit:
+            return hit
+    return ""
+
+
+def enrich(prompt: str, preset: str, ckpt: str) -> str:
+    """Agrega solo las etiquetas de calidad que cada modelo necesita para rendir al máximo."""
+    if preset == "flux":
+        return f"{prompt}, {QUALITY_FLUX}"
+    if "pony" in (ckpt or "").lower():
+        return QUALITY_PONY + prompt
+    return f"{prompt}, {QUALITY_SDXL}"
 MAX_COUNT = 4
 
 
@@ -172,9 +197,12 @@ async def generate(by: str, prompt: str, subject_id: str = "", preset: str = "sd
             name = sub.name
     count = max(1, min(int(count or 1), MAX_COUNT))
     w, h = SIZES.get(size, SIZES["vertical"])
-    neg = ", ".join(x for x in [negative.strip(), SAFE_NEGATIVE] if x)
+    if preset == "sdxl" and not ckpt:
+        ckpt = best_checkpoint(await checkpoints())
+    from app.engines.comfy import SDXL_NEGATIVE
+    neg = ", ".join(x for x in [negative.strip(), SDXL_NEGATIVE, SAFE_NEGATIVE] if x)
     cfg, engine = _engine(preset, ckpt)
-    full = f"{trigger}, adult, {prompt}" if trigger else f"adult, {prompt}"
+    full = enrich(f"{trigger}, adult, {prompt}" if trigger else f"adult, {prompt}", preset, ckpt)
     batch = uuid.uuid4().hex[:10]
     for i in range(count):
         _append({"id": f"{batch}-{i}", "batch": batch, "at": datetime.now().isoformat(timespec="seconds"), "by": by,
@@ -186,30 +214,62 @@ async def generate(by: str, prompt: str, subject_id: str = "", preset: str = "sd
             f"{name} todavía no tiene LoRA para {preset.upper()}: sale sin su cara. Créale la versión {preset.upper()} en el Banco y entrénala."}
 
 
+def _gpu_reason(url: str) -> str:
+    """Por qué está ocupada la GPU (para decirlo en pantalla en vez de «Generando…» sin explicación)."""
+    from app.engines import busy
+    if not busy(url):
+        return ""
+    with session() as s:
+        tr = [x.name for x in s.query(Subject).filter(Subject.lora_status == "training")]
+    return (f"Esperando la GPU: está entrenando la LoRA de {', '.join(tr)}. Empieza sola cuando termine."
+            if tr else "Esperando la GPU: está terminando otro trabajo. Empieza sola enseguida.")
+
+
 async def _run(batch: str, count: int, engine, cfg: dict, prompt: str, negative: str, w: int, h: int, loras) -> None:
     import random
-    engine.values["generate"]["negative"] = negative          # motor nuevo para este lote: no afecta a otros
+    try:
+        engine.values["generate"]["negative"] = negative      # motor nuevo para este lote: no afecta a otros
+        url = getattr(engine, "url", "")
+    except Exception as e:  # noqa: BLE001
+        for i in range(count):
+            _append({"id": f"{batch}-{i}", "status": "failed", "error": f"No pude preparar el motor: {e}"[:300]})
+        return
     for i in range(count):
         eid = f"{batch}-{i}"
-        _append({"id": eid, "status": "running"})
+        if eid in _cancelled:
+            continue
+        reason = _gpu_reason(url)
+        _append({"id": eid, "status": "waiting" if reason else "running", "note": reason})
         try:
             seed = random.randint(1, 2**31 - 1)
             if loras:
                 raw = await engine.generate_with_loras(loras, prompt, w, h, seed)
             else:
                 raw = await engine.generate(prompt, w, h, seed)
+            if eid in _cancelled:
+                continue
             f = _dir() / f"{eid}.png"
             f.write_bytes(raw)
-            _append({"id": eid, "status": "done", "file": f.name, "seed": seed})
+            _append({"id": eid, "status": "done", "file": f.name, "seed": seed, "note": ""})
         except Exception as e:  # noqa: BLE001
-            log.warning("Estudio privado: falló %s: %s", eid, e)
-            _append({"id": eid, "status": "failed", "error": str(e)[:300]})
+            log.warning("Adult Zone: falló %s: %s", eid, e)
+            _append({"id": eid, "status": "failed", "error": str(e)[:300], "note": ""})
+
+
+def recover_after_restart() -> None:
+    """Si Shelton se reinició con fotos a medio hacer, quedan como interrumpidas (no «generando» para siempre)."""
+    for e in entries():
+        if e.get("status") in ("queued", "running", "waiting"):
+            _append({"id": e["id"], "status": "failed", "error": "Se interrumpió (Shelton se reinició). Pídela de nuevo.",
+                     "note": ""})
 
 
 def delete(entry_id: str) -> None:
     e = next((x for x in entries() if x["id"] == entry_id), None)
     if not e:
         raise ValueError("No existe")
+    if e.get("status") in ("queued", "running", "waiting"):
+        _cancelled.add(entry_id)                                # si estaba esperando, se cancela
     if e.get("file"):
         (_dir() / Path(e["file"]).name).unlink(missing_ok=True)
     _append({"id": entry_id, "deleted": True, "at": datetime.now().isoformat(timespec="seconds")})
