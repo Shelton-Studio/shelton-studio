@@ -187,7 +187,8 @@ PROFILES = {
 }
 
 
-BASES = {"zimage": "Z-Image Turbo", "sdxl": "SDXL", "flux": "Flux.1 Dev"}
+BASES = {"zimage": "Z-Image Turbo", "sdxl": "SDXL", "flux": "Flux.1 Dev", "qwen": "Qwen-Image (Profesional)"}
+BIG_BASES = {"qwen"}          # se entrenan solo en tarjetas grandes (perfil «pro», p. ej. la RTX PRO 6000)
 
 
 def base_of(subject_id: str) -> str:
@@ -207,6 +208,18 @@ def _arch_parts(base: str, pf: dict, trigger: str) -> tuple[dict, dict, dict]:
                 {"noise_scheduler": "ddpm", "lr": 1e-4},
                 {"sampler": "ddpm", "sample_every": 100000, "width": 1024, "height": 1024,
                  "prompts": [f"a photo of {trigger}"], "guidance_scale": 5, "sample_steps": 25})
+    if base == "qwen":
+        # Qwen-Image 20B (licencia Apache 2.0: uso comercial). En la tarjeta grande va sin comprimir el modelo;
+        # en una de 24 GB usaría la versión comprimida con su adaptador de precisión.
+        big = not pf["quantize"]
+        model = {"name_or_path": os.getenv("QWEN_TRAIN_MODEL", "Qwen/Qwen-Image"), "arch": "qwen_image",
+                 "quantize": not big, "quantize_te": True, "qtype_te": "qfloat8", "low_vram": not big}
+        if not big:
+            model["qtype"] = "uint3|ostris/accuracy_recovery_adapters/qwen_image_torchao_uint3.safetensors"
+        return (model,
+                {"noise_scheduler": "flowmatch", "lr": 1e-4, "cache_text_embeddings": True},
+                {"sampler": "flowmatch", "sample_every": 100000, "width": 1024, "height": 1024,
+                 "prompts": [f"a photo of {trigger}"], "guidance_scale": 3, "sample_steps": 25})
     if base == "flux":
         return ({"name_or_path": os.getenv("FLUX_TRAIN_MODEL", "black-forest-labs/FLUX.1-dev"), "is_flux": True,
                  "quantize": pf["quantize"] or pf["low_vram"], "low_vram": pf["low_vram"]},
@@ -911,7 +924,7 @@ async def _drain() -> None:
         for sid in queue_ids():
             if sid in running:
                 continue
-            slot = await granja.free_slot(used)
+            slot = await granja.free_slot(used, big=base_of(sid) in BIG_BASES)
             if not slot:
                 break
             used[slot["id"]] = used.get(slot["id"], 0) + 1
@@ -1061,14 +1074,14 @@ async def _resume(sid: str, item: dict) -> None:
 def make_variant(subject_id: str, base: str) -> dict:
     """Crea «<nombre> · SDXL» o «<nombre> · Flux»: mismas fotos y descripción, con su propia LoRA para ese motor.
     El modelo original y su LoRA de Z-Image no se tocan."""
-    if base not in ("sdxl", "flux"):
-        raise ValueError("Elige sdxl o flux")
+    if base not in ("sdxl", "flux", "qwen"):
+        raise ValueError("Elige sdxl, flux o qwen")
     from app.serialize import subject_dict
     with session() as s:
         src = s.get(Subject, subject_id)
         if not src:
             raise ValueError("Ese modelo no existe")
-        name = f"{src.name} · {'Flux' if base == 'flux' else 'SDXL'}"
+        name = f"{src.name} · {({'flux': 'Flux', 'qwen': 'Qwen'}).get(base, 'SDXL')}"
         if s.query(Subject).filter(Subject.name == name).first():
             raise ValueError(f"Ya existe «{name}»")
         new = Subject(name=name, kind=src.kind, description=src.description, notes=src.notes,

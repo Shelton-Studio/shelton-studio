@@ -153,6 +153,7 @@ function variantDialog(sid, name) {
       con las mismas fotos y descripción. Después se entrena con el botón de siempre. La original no cambia.</div>
     <div class="grid g2" style="gap:10px">
       <button class="card q-row" data-vb="sdxl" style="text-align:left"><div><b>SDXL</b><div class="faint small">Hiperrealismo (RealVisXL) y miles de estilos. Entrena bien en la 3090.</div></div></button>
+      <button class="card q-row" data-vb="qwen" style="text-align:left"><div><b>Qwen-Image · Profesional ⭐</b><div class="faint small">Fotos de nivel profesional (20B, uso comercial). Se entrena SOLO en la RTX PRO 6000; después genera también en las 3090 de la placa (motor «Calidad máxima»).</div></div></button>
       <button class="card q-row" data-vb="flux" style="text-align:left"><div><b>Flux.1 Dev</b><div class="faint small">El más realista, manos y texto. Ideal entrenarla en la RTX PRO 6000. Pide aceptar la licencia de Flux en Hugging Face.</div></div></button>
     </div>
     <div class="faint small">Para generar con ella: en la conversación, elige el motor «SDXL» o «Flux» (o pídeselo a Shelton) y nombra a «${esc(name)} · SDXL» / «· Flux».</div>`,
