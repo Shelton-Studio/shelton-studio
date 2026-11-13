@@ -174,12 +174,13 @@ class NodeLost(RuntimeError):
 
 
 async def _follow_remote(subject_id: str, node: dict, jid: str, ctx: dict, steps: int, t0: float) -> None:
+    from app import lora as lora_mod
     from app.lora import STEP_RE, _finish, _update
     work, job = ctx["work"], ctx["job"]
     finished = False
     async with _client(120) as c:
         try:
-            spp, first, fails = None, None, 0
+            spp, first, fails = lora_mod.sec_per_step(subject_id) or None, None, 0
             while True:
                 await asyncio.sleep(POLL)
                 with session() as s:
@@ -207,11 +208,15 @@ async def _follow_remote(subject_id: str, node: dict, jid: str, ctx: dict, steps
                             break
                 if done:
                     now_t = time.time()
-                    if first is None or done < first[0]:
-                        first = (done, now_t)
-                    did = done - first[0]
-                    if did >= 10:
-                        spp = (now_t - first[1]) / did
+                    # Velocidad con las últimas lecturas reales (ventana de ~5 min). Al arrancar o retomar, la
+                    # tarjeta puede informar de golpe muchos pasos: eso no es velocidad y daba «faltan ~0 min».
+                    if first is None or done < first[-1][0]:
+                        first = []
+                    first.append((done, now_t))
+                    first = [x for x in first if now_t - x[1] <= 300] or [(done, now_t)]
+                    d_steps, d_t = first[-1][0] - first[0][0], first[-1][1] - first[0][1]
+                    if d_steps >= 10 and d_t >= 30 and d_steps / d_t < 20:
+                        spp = d_t / d_steps
                     start_at = int(ctx.get("base") or 0)
                     pct = 100.0 * max(0, done - start_at) / max(1, steps - start_at)
                     _update(subject_id, lora_progress=min(99.0, pct),
