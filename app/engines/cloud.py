@@ -452,7 +452,7 @@ class HiggsfieldEngine(_Base):
 
     def _headers(self) -> dict:
         key, secret = (self.cfg.get("api_key") or "").strip(), (self.cfg.get("api_secret") or "").strip()
-        cred = f"{key}:{secret}" if secret else key
+        cred = key if ":" in key or not secret else f"{key}:{secret}"   # la clave completa ya trae «ID:SECRET»
         return {"Authorization": f"Key {cred}", "Content-Type": "application/json"}
 
     def _extra(self, kind: str) -> dict:
@@ -468,12 +468,20 @@ class HiggsfieldEngine(_Base):
     def _client(self, timeout: float) -> httpx.AsyncClient:
         return httpx.AsyncClient(timeout=timeout, transport=self.transport, follow_redirects=True)
 
-    async def _run(self, model: str, body: dict, limit_s: float, on_progress: Progress = None) -> dict:
+    # Ajustes por defecto para sacar la máxima calidad (como en la web de Higgsfield). Si algún modelo no los acepta,
+    # se reintenta solo sin ellos: nunca rompe el pedido.
+    BEST = {"generate": {"resolution": "1080p"}, "edit": {"resolution": "2K"}, "video": {"duration": 5}}
+
+    async def _run(self, model: str, body: dict, limit_s: float, on_progress: Progress = None,
+                   optional: tuple = ()) -> dict:
         model = model.strip("/")
         async with self._client(120) as c:
             r = await c.post(f"{self.BASE}/{model}", json=body, headers=self._headers())
+            if r.status_code in (400, 422) and any(k in body for k in optional):
+                body = {k: v for k, v in body.items() if k not in optional}
+                r = await c.post(f"{self.BASE}/{model}", json=body, headers=self._headers())
             if r.status_code in (401, 403):
-                raise RuntimeError("Higgsfield rechazó la clave: revisa Key ID y Key Secret en Conexiones")
+                raise RuntimeError("Higgsfield rechazó la clave: revisa que pegaste la clave completa en Conexiones")
             if r.status_code >= 400:
                 raise RuntimeError(f"Higgsfield {r.status_code} ({model}): {r.text[:400]}")
             j = r.json()
@@ -551,28 +559,33 @@ class HiggsfieldEngine(_Base):
     async def generate(self, prompt, width, height, seed, on_progress: Progress = None) -> bytes:
         model = self.cfg.get("model_generate") or "higgsfield-ai/soul/v2/standard"
         self.last_model = model
-        body = {"prompt": prompt, "aspect_ratio": _ratio(width, height) if width and height else "3:4",
-                **self._extra("generate")}
-        j = await self._run(model, body, 600, on_progress)
+        extra = self._extra("generate")
+        best = {k: v for k, v in self.BEST["generate"].items() if k not in extra}
+        body = {"prompt": prompt, "aspect_ratio": _ratio(width, height) if width and height else "3:4", **best, **extra}
+        j = await self._run(model, body, 600, on_progress, optional=tuple(best))
         return await _fetch(self._image_url(j))
 
     async def _edit_many(self, images, prompt, width, height, seed) -> bytes:
         model = self.cfg.get("model_edit") or "bytedance/seedream/v4/edit"
         self.last_model = model
         urls = [await self._upload(i) for i in images[:4]]
-        body = {"prompt": prompt, self.cfg.get("images_field") or "image_urls": urls, **self._extra("edit")}
+        extra = self._extra("edit")
+        best = {k: v for k, v in self.BEST["edit"].items() if k not in extra}
+        body = {"prompt": prompt, self.cfg.get("images_field") or "image_urls": urls, **best, **extra}
         if width and height:
             body.setdefault("aspect_ratio", _ratio(width, height))
-        j = await self._run(model, body, 600)
+        j = await self._run(model, body, 600, optional=tuple(best))
         return await _fetch(self._image_url(j))
 
     async def video(self, image, prompt, negative, width, height, seed, preset=None, on_progress: Progress = None):
         model = self.cfg.get("model_video") or "wan/v2.7/image-to-video"
         self.last_model = model
         url = await self._upload(image)
+        extra = self._extra("video")
+        best = {k: v for k, v in self.BEST["video"].items() if k not in extra}
         body = {"prompt": prompt + (f"\nAvoid: {negative}" if negative else ""),
-                self.cfg.get("image_field") or "image_url": url, **self._extra("video")}
-        j = await self._run(model, body, 1500, on_progress)
+                self.cfg.get("image_field") or "image_url": url, **best, **extra}
+        j = await self._run(model, body, 1500, on_progress, optional=tuple(best))
         return await _fetch(self._video_url(j)), 30
 
     async def health(self) -> dict:

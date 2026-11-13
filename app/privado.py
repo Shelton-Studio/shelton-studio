@@ -37,6 +37,31 @@ MINOR_RE = re.compile(
     r"high\s*school|middle\s*school|secundaria|primaria)\b", re.IGNORECASE)
 AGE_RE = re.compile(r"\b(\d{1,2})\s*(a[ñn]os|años|years?\s*old|yo|y/o)\b", re.IGNORECASE)
 SAFE_NEGATIVE = "child, teen, underage, minor, young-looking, childlike, school uniform"
+# Si no eligen checkpoint, se usa el mejor instalado para realismo adulto (en este orden)
+CKPT_PRIORITY = ("cyberrealistic", "realvis", "juggernaut", "epicrealism", "pony")
+QUALITY_SDXL = ("photorealistic, RAW photo, highly detailed skin texture, natural skin pores, sharp focus, "
+                "professional photography, soft natural lighting")
+QUALITY_PONY = "score_9, score_8_up, score_7_up, photo, realistic, "
+QUALITY_FLUX = "realistic photo, natural skin texture, sharp focus, professional photography"
+_cancelled: set[str] = set()
+
+
+def best_checkpoint(installed: list[str]) -> str:
+    low = [(c, c.lower()) for c in installed]
+    for key in CKPT_PRIORITY:
+        hit = next((c for c, lc in low if key in lc), None)
+        if hit:
+            return hit
+    return ""
+
+
+def enrich(prompt: str, preset: str, ckpt: str) -> str:
+    """Agrega solo las etiquetas de calidad que cada modelo necesita para rendir al máximo."""
+    if preset == "flux":
+        return f"{prompt}, {QUALITY_FLUX}"
+    if "pony" in (ckpt or "").lower():
+        return QUALITY_PONY + prompt
+    return f"{prompt}, {QUALITY_SDXL}"
 MAX_COUNT = 4
 
 
@@ -172,13 +197,17 @@ async def generate(by: str, prompt: str, subject_id: str = "", preset: str = "sd
             name = sub.name
     count = max(1, min(int(count or 1), MAX_COUNT))
     w, h = SIZES.get(size, SIZES["vertical"])
-    neg = ", ".join(x for x in [negative.strip(), SAFE_NEGATIVE] if x)
+    if preset == "sdxl" and not ckpt:
+        ckpt = best_checkpoint(await checkpoints())
+    from app.engines.comfy import SDXL_NEGATIVE
+    neg = ", ".join(x for x in [negative.strip(), SDXL_NEGATIVE, SAFE_NEGATIVE] if x)
     cfg, engine = _engine(preset, ckpt)
-    full = f"{trigger}, adult, {prompt}" if trigger else f"adult, {prompt}"
+    full = enrich(f"{trigger}, adult, {prompt}" if trigger else f"adult, {prompt}", preset, ckpt)
     batch = uuid.uuid4().hex[:10]
     for i in range(count):
         _append({"id": f"{batch}-{i}", "batch": batch, "at": datetime.now().isoformat(timespec="seconds"), "by": by,
-                 "subject": subject_id and name or "", "preset": preset, "ckpt": ckpt, "prompt": prompt,
+                 "subject": subject_id and name or "", "subject_id": subject_id or "", "preset": preset,
+                 "ckpt": ckpt, "prompt": prompt,
                  "negative": negative, "lora": bool(loras), "status": "queued", "file": ""})
     asyncio.get_event_loop().create_task(_run(batch, count, engine, cfg, full, neg, w, h, loras))
     return {"batch": batch, "count": count, "with_lora": bool(loras),
@@ -186,30 +215,62 @@ async def generate(by: str, prompt: str, subject_id: str = "", preset: str = "sd
             f"{name} todavía no tiene LoRA para {preset.upper()}: sale sin su cara. Créale la versión {preset.upper()} en el Banco y entrénala."}
 
 
+def _gpu_reason(url: str) -> str:
+    """Por qué está ocupada la GPU (para decirlo en pantalla en vez de «Generando…» sin explicación)."""
+    from app.engines import busy
+    if not busy(url):
+        return ""
+    with session() as s:
+        tr = [x.name for x in s.query(Subject).filter(Subject.lora_status == "training")]
+    return (f"Esperando la GPU: está entrenando la LoRA de {', '.join(tr)}. Empieza sola cuando termine."
+            if tr else "Esperando la GPU: está terminando otro trabajo. Empieza sola enseguida.")
+
+
 async def _run(batch: str, count: int, engine, cfg: dict, prompt: str, negative: str, w: int, h: int, loras) -> None:
     import random
-    engine.values["generate"]["negative"] = negative          # motor nuevo para este lote: no afecta a otros
+    try:
+        engine.values["generate"]["negative"] = negative      # motor nuevo para este lote: no afecta a otros
+        url = getattr(engine, "url", "")
+    except Exception as e:  # noqa: BLE001
+        for i in range(count):
+            _append({"id": f"{batch}-{i}", "status": "failed", "error": f"No pude preparar el motor: {e}"[:300]})
+        return
     for i in range(count):
         eid = f"{batch}-{i}"
-        _append({"id": eid, "status": "running"})
+        if eid in _cancelled:
+            continue
+        reason = _gpu_reason(url)
+        _append({"id": eid, "status": "waiting" if reason else "running", "note": reason})
         try:
             seed = random.randint(1, 2**31 - 1)
             if loras:
                 raw = await engine.generate_with_loras(loras, prompt, w, h, seed)
             else:
                 raw = await engine.generate(prompt, w, h, seed)
+            if eid in _cancelled:
+                continue
             f = _dir() / f"{eid}.png"
             f.write_bytes(raw)
-            _append({"id": eid, "status": "done", "file": f.name, "seed": seed})
+            _append({"id": eid, "status": "done", "file": f.name, "seed": seed, "note": ""})
         except Exception as e:  # noqa: BLE001
-            log.warning("Estudio privado: falló %s: %s", eid, e)
-            _append({"id": eid, "status": "failed", "error": str(e)[:300]})
+            log.warning("Adult Zone: falló %s: %s", eid, e)
+            _append({"id": eid, "status": "failed", "error": str(e)[:300], "note": ""})
+
+
+def recover_after_restart() -> None:
+    """Si Shelton se reinició con fotos a medio hacer, quedan como interrumpidas (no «generando» para siempre)."""
+    for e in entries():
+        if e.get("status") in ("queued", "running", "waiting"):
+            _append({"id": e["id"], "status": "failed", "error": "Se interrumpió (Shelton se reinició). Pídela de nuevo.",
+                     "note": ""})
 
 
 def delete(entry_id: str) -> None:
     e = next((x for x in entries() if x["id"] == entry_id), None)
     if not e:
         raise ValueError("No existe")
+    if e.get("status") in ("queued", "running", "waiting"):
+        _cancelled.add(entry_id)                                # si estaba esperando, se cancela
     if e.get("file"):
         (_dir() / Path(e["file"]).name).unlink(missing_ok=True)
     _append({"id": entry_id, "deleted": True, "at": datetime.now().isoformat(timespec="seconds")})
@@ -351,3 +412,149 @@ async def api_chat(body: ChatIn, request: Request):
         return await chat(u.get("username", ""), body.text)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+
+# ------------------------------------------------------------------ fotos privadas en la ficha del modelo (Banco)
+# Viven en data/privado/ (no en /media). Se ven solo con sesión de admin y se usan para entrenar su LoRA
+# EN LA PLACA (o en tus tarjetas alquiladas). Nunca se mandan a ninguna IA de la nube.
+def _sub_info(sid: str) -> dict:
+    with session() as s:
+        sub = s.get(Subject, sid)
+        if not sub:
+            raise ValueError("Ese modelo no existe")
+        return dict(sub.lora_info or {})
+
+
+def private_refs(sid: str) -> list[str]:
+    return [f for f in (_sub_info(sid).get("private_refs") or []) if (_dir() / Path(f).name).exists()]
+
+
+def private_paths(sid: str) -> list[str]:
+    """Rutas de sus fotos privadas, solo si la modelo está confirmada y eligieron usarlas al entrenar."""
+    try:
+        info = _sub_info(sid)
+    except ValueError:
+        return []
+    if not (info.get("adult_ok") and info.get("train_private")):
+        return []
+    return [str(_dir() / Path(f).name) for f in private_refs(sid)]
+
+
+def is_private_path(p: str) -> bool:
+    try:
+        return Path(p).resolve().parent == _dir().resolve()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _set_refs(sid: str, refs: list[str], **extra) -> None:
+    from app.lora import _update
+    _update(sid, info={"private_refs": list(dict.fromkeys(refs)), **extra})
+
+
+def add_ref_from_entry(sid: str, entry_id: str) -> dict:
+    with session() as s:
+        ok, why = subject_ok(s.get(Subject, sid)) if s.get(Subject, sid) else (False, "Ese modelo no existe")
+    if not ok:
+        raise ValueError(why)
+    e = next((x for x in entries() if x["id"] == entry_id and x.get("file")), None)
+    if not e:
+        raise ValueError("Esa imagen no existe")
+    _set_refs(sid, private_refs(sid) + [e["file"]])
+    return {"ok": True, "count": len(private_refs(sid))}
+
+
+def add_ref_upload(sid: str, data: bytes) -> dict:
+    from io import BytesIO
+    from PIL import Image, ImageOps
+    with session() as s:
+        ok, why = subject_ok(s.get(Subject, sid)) if s.get(Subject, sid) else (False, "Ese modelo no existe")
+    if not ok:
+        raise ValueError(why)
+    try:
+        img = ImageOps.exif_transpose(Image.open(BytesIO(data))).convert("RGB")
+    except Exception:  # noqa: BLE001
+        raise ValueError("Ese archivo no es una imagen")
+    name = f"ref_{sid[:8]}_{uuid.uuid4().hex[:8]}.png"
+    img.save(_dir() / name, "PNG")
+    _set_refs(sid, private_refs(sid) + [name])
+    return {"ok": True, "file": name, "count": len(private_refs(sid))}
+
+
+def remove_ref(sid: str, file: str) -> dict:
+    _set_refs(sid, [f for f in private_refs(sid) if f != Path(file).name])
+    return {"ok": True}
+
+
+def model_private(sid: str) -> dict:
+    info = _sub_info(sid)
+    gen = [e for e in entries() if e.get("subject_id") == sid and e.get("file")]
+    return {"refs": private_refs(sid), "generated": gen[:60], "train_private": bool(info.get("train_private")),
+            "confirmed": bool(info.get("adult_ok"))}
+
+
+class TrainPrivIn(BaseModel):
+    on: bool
+
+
+class RefIn(BaseModel):
+    entry_id: str = ""
+    file: str = ""
+
+
+@router.get("/modelo/{sid}")
+async def api_model(sid: str, request: Request):
+    _admin(request)
+    try:
+        return model_private(sid)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@router.post("/modelo/{sid}/fotos")
+async def api_add_ref(sid: str, body: RefIn, request: Request):
+    _admin(request)
+    try:
+        return add_ref_from_entry(sid, body.entry_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/modelo/{sid}/subir")
+async def api_upload_ref(sid: str, request: Request):
+    _admin(request)
+    form = await request.form()
+    out = None
+    try:
+        for f in form.getlist("files"):
+            out = add_ref_upload(sid, await f.read())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return out or {"ok": False}
+
+
+@router.post("/modelo/{sid}/quitar")
+async def api_remove_ref(sid: str, body: RefIn, request: Request):
+    _admin(request)
+    return remove_ref(sid, body.file)
+
+
+@router.post("/modelo/{sid}/entrenar-con-privadas")
+async def api_train_private(sid: str, body: TrainPrivIn, request: Request):
+    _admin(request)
+    with session() as s:
+        if not s.get(Subject, sid):
+            raise HTTPException(404, "Ese modelo no existe")
+    from app.lora import _update
+    _update(sid, info={"train_private": bool(body.on)})
+    return {"ok": True}
+
+
+@router.get("/ref/{file}")
+async def api_ref_file(file: str, request: Request):
+    _admin(request)
+    f = _dir() / Path(file).name
+    if not f.exists():
+        raise HTTPException(404, "No existe")
+    return FileResponse(f, headers={"Cache-Control": "private, no-store"})

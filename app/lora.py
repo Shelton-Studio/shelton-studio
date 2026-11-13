@@ -75,6 +75,11 @@ def dataset_images(subject_id: str) -> list[str]:
             if subject_id in (p.subject_ids or []) and len(p.subject_ids or []) == 1 and p.image_path \
                     and Path(p.image_path).exists() and p.media_type == "image":
                 paths.append(p.image_path)
+    try:   # fotos privadas (Adult Zone), solo si la modelo está confirmada y eligieron usarlas al entrenar
+        from app import privado
+        paths += privado.private_paths(subject_id)
+    except Exception:  # noqa: BLE001
+        log.warning("No pude leer las fotos privadas", exc_info=True)
     seen, out = set(), []
     for p in paths:
         if p not in seen:
@@ -813,7 +818,8 @@ async def caption_photos(subject_id: str, trigger: str) -> dict:
     except Exception:  # noqa: BLE001
         cache = {}
     paths = session_images(subject_id)
-    todo = [p for p in paths if p not in cache]
+    from app import privado
+    todo = [p for p in paths if p not in cache and not privado.is_private_path(p)]   # lo privado NUNCA va a la nube
     for i in range(0, len(todo), 5):
         batch = todo[i:i + 5]
         content = []

@@ -35,6 +35,8 @@ async def lifespan(_: FastAPI):
     network = asyncio.create_task(pipeline.network_loop())
     from app import consumo
     consumo.apply_savers_once()
+    from app import privado
+    privado.recover_after_restart()
     gpu_meter = asyncio.create_task(consumo.sample_loop())
     try:
         health = await get_engine().health()
