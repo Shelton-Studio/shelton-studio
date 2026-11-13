@@ -208,7 +208,9 @@ async def generate(by: str, prompt: str, subject_id: str = "", preset: str = "sd
         _append({"id": f"{batch}-{i}", "batch": batch, "at": datetime.now().isoformat(timespec="seconds"), "by": by,
                  "subject": subject_id and name or "", "subject_id": subject_id or "", "preset": preset,
                  "ckpt": ckpt, "prompt": prompt,
-                 "negative": negative, "lora": bool(loras), "status": "queued", "file": ""})
+                 "negative": negative, "lora": bool(loras), "status": "queued", "file": "",
+                 # todo lo necesario para rehacerla sola si Shelton se reinicia o se corta la conexión
+                 "job": {"full": full, "neg": neg, "w": w, "h": h, "loras": [list(x) for x in loras]}})
     asyncio.get_event_loop().create_task(_run(batch, count, engine, cfg, full, neg, w, h, loras))
     return {"batch": batch, "count": count, "with_lora": bool(loras),
             "note": "" if loras or not subject_id else
@@ -227,42 +229,92 @@ def _gpu_reason(url: str) -> str:
 
 
 async def _run(batch: str, count: int, engine, cfg: dict, prompt: str, negative: str, w: int, h: int, loras) -> None:
+    await _run_ids([f"{batch}-{i}" for i in range(count)], engine, cfg, prompt, negative, w, h, loras)
+
+
+async def _run_ids(ids: list[str], engine, cfg: dict, prompt: str, negative: str, w: int, h: int, loras) -> None:
     import random
     try:
         engine.values["generate"]["negative"] = negative      # motor nuevo para este lote: no afecta a otros
         url = getattr(engine, "url", "")
     except Exception as e:  # noqa: BLE001
-        for i in range(count):
-            _append({"id": f"{batch}-{i}", "status": "failed", "error": f"No pude preparar el motor: {e}"[:300]})
+        for eid in ids:
+            _append({"id": eid, "status": "failed", "error": f"No pude preparar el motor: {e}"[:300]})
         return
-    for i in range(count):
-        eid = f"{batch}-{i}"
+    for eid in ids:
         if eid in _cancelled:
             continue
-        reason = _gpu_reason(url)
-        _append({"id": eid, "status": "waiting" if reason else "running", "note": reason})
-        try:
-            seed = random.randint(1, 2**31 - 1)
-            if loras:
-                raw = await engine.generate_with_loras(loras, prompt, w, h, seed)
-            else:
-                raw = await engine.generate(prompt, w, h, seed)
+        seed = random.randint(1, 2**31 - 1)
+        for attempt in range(1, ATTEMPTS + 1):
             if eid in _cancelled:
-                continue
-            f = _dir() / f"{eid}.png"
-            f.write_bytes(raw)
-            _append({"id": eid, "status": "done", "file": f.name, "seed": seed, "note": ""})
-        except Exception as e:  # noqa: BLE001
-            log.warning("Adult Zone: falló %s: %s", eid, e)
-            _append({"id": eid, "status": "failed", "error": str(e)[:300], "note": ""})
+                break
+            reason = _gpu_reason(url)
+            _append({"id": eid, "status": "waiting" if reason else "running", "note": reason})
+            try:
+                if loras:
+                    raw = await engine.generate_with_loras(loras, prompt, w, h, seed)
+                else:
+                    raw = await engine.generate(prompt, w, h, seed)
+                if eid in _cancelled:
+                    break
+                f = _dir() / f"{eid}.png"
+                f.write_bytes(raw)
+                _append({"id": eid, "status": "done", "file": f.name, "seed": seed, "note": ""})
+                break
+            except Exception as e:  # noqa: BLE001
+                log.warning("Adult Zone: falló %s (intento %d/%d): %s", eid, attempt, ATTEMPTS, e)
+                if attempt == ATTEMPTS:
+                    _append({"id": eid, "status": "failed", "error": str(e)[:300], "note": ""})
+                    break
+                # se cortó la placa, internet o ComfyUI: espera y lo vuelve a intentar solo
+                _append({"id": eid, "status": "waiting",
+                         "note": f"Se cortó la conexión con la placa. Reintento solo ({attempt}/{ATTEMPTS - 1})…"})
+                await asyncio.sleep(RETRY_WAIT * attempt)
 
 
-def recover_after_restart() -> None:
-    """Si Shelton se reinició con fotos a medio hacer, quedan como interrumpidas (no «generando» para siempre)."""
-    for e in entries():
-        if e.get("status") in ("queued", "running", "waiting"):
+ATTEMPTS = 4          # si se corta algo, reintenta sola antes de darla por fallida
+RETRY_WAIT = 20.0     # segundos (crece en cada intento)
+
+
+def recover_after_restart() -> int:
+    """Si Shelton se reinició con fotos a medio hacer, las retoma solas (no se pierden).
+    Solo las muy viejas, sin los datos para rehacerlas, quedan como interrumpidas."""
+    pending: dict[tuple, list[str]] = {}
+    for e in sorted(entries(), key=lambda x: x["id"]):
+        if e.get("status") not in ("queued", "running", "waiting"):
+            continue
+        job = e.get("job")
+        if not job:
             _append({"id": e["id"], "status": "failed", "error": "Se interrumpió (Shelton se reinició). Pídela de nuevo.",
                      "note": ""})
+            continue
+        _append({"id": e["id"], "status": "queued", "note": "Shelton se reinició: la retomo sola."})
+        key = (e.get("preset") or "sdxl", e.get("ckpt") or "", json.dumps(job, sort_keys=True))
+        pending.setdefault(key, []).append(e["id"])
+    if not pending:
+        return 0
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
+    n = 0
+    for (preset, ckpt, raw), ids in pending.items():
+        job = json.loads(raw)
+        loop.create_task(_resume(ids, preset, ckpt, job))
+        n += len(ids)
+    log.info("Adult Zone: retomo %d foto(s) que quedaron a medias", n)
+    return n
+
+
+async def _resume(ids: list[str], preset: str, ckpt: str, job: dict) -> None:
+    try:
+        cfg, engine = _engine(preset, ckpt)
+    except Exception as e:  # noqa: BLE001
+        for eid in ids:
+            _append({"id": eid, "status": "failed", "error": f"No pude preparar el motor: {e}"[:300], "note": ""})
+        return
+    loras = [tuple(x) for x in job.get("loras") or []]
+    await _run_ids(ids, engine, cfg, job["full"], job["neg"], int(job["w"]), int(job["h"]), loras)
 
 
 def delete(entry_id: str) -> None:

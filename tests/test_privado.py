@@ -201,3 +201,47 @@ def test_private_photos_in_the_bank_train_locally_and_never_go_to_the_cloud(monk
     assert sent == [] and all(v == "" for v in caps.values())
     privado.remove_ref(sid, r["file"])
     assert len(privado.model_private(sid)["refs"]) == 1
+
+
+def test_pending_images_resume_by_themselves_after_restart_and_retry_on_cuts(monkeypatch):
+    """Si Shelton se reinicia o se corta la conexión, las fotos de la Adult Zone no se pierden: se retoman solas."""
+    init_db()
+    sid = _subject("Aura")
+    privado.confirm(sid, "admin", True, True)
+    monkeypatch.setattr(privado, "RETRY_WAIT", 0.01)
+    fails = {"n": 1}
+
+    class Eng:
+        name = "comfyui"
+        values = {"generate": {}}
+
+        async def generate(self, prompt, w, h, seed, on_progress=None):
+            if fails["n"]:
+                fails["n"] -= 1
+                raise ConnectionError("se cayó internet")
+            return _png("red")
+    monkeypatch.setattr(privado, "_engine", lambda preset, ckpt: ({"preset": preset}, Eng()))
+
+    async def go():
+        r = await privado.generate("admin", "retrato en un loft", sid, "sdxl", count=1)
+        for _ in range(200):
+            await asyncio.sleep(0.02)
+            if all(e["status"] == "done" for e in privado.entries() if e["batch"] == r["batch"]):
+                break
+        return r
+    r = asyncio.run(go())
+    assert [e["status"] for e in privado.entries() if e["batch"] == r["batch"]] == ["done"]   # reintentó solo
+
+    # una foto que quedó a medias cuando se reinició Shelton
+    privado._append({"id": "corte-0", "batch": "corte", "at": "2099", "status": "waiting", "subject_id": sid,
+                     "preset": "sdxl", "ckpt": "", "job": {"full": "adult, x", "neg": "", "w": 64, "h": 64, "loras": []}})
+
+    async def restart():
+        assert privado.recover_after_restart() == 1
+        for _ in range(200):
+            await asyncio.sleep(0.02)
+            if next(x for x in privado.entries() if x["id"] == "corte-0")["status"] == "done":
+                break
+    asyncio.run(restart())
+    e = next(x for x in privado.entries() if x["id"] == "corte-0")
+    assert e["status"] == "done" and (settings.DATA_DIR / "privado" / e["file"]).exists()
