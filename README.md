@@ -126,7 +126,7 @@ En Windows: `demo.bat`. Interfaz completa con imágenes y respuestas simuladas, 
 1. **Servidor Linux** (Ubuntu/Debian; un droplet sirve). Instala con un solo comando. Volver a correrlo actualiza:
 
    ```bash
-   bash <(curl -fsSL https://raw.githubusercontent.com/juancamp7777/alligator-AI/main/install.sh)
+   bash <(curl -fsSL https://raw.githubusercontent.com/Shelton-Studio/shelton-studio/main/install.sh)
    ```
 
    - Se instala en `~/shelton-studio` sin tocar otras apps (otra carpeta con `SHELTON_DIR=...`).

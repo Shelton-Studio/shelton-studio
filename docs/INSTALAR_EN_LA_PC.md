@@ -39,7 +39,7 @@ tailscale set --hostname=shelton
 ## Paso 2 · Instalar Shelton (con la nube, funciona enseguida)
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/juancamp7777/alligator-AI/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/Shelton-Studio/shelton-studio/main/install.sh)
 ```
 
 El instalador pregunta tres cosas:

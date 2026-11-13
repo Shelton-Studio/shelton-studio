@@ -4,7 +4,7 @@
 #
 #   export WORKER_TOKEN="una-clave-larga-que-inventes"      # la misma que pondrás en Shelton
 #   export TS_AUTHKEY="tskey-auth-..."                        # clave de Tailscale (Settings → Keys → Generate auth key)
-#   bash <(curl -fsSL https://raw.githubusercontent.com/juancamp7777/alligator-AI/main/scripts/node_setup.sh)
+#   bash <(curl -fsSL https://raw.githubusercontent.com/Shelton-Studio/shelton-studio/main/scripts/node_setup.sh)
 #
 # Opcionales:
 #   WORKER_GPUS="0"            lugares de entrenamiento (una RTX PRO 6000 en 3: activa MIG y pon los 3 UUID MIG-...)
@@ -21,7 +21,7 @@ die() { printf "\n\033[1;31m✖ %s\033[0m\n" "$*"; exit 1; }
 
 BASE="${BASE:-/workspace}"
 NODE_NAME="${NODE_NAME:-shelton-gpu-$(hostname | cut -c1-8)}"
-REPO="${REPO:-https://github.com/juancamp7777/alligator-AI}"
+REPO="${REPO:-https://github.com/Shelton-Studio/shelton-studio}"
 [ -n "${WORKER_TOKEN:-}" ] || die "Falta WORKER_TOKEN (inventa una clave larga; la misma va en Shelton)"
 mkdir -p "$BASE"
 command -v nvidia-smi >/dev/null || die "Esta máquina no tiene GPU NVIDIA visible"
@@ -62,7 +62,8 @@ export HF_HOME="$BASE/hf_cache"
 
 say "Trabajador de Shelton"
 SRC="$BASE/shelton-src"
-if [ -d "$SRC/.git" ]; then git -C "$SRC" pull -q --ff-only || true; else git clone -q --depth 1 "$REPO" "$SRC"; fi
+if [ -d "$SRC/.git" ]; then git -C "$SRC" remote set-url origin "$REPO"; git -C "$SRC" pull -q --ff-only || true
+else git clone -q --depth 1 "$REPO" "$SRC"; fi
 LORA_DIR=""
 if [ "${NODE_COMFY:-0}" = "1" ]; then
   say "ComfyUI para generar fotos en esta máquina"
