@@ -40,7 +40,7 @@ VIEWS.privado = async (el) => {
         <b>Generar</b>
         <label class="f">Modelo<select id="pv-sub"><option value="">— Sin modelo del banco —</option>${models.map(opt).join("")}</select></label>
         <div class="row" style="gap:8px">
-          <label class="f grow">Motor<select id="pv-pre"><option value="sdxl">SDXL</option><option value="flux">Flux.1 Dev</option></select></label>
+          <label class="f grow">Motor<select id="pv-pre"><option value="sdxl">SDXL</option><option value="flux">Flux.1 Dev</option><option value="zimage">Z-Image (LoRA del Banco)</option></select></label>
           <label class="f grow">Checkpoint (SDXL)<select id="pv-ckpt"><option value="">Por defecto</option>${(st.checkpoints || []).map((c) => `<option>${esc(c)}</option>`).join("")}</select></label>
         </div>
         <label class="f">Pedido<textarea id="pv-prompt" rows="4" placeholder="Describe la escena: pose, lugar, luz, cámara…"></textarea></label>
