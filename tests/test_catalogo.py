@@ -120,3 +120,22 @@ def test_fal_edit_falls_back_to_single_image_models(monkeypatch):
     _mock_httpx(monkeypatch, handler)
     e = cloud.FalEngine({"api_key": "k", "model_edit": "fal-ai/flux-pro/kontext"})
     assert asyncio.run(e._edit_many([_png()], "same face, red dress", 0, 0, 1)) == _png()
+
+
+
+def test_active_model_shown_above_chat():
+    """Arriba del chat se ve qué modelo usa cada tarea con el Motor elegido (ej. «Seedream 5.0 Pro · fal.ai»)."""
+    init_db()
+    with session() as s:
+        fal = Connection(type="fal", name="fal.ai", roles=["generate"],
+                         config={"api_key": "k", "model_generate": "bytedance/seedream/v5/pro/text-to-image"})
+        s.add(fal)
+        s.flush()
+        fid = fal.id
+    a = catalogo.active(f"conn:{fid}")
+    assert a["generate"] == "Seedream 5.0 Pro · fal.ai"
+    assert a["video"].endswith("· fal.ai") and "Kling 4.0" in a["video"]          # el recomendado si no eligieron
+    assert "placa" in catalogo.active("fast")["generate"]
+    assert catalogo.active("")["label"] == "Automático"
+    with session() as s:
+        s.delete(s.get(Connection, fid))

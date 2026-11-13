@@ -46,3 +46,49 @@ async function openCloudModels(cid) {
     $$(`[data-cmlist="${inp.dataset.cmsearch}"] .cm-item`, box).forEach((it) => { it.style.display = it.textContent.toLowerCase().includes(q) ? "" : "none"; });
   });
 }
+
+
+// ------------------------------------------------------------------ Motor ordenado + modelo activo arriba del chat
+function orderEngineSelect(sel) {
+  if (!sel || sel.dataset.ordered || !S.engines?.image) return;
+  sel.dataset.ordered = "1";
+  const cur = sel.value;
+  const groups = { "🦎 Placa (gratis)": [], "⚡ Tarjeta RTX": [], "☁ Nube (con costo)": [] };
+  for (const e of S.engines.image) {
+    const g = e.id.startsWith("rtx:") ? "⚡ Tarjeta RTX" : e.local ? "🦎 Placa (gratis)" : "☁ Nube (con costo)";
+    groups[g].push(e);
+  }
+  sel.innerHTML = Object.entries(groups).filter(([, l]) => l.length).map(([g, l]) =>
+    `<optgroup label="${esc(g)}">${l.map((e) => `<option value="${esc(e.id)}">${esc(e.label)}</option>`).join("")}</optgroup>`).join("");
+  sel.value = cur;
+}
+
+async function paintActiveModel() {
+  const head = $(".chat-head");
+  if (!head) return;
+  let bar = $("#active-model");
+  if (!bar) { bar = document.createElement("div"); bar.id = "active-model"; bar.className = "active-model"; head.after(bar); }
+  try {
+    const a = await api(`/api/catalogo/activo/ahora?choice=${encodeURIComponent(S.chatEngine || "")}`);
+    bar.innerHTML = `<span class="faint small">Modelo activo</span>
+      <span class="am-chip" title="Generar imágenes">🖼️ ${esc(a.generate || "—")}</span>
+      <span class="am-chip" title="Editar / con referencias (modelos del banco)">✏️ ${esc(a.edit || "—")}</span>
+      <span class="am-chip" title="Video">🎬 ${esc(a.video || "—")}</span>
+      <button class="btn sm ghost" id="am-change" title="Cambiar los modelos de cada ecosistema">Cambiar</button>`;
+    $("#am-change", bar).onclick = () => openCloudModels();
+  } catch { bar.remove(); }
+}
+
+const _chatT2 = VIEWS.chat;
+VIEWS.chat = async (el, convId) => {
+  await _chatT2(el, convId);
+  const sel = $("#engine-sel", el);
+  orderEngineSelect(sel);
+  if (sel && !sel.dataset.am) { sel.dataset.am = "1"; sel.addEventListener("change", paintActiveModel); }
+  paintActiveModel();
+};
+// al elegir un modelo en «🎨 Modelos» o al cambiar de conversación, se actualiza la barra
+const _openCloudModelsT2 = openCloudModels;
+openCloudModels = async (...a) => { const r = await _openCloudModelsT2(...a); paintActiveModel(); return r; };
+const _loadConvT2 = typeof loadConv === "function" ? loadConv : null;
+if (_loadConvT2) loadConv = async (...a) => { const r = await _loadConvT2(...a); orderEngineSelect($("#engine-sel")); paintActiveModel(); return r; };
