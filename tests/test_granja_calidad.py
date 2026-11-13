@@ -308,3 +308,17 @@ def test_qwen_professional_lora_trains_only_on_big_cards(monkeypatch):
     assert asyncio.run(granja.free_slot({}))["id"] == "local:0"             # Z-Image: la placa primero, como siempre
     assert asyncio.run(granja.free_slot({}, big=True))["id"] == "n1"         # Qwen: solo la tarjeta grande
     assert asyncio.run(granja.free_slot({"n1": 1}, big=True)) is None        # si está ocupada, espera (no usa la 3090)
+
+
+def test_one_big_card_trains_three_at_once_with_worker_share(monkeypatch, tmp_path):
+    """WORKER_SHARE=3: la RTX PRO 6000 entrena 3 LoRA a la vez (3 modelos distintos) en la misma GPU."""
+    import importlib.util
+    monkeypatch.setenv("WORKER_GPUS", "0")
+    monkeypatch.setenv("WORKER_SHARE", "3")
+    monkeypatch.setenv("WORKER_DIR", str(tmp_path))
+    spec = importlib.util.spec_from_file_location("worker_share", Path(__file__).resolve().parent.parent / "scripts" / "shelton_worker.py")
+    w = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(w)
+    assert w.SLOTS == ["0/1", "0/2", "0/3"] and {w._device(s) for s in w.SLOTS} == {"0"}
+    w._jobs.update({"a": {"status": "running", "slot": "0/1"}, "b": {"status": "running", "slot": "0/2"}})
+    assert [s for s in w.SLOTS if s not in w._busy_slots()] == ["0/3"]          # queda 1 lugar para el tercero

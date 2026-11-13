@@ -86,15 +86,13 @@ async def health(node: dict, fresh: bool = False) -> dict:
 
 async def free_slot(used: dict[str, int], big: bool = False) -> dict | None:
     """El primer lugar libre: GPUs de la placa primero, después los nodos (si están prendidos y con lugar).
-    big=True (modelos grandes como Qwen-Image): solo lugares con perfil «pro» (tarjetas de 48 GB o más)."""
+    big=True (modelos grandes como Qwen-Image): nunca en una GPU chica de la placa (solo placa «pro» o tarjetas alquiladas)."""
     for s in local_slots():
         if big and s.get("profile") != "pro":
             continue
         if used.get(s["id"], 0) < s["slots"]:
             return s
-    for n in remote_nodes():
-        if big and n.get("profile") != "pro":
-            continue
+    for n in remote_nodes():      # las tarjetas alquiladas siempre son grandes: con perfil estándar, Qwen va comprimido
         if used.get(n["id"], 0) >= n["slots"]:
             continue
         h = await health(n)
