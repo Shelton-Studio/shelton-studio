@@ -265,7 +265,7 @@ table.t tr:hover td { background: rgba(255, 255, 255, .015); }
 .d-sec h4 { margin: 0 0 8px; font-size: 11.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--faint); }
 .qa-box { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; font-size: 13px; line-height: 1.55; color: var(--muted); }
 .alt { display: flex; gap: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px; font-size: 12.5px; }
-.alt img { width: 92px; border-radius: 8px; }
+.alt img { width: 92px; border-radius: 8px; cursor: zoom-in; }
 .versions { display: flex; gap: 8px; flex-wrap: wrap; }
 .versions img { width: 62px; height: 78px; object-fit: cover; border-radius: 9px; cursor: pointer; border: 2px solid transparent; opacity: .8; }
 .versions img.cur { border-color: var(--accent); opacity: 1; }
@@ -569,3 +569,9 @@ audio { width: 100%; height: 40px; }
 .am-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 999px; background: rgba(139, 92, 246, .14); color: #ddd6fe; font-size: 12.5px; font-weight: 600; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .am-chip b { font-weight: 800; margin-right: 2px; }
 .am-chip.am-sub { background: rgba(255,255,255,.06); color: #cbd5e1; font-weight: 500; }
+
+/* Comparar un intento descartado con el elegido */
+.alt-cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.alt-cmp figure { margin: 0; display: grid; gap: 6px; }
+.alt-cmp img { width: 100%; max-height: 70vh; object-fit: contain; border-radius: 10px; background: rgba(0,0,0,.3); }
+@media (max-width: 720px) { .alt-cmp { grid-template-columns: 1fr; } }
