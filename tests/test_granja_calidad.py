@@ -337,6 +337,7 @@ def test_choose_the_rtx_to_train_and_to_generate(monkeypatch):
 
     async def ok(n, fresh=False):
         return {"ok": True, "free": 3}
+    monkeypatch.setattr(engines, "reachable", lambda url, ttl=30.0: True)
     monkeypatch.setattr(granja, "health", ok)
     assert asyncio.run(granja.free_slot({}, only="node:c1"))["id"] == "node:c1"     # aunque la placa esté libre
     ids = [c["id"] for c in engines.engine_choices()]
@@ -356,6 +357,7 @@ def test_photos_go_to_the_rtx_when_the_placa_is_busy(monkeypatch):
             "url": "http://100.9.9.9:8299", "token": "t", "comfy_url": "http://100.9.9.9:8288", "kind": "remote"}
     monkeypatch.setattr(granja, "remote_nodes", lambda: [node])
     monkeypatch.setitem(granja._health, "node:c9", (time.time(), {"ok": True}))
+    monkeypatch.setattr(engines, "reachable", lambda url, ttl=30.0: True)
     monkeypatch.setattr(engines, "infra_mode", lambda: "local")
     engines.reset_cache()
     assert engines._rtx_when_placa_busy("generate", None) is None              # placa libre: sigue en la placa
@@ -369,3 +371,17 @@ def test_photos_go_to_the_rtx_when_the_placa_is_busy(monkeypatch):
         engines._busy[settings.COMFYUI_URL] = 0
         engines.reset_cache()
     assert settings.WORKERS >= 8
+
+
+def test_rtx_off_falls_back_to_the_placa(monkeypatch):
+    """Si la RTX está apagada, el Motor «⚡ RTX» no se ofrece y una foto pedida ahí se hace en la placa."""
+    from app import engines, granja
+    node = {"id": "node:c7", "conn_id": "c7", "slots": 3, "profile": "estandar", "label": "RTX PRO 6000",
+            "url": "http://100.7.7.7:8299", "token": "t", "comfy_url": "http://100.7.7.7:8288", "kind": "remote"}
+    monkeypatch.setattr(granja, "remote_nodes", lambda: [node])
+    monkeypatch.setattr(engines, "reachable", lambda url, ttl=30.0: False)
+    engines.reset_cache()
+    assert not any(c["id"].startswith("rtx:") for c in engines.engine_choices())
+    e = engines.get_engine("generate", "rtx:c7:fast")
+    assert not getattr(e, "url", "").startswith("http://100.7.7.7")
+    engines.reset_cache()
