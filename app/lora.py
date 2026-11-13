@@ -1163,6 +1163,11 @@ def loras_for(subjects: list[Subject]) -> list[tuple[str, str]]:
     for s in subjects:
         if s.lora_status == "ready" and s.lora_name and s.lora_enabled is not False:
             out.append((s.lora_name, s.lora_trigger))
+        elif (s.lora_status in ("training", "queued") and s.lora_name and s.lora_enabled is not False
+              and (Path(settings.COMFY_LORA_DIR).expanduser() / s.lora_name).exists()):
+            # mientras vuelve a entrenar (para mejorar), se usa su última LoRA terminada: así no cambia de motor
+            # ni pierde su cara a mitad de camino
+            out.append((s.lora_name, s.lora_trigger))
         else:
             return []
     return out

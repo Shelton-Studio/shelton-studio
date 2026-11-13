@@ -460,3 +460,13 @@ def test_eta_is_not_zero_after_reconnecting(monkeypatch, tmp_path):
         info = s.get(Subject, sid).lora_info
     assert info["eta_min"] == round(2.0 * 200 / 60)          # usa la velocidad medida, no «0 min»
     assert spp is None                                       # no inventa una velocidad con el log viejo
+
+
+def test_uses_last_lora_while_retraining(monkeypatch, tmp_path):
+    """Mientras una modelo vuelve a entrenar, sus fotos siguen saliendo con su última LoRA terminada."""
+    from app.config import settings as st
+    monkeypatch.setattr(st, "COMFY_LORA_DIR", str(tmp_path))
+    sub = Subject(name="Pam", lora_status="training", lora_name="pam.safetensors", lora_trigger="pmx")
+    assert lora.loras_for([sub]) == []                       # todavía no hay archivo: primera vez
+    (tmp_path / "pam.safetensors").write_bytes(b"x")
+    assert lora.loras_for([sub]) == [("pam.safetensors", "pmx")]
