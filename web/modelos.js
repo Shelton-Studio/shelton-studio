@@ -70,12 +70,18 @@ async function paintActiveModel() {
   if (!bar) { bar = document.createElement("div"); bar.id = "active-model"; bar.className = "active-model"; head.after(bar); }
   try {
     const a = await api(`/api/catalogo/activo/ahora?choice=${encodeURIComponent(S.chatEngine || "")}`);
-    bar.innerHTML = `<span class="faint small">Modelo activo</span>
-      <span class="am-chip" title="Generar imágenes">🖼️ ${esc(a.generate || "—")}</span>
-      <span class="am-chip" title="Editar / con referencias (modelos del banco)">✏️ ${esc(a.edit || "—")}</span>
-      <span class="am-chip" title="Video">🎬 ${esc(a.video || "—")}</span>
-      <button class="btn sm ghost" id="am-change" title="Cambiar los modelos de cada ecosistema">Cambiar</button>`;
-    $("#am-change", bar).onclick = () => openCloudModels();
+    bar.innerHTML = `<span class="faint small" title="Un motor por tarea: fotos nuevas, ediciones y videos">Motor por tarea</span>
+      <span class="am-chip" title="Con este se crean las fotos nuevas"><b>Fotos:</b> ${esc(a.generate || "—")}</span>
+      <span class="am-chip am-sub" title="Solo cuando pides editar una foto, o una modelo que todavía no tiene LoRA"><b>Editar:</b> ${esc(a.edit || "—")}</span>
+      <span class="am-chip am-sub" title="Solo cuando pides un video"><b>Video:</b> ${esc(a.video || "—")}</span>
+      <button class="btn sm ghost" id="am-change" title="Cambiar el motor">Cambiar</button>`;
+    // En la nube (Higgsfield / fal) «Cambiar» abre SUS modelos; en la placa o la RTX abre el menú Motor
+    const cloud = (S.chatEngine || "").startsWith("conn:") && (S.engines?.image || []).some((e) => e.id === S.chatEngine && !e.local);
+    $("#am-change", bar).onclick = () => {
+      if (cloud) return openCloudModels(S.chatEngine.slice(5));
+      const sel = $("#engine-sel"); sel?.focus(); try { sel?.showPicker?.(); } catch { /* algunos navegadores no lo permiten */ }
+      toast("Elige el motor en el menú «Motor» de arriba. Los modelos de Higgsfield y fal se eligen con «🎨 Modelos».", "", "🎛️");
+    };
   } catch { bar.remove(); }
 }
 
