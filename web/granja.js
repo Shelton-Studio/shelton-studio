@@ -45,7 +45,10 @@ function renderGranja(box, d) {
       ${(d.nodes || []).map((n) => `<div class="card"><div class="row" style="gap:8px"><b>☁️ ${esc(n.label)}</b>
           ${n.health?.ok ? '<span class="chip good">conectado</span>' : '<span class="chip bad">apagado / sin respuesta</span>'}
           <span class="faint small grow">${esc(d.profiles[n.profile] || n.profile)} · ${n.slots} a la vez${n.cost_hour ? ` · US$ ${n.cost_hour}/h` : ""}</span>
+          ${n.runpod ? (n.health?.ok ? `<button class="btn sm" data-gpow="pausar" data-gcid="${esc(n.conn_id)}" data-gbusy="${(n.health?.running || []).length}">⏸ Pausar</button>`
+            : `<button class="btn sm primary" data-gpow="prender" data-gcid="${esc(n.conn_id)}">▶ Prender</button>`) : ""}
           <button class="btn sm ghost" data-gtest="${esc(n.conn_id)}">Probar</button></div>
+        ${n.runpod ? "" : `<div class="faint small" style="margin-top:4px">Para ▶ prender / ⏸ pausar desde acá: Conexiones → esta tarjeta → Editar → pega la clave de API de RunPod y el ID del pod.</div>`}
         <div style="margin-top:8px">${(n.health?.gpus || []).map(gpuLine).join("") || `<div class="faint small">${esc(n.health?.error || "")}</div>`}</div>
         ${n.health?.ok ? `<div class="faint small" style="margin-top:6px">Libres: ${n.health.free} de ${n.health.slots}${n.health.trainer ? "" : " · ⚠ falta ai-toolkit (corre node_setup.sh)"}${(n.health.running || []).length ? " · entrenando: " + n.health.running.map((r) => esc(r.name) + (r.total ? ` (${r.step}/${r.total})` : "")).join(", ") : ""}</div>` : ""}</div>`).join("")}
     </div>
@@ -65,3 +68,22 @@ function renderGranja(box, d) {
     catch (e) { toast(esc(e.message), "bad"); }
   });
 }
+
+
+// ------------------------------------------------------------------ ▶ prender / ⏸ pausar la tarjeta alquilada
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-gpow]");
+  if (!b) return;
+  const action = b.dataset.gpow, cid = b.dataset.gcid;
+  if (action === "pausar") {
+    const busy = +b.dataset.gbusy || 0;
+    if (!confirm(busy ? `Está entrenando ${busy} modelo(s). Si la pausas, se cortan y se retoman solos cuando la vuelvas a prender (desde el último punto guardado). ¿Pausar igual?`
+      : "¿Pausar la tarjeta? Deja de cobrar por hora (solo el disco) y se puede volver a prender con ▶.")) return;
+  }
+  b.disabled = true; b.textContent = action === "prender" ? "Prendiendo…" : "Pausando…";
+  try {
+    await api(`/api/granja/rtx/${cid}/${action}`, { method: "POST" });
+    toast(action === "prender" ? "Prendiendo la tarjeta: en 2–4 minutos aparece «conectado» sola" : "Tarjeta pausada: dejó de cobrar por hora", "good", action === "prender" ? "▶" : "⏸");
+  } catch (err) { toast(esc(err.message), "bad"); }
+  setTimeout(() => { if (VIEWS.granja && location.hash.includes("granja")) route(); }, 1500);
+});
