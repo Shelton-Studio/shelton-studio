@@ -48,18 +48,28 @@ def test_pick_models_per_ecosystem(monkeypatch):
         hid, fid = hf.id, fal.id
 
     def handler(req):
-        assert req.url.host == "api.fal.ai" and req.headers["authorization"] == "Key k"
-        return httpx.Response(200, json={"models": [
-            {"endpoint_id": "fal-ai/flux-3/max", "metadata": {"display_name": "FLUX 3 Max", "category": "text-to-image"}},
-            {"endpoint_id": "fal-ai/bytedance/seedream/v4/text-to-image", "metadata": {"display_name": "dup"}}],
-            "has_more": False})
+        assert req.url.host == "fal.ai" and req.url.path == "/api/models"
+        cat = req.url.params["categories"]
+        items = {"text-to-image": [
+            {"id": "fal-ai/flux-3/max", "title": "FLUX 3 Max", "shortDescription": "nuevo",
+             "pricingInfoOverride": "Your request will cost **$0.08** per image.", "discovery": {"tags": []}},
+            {"id": "fal-ai/nano-banana-pro", "title": "dup", "pricingInfoOverride": "cost **$0.15** per image"},
+            {"id": "fal-ai/viejo", "title": "viejo", "deprecated": True}],
+            "image-to-image": [
+            {"id": "fal-ai/upscaler", "title": "Upscaler", "discovery": {"tags": ["task:upscale-image"]}},
+            {"id": "fal-ai/x/edit", "title": "X Edit", "discovery": {"tags": ["task:edit-image"]}}]}.get(cat, [])
+        return httpx.Response(200, json={"items": items, "pages": 1, "total": len(items)})
     _mock_httpx(monkeypatch, handler)
     catalogo._live.clear()
     d = asyncio.run(catalogo.catalog_for(fid))
     gen = d["roles"]["generate"]
-    assert gen["current"] == "fal-ai/bytedance/seedream/v4/text-to-image" and not gen["custom"]
+    assert gen["current"] == "fal-ai/nano-banana-pro" and not gen["custom"]
     ids = [m["id"] for m in gen["models"]]
-    assert "fal-ai/flux-3/max" in ids and ids.count("fal-ai/bytedance/seedream/v4/text-to-image") == 1
+    assert "fal-ai/flux-3/max" in ids and ids.count("fal-ai/nano-banana-pro") == 1 and "fal-ai/viejo" not in ids
+    assert next(m for m in gen["models"] if m["id"] == "fal-ai/flux-3/max")["price"] == "$0.08 por imagen"
+    assert gen["models"][0]["price"] == "$0.15 por imagen"                 # el recomendado también muestra precio
+    edit_ids = [m["id"] for m in d["roles"]["edit"]["models"]]
+    assert "fal-ai/x/edit" in edit_ids and "fal-ai/upscaler" not in edit_ids  # solo editores, no mejoradores
     asyncio.run(catalogo.api_pick(fid, catalogo.PickIn(role="generate", model="fal-ai/flux-3/max")))
     with session() as s:
         assert s.get(Connection, fid).config["model_generate"] == "fal-ai/flux-3/max"
@@ -69,6 +79,13 @@ def test_pick_models_per_ecosystem(monkeypatch):
         assert "model_generate" not in s.get(Connection, fid).config            # vuelve al recomendado
     h = asyncio.run(catalogo.catalog_for(hid))
     assert h["roles"]["generate"]["current"] == "higgsfield-ai/soul/v2/standard"
+    assert len(h["roles"]["video"]["models"]) >= 30                     # catálogo oficial completo
+    asyncio.run(catalogo.api_pick(hid, catalogo.PickIn(role="video", model="kling-video/o3/image-reference")))
+    with session() as s:
+        assert s.get(Connection, hid).config["image_field"] == "image_urls"   # ese modelo pide lista de referencias
+    asyncio.run(catalogo.api_pick(hid, catalogo.PickIn(role="video", model="kling-video/v3.0/pro/image-to-video")))
+    with session() as s:
+        assert "image_field" not in s.get(Connection, hid).config
     conns = asyncio.run(catalogo.api_cloud_connections())
     assert {c["type"] for c in conns} >= {"higgsfield", "fal"}
     with session() as s:

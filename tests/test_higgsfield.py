@@ -68,7 +68,7 @@ def test_edit_uploads_images_and_video_works():
         if req.method == "PUT":
             uploads.append(req.content)
             return httpx.Response(200)
-        if req.url.path == "/bytedance/seedream/v4/edit":
+        if req.url.path == "/alibaba/qwen-image-3/edit":
             body = json.loads(req.content)
             assert body["image_urls"] == ["https://cdn.example/1.png"]
             return httpx.Response(200, json={"status": "completed", "images": [{"url": PNG_URI}]})

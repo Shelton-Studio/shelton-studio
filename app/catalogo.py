@@ -6,6 +6,7 @@ en la conexión (model_generate / model_edit / model_video), así funciona en to
 from __future__ import annotations
 
 import logging
+import re
 import time
 
 import httpx
@@ -20,89 +21,189 @@ ROLES = {"generate": "Generar imágenes", "edit": "Editar / con referencias (mod
 FIELD = {"generate": "model_generate", "edit": "model_edit", "video": "model_video"}
 
 
-def _m(id_, name, good, best=False):
-    return {"id": id_, "name": name, "good": good, "best": best}
+def _m(id_, name, good, best=False, cfg=None):
+    return {"id": id_, "name": name, "good": good, "best": best, **({"cfg": cfg} if cfg else {})}
 
 
+REF = {"image_field": "image_urls"}           # video que parte de una o más referencias (lista de imágenes)
+FIRST = {"image_field": "first_frame_url"}    # video que parte de la primera imagen (Kling O3 / Omni)
+
+# Catálogo oficial de la API de Higgsfield (docs.higgsfield.ai): todos los modelos que sirven para las tareas de
+# Shelton. Los que necesitan un video de entrada (editar/extender video, control de movimiento) no aplican acá.
 CATALOG = {
     "higgsfield": {
         "generate": [
-            _m("higgsfield-ai/soul/v2/standard", "Soul 2 (Higgsfield)", "Su modelo propio: look de foto real, estética de redes. El de la app.", True),
-            _m("higgsfield-ai/soul/standard", "Soul", "Versión anterior de Soul."),
-            _m("bytedance/seedream/v4/text-to-image", "Seedream 4", "Muy buena calidad general y texto en la imagen."),
+            _m("higgsfield-ai/soul/v2/standard", "SOUL V2", "El modelo propio de Higgsfield: foto real con estética de redes. El de la app.", True),
+            _m("higgsfield-ai/soul/cinema", "SOUL Cinema", "Look de cine: luz y color de película."),
+            _m("higgsfield-ai/soul/standard", "SOUL", "Versión anterior de SOUL."),
+            _m("xai/grok-imagine-image-2.0", "Grok Image 2.0 (xAI)", "Muy fiel al pedido; también edita con hasta 10 referencias."),
+            _m("alibaba/qwen-image-3/text-to-image", "Qwen Image 3", "Excelente con texto dentro de la imagen y escenas complejas."),
+            _m("z-image/turbo", "Z-Image Turbo", "Rápido y barato, muy realista."),
+            _m("ideogram/v4.0", "Ideogram 4.0", "El mejor para letras, logos y carteles."),
+            _m("marketing-studio/image/flare", "Marketing Studio 2.5 Flare", "Fotos de producto y publicidad."),
+            _m("marketing-studio/image/sunburst", "Marketing Studio 2.5 Sunburst", "Publicidad con luz cálida y brillante."),
+            _m("marketing-studio/image", "Marketing Studio 2.0 Alpha", "Versión anterior de Marketing Studio."),
+            _m("recraft/v4.1/pro/text-to-image", "Recraft V4.1 Pro", "Diseño, ilustración y estilo gráfico de alta calidad."),
+            _m("recraft/v4.1/text-to-image", "Recraft V4.1", "Diseño e ilustración."),
+            _m("recraft/v4.1/utility/pro/text-to-image", "Recraft V4.1 Utility Pro", "Piezas gráficas utilitarias (iconos, fondos)."),
+            _m("recraft/v4.1/utility/text-to-image", "Recraft V4.1 Utility", "Piezas gráficas utilitarias, más barato."),
         ],
         "edit": [
-            _m("bytedance/seedream/v4/edit", "Seedream 4 Edit", "Edita y combina referencias manteniendo la cara: ideal con modelos del banco.", True),
+            _m("alibaba/qwen-image-3/edit", "Qwen Image 3 Edit", "Edita con 1–3 referencias manteniendo la composición y la cara.", True),
+            _m("xai/grok-imagine-image-2.0", "Grok Image 2.0 (xAI)", "Edita combinando hasta 10 referencias."),
+            _m("marketing-studio/image/flare", "Marketing Studio 2.5 Flare", "Producto + modelo: publicidad con hasta 16 referencias."),
+            _m("marketing-studio/image/sunburst", "Marketing Studio 2.5 Sunburst", "Publicidad con referencias, luz cálida."),
+            _m("marketing-studio/image", "Marketing Studio 2.0 Alpha", "Versión anterior, con referencias."),
         ],
         "video": [
-            _m("kling-video/v2.1/pro/image-to-video", "Kling 2.1 Pro", "Movimiento muy natural, personas realistas.", True),
-            _m("bytedance/seedance/v1/pro/image-to-video", "Seedance Pro", "Cámara cinematográfica y buena coherencia."),
+            _m("kling-video/v3.0/pro/image-to-video", "Kling 3.0 Pro", "El Kling más nuevo: personas y movimiento muy reales.", True),
+            _m("kling-video/v3.0/4k/image-to-video", "Kling 3.0 4K", "Kling 3.0 en 4K: máxima nitidez."),
+            _m("kling-video/v3.0/std/image-to-video", "Kling 3.0 Standard", "Kling 3.0 más barato."),
+            _m("kling-video/v3.0-turbo/image-to-video", "Kling 3.0 Turbo", "Kling 3.0 rápido."),
+            _m("kling-video/v2.6/pro/image-to-video", "Kling 2.6 Pro", "Muy buen movimiento, generación anterior."),
+            _m("kling-video/v2.5-turbo/pro/image-to-video", "Kling 2.5 Turbo Pro", "Rápido y bueno."),
+            _m("kling-video/v2.5-turbo/standard/image-to-video", "Kling 2.5 Turbo Standard", "El Kling más económico."),
+            _m("kling-video/o3/image-reference", "Kling O3 · Referencias", "Video a partir de varias referencias (personaje + lugar).", cfg=REF),
+            _m("kling-video/o3/first-last-frame", "Kling O3 · Primer cuadro", "Arranca exactamente desde tu imagen.", cfg=FIRST),
+            _m("kling-video/omni/image-reference", "Kling Omni · Referencias", "Video desde referencias.", cfg=REF),
+            _m("kling-video/omni/first-last-frame", "Kling Omni · Primer cuadro", "Arranca desde tu imagen.", cfg=FIRST),
+            _m("bytedance/seedance-2.5/image-to-video", "Seedance 2.5", "Cámara cinematográfica, muy coherente."),
+            _m("bytedance/seedance-2.5/reference-to-video", "Seedance 2.5 · Referencias", "Mantiene al personaje desde referencias.", cfg=REF),
+            _m("bytedance/seedance-2.0/image-to-video", "Seedance 2.0", "Generación anterior de Seedance."),
+            _m("bytedance/seedance-2.0/reference-to-video", "Seedance 2.0 · Referencias", "Personaje desde referencias.", cfg=REF),
+            _m("alibaba/wan-3.0-prime/image-to-video", "Wan 3.0 Prime", "Lo mejor de Wan: gran calidad."),
+            _m("alibaba/wan-3.0-prime/reference-to-video", "Wan 3.0 Prime · Referencias", "Personaje desde referencias.", cfg=REF),
+            _m("alibaba/wan-3.0/image-to-video", "Wan 3.0", "Muy buena relación calidad/precio."),
+            _m("alibaba/wan-3.0/reference-to-video", "Wan 3.0 · Referencias", "Desde referencias.", cfg=REF),
             _m("wan/v2.7/image-to-video", "Wan 2.7", "Rápido y económico."),
+            _m("wan/v2.7/reference-to-video", "Wan 2.7 · Referencias", "Desde referencias.", cfg=REF),
+            _m("wan/v2.6/image-to-video", "Wan 2.6", "Generación anterior de Wan."),
+            _m("minimax/h3/image-to-video", "MiniMax H3", "Movimiento expresivo, buenas caras."),
+            _m("minimax/h3/reference-to-video", "MiniMax H3 · Referencias", "Desde referencias.", cfg=REF),
+            _m("minimax/hailuo-2.3/standard/image-to-video", "Hailuo 2.3", "Buen equilibrio calidad/precio."),
+            _m("pixverse/v6/image-to-video", "PixVerse V6", "Estilo dinámico para redes."),
+            _m("lightricks/ltx-2.5/image-to-video/pro", "LTX-2.5 Pro", "Rápido, buena calidad."),
+            _m("lightricks/ltx-2.5/image-to-video/fast", "LTX-2.5 Fast", "El más rápido."),
+            _m("alibaba/happy-horse/v1.1/image-to-video", "Happy Horse 1.1", "Video divertido y fluido."),
+            _m("alibaba/happy-horse/v1.1/reference-to-video", "Happy Horse 1.1 · Referencias", "Desde referencias.", cfg=REF),
+            _m("alibaba/happy-horse/image-to-video", "Happy Horse 1.0", "Versión anterior."),
+            _m("xai/grok-imagine-video/v1.5/reference-to-video", "Grok Imagine Video 1.5", "Video desde referencias (xAI).", cfg=REF),
         ],
     },
-    "fal": {
+    "fal": {   # ids verificados en el catálogo público de fal (fal.ai/api/models); el resto llega en vivo
         "generate": [
-            _m("fal-ai/bytedance/seedream/v4/text-to-image", "Seedream 4", "Realismo y detalle altísimos; buen precio.", True),
-            _m("fal-ai/flux-pro/v1.1-ultra", "FLUX 1.1 Pro Ultra", "Fotos de alta resolución muy realistas."),
-            _m("fal-ai/imagen4/preview", "Imagen 4 (Google)", "Muy fiel al pedido, buena piel y luz."),
-            _m("fal-ai/qwen-image", "Qwen-Image", "Barato; muy bueno con texto dentro de la imagen."),
-            _m("fal-ai/flux/dev", "FLUX.1 Dev", "Económico y versátil."),
+            _m("fal-ai/nano-banana-pro", "Nano Banana Pro (Google)", "Lo más avanzado de Google: realismo y fidelidad altísimos.", True),
+            _m("bytedance/seedream/v5.5/text-to-image", "Seedream 5.5", "Lo último de ByteDance: fotos muy reales y detalladas."),
+            _m("fal-ai/flux-2-max", "FLUX 2 Max", "Máxima calidad de FLUX."),
+            _m("fal-ai/flux-2-pro", "FLUX 2 Pro", "Muy buena calidad, barato por megapíxel."),
+            _m("openai/gpt-image-2", "GPT Image 2 (OpenAI)", "Muy fiel a pedidos largos y con texto."),
+            _m("fal-ai/bytedance/seedream/v4.5/text-to-image", "Seedream 4.5", "Muy buen realismo, económico."),
+            _m("fal-ai/z-image/turbo", "Z-Image Turbo", "Rápido y barato."),
         ],
         "edit": [
-            _m("fal-ai/nano-banana/edit", "Nano Banana Edit (Google)", "El mejor manteniendo la misma cara al editar.", True),
-            _m("fal-ai/bytedance/seedream/v4/edit", "Seedream 4 Edit", "Combina varias referencias con muy buena calidad."),
-            _m("fal-ai/flux-pro/kontext", "FLUX Kontext Pro", "Cambios precisos (ropa, fondo) sin tocar el resto."),
-            _m("fal-ai/qwen-image-edit-plus", "Qwen-Image Edit Plus", "Barato; bueno con varias referencias."),
+            _m("fal-ai/nano-banana-pro/edit", "Nano Banana Pro Edit (Google)", "El mejor manteniendo la misma cara al editar y combinar referencias.", True),
+            _m("fal-ai/nano-banana-2/edit", "Nano Banana 2 Edit (Google)", "Muy bueno con caras, más barato que Pro."),
+            _m("bytedance/seedream/v5/pro/edit", "Seedream 5.0 Pro Edit", "Combina varias referencias con calidad altísima."),
+            _m("fal-ai/flux-2-pro/edit", "FLUX 2 Pro Edit", "Ediciones precisas y económicas."),
+            _m("openai/gpt-image-2/edit", "GPT Image 2 Edit (OpenAI)", "Sigue instrucciones complejas al editar."),
+            _m("fal-ai/flux-pro/kontext/max", "FLUX Kontext Max", "Cambios precisos (ropa, fondo) sin tocar el resto."),
+            _m("fal-ai/qwen-image-edit-2511", "Qwen Image Edit 2511", "Barato; bueno con varias referencias."),
         ],
         "video": [
-            _m("fal-ai/kling-video/v2.1/master/image-to-video", "Kling 2.1 Master", "La mejor calidad de Kling: personas muy reales.", True),
-            _m("fal-ai/kling-video/v2.1/standard/image-to-video", "Kling 2.1 Standard", "Más barato, muy buen movimiento."),
-            _m("fal-ai/veo3/fast/image-to-video", "Veo 3 Fast (Google)", "Video con sonido, muy realista."),
-            _m("fal-ai/bytedance/seedance/v1/pro/image-to-video", "Seedance Pro", "Cámara cinematográfica."),
-            _m("fal-ai/minimax/hailuo-02/standard/image-to-video", "Hailuo 02", "Buen equilibrio calidad/precio."),
+            _m("kling/v4/image-to-video", "Kling 4.0", "Lo último de Kling: personas y movimiento muy reales.", True),
+            _m("fal-ai/kling-video/v3/pro/image-to-video", "Kling 3 Pro", "Excelente calidad, algo más barato."),
+            _m("fal-ai/kling-video/v3/4k/image-to-video", "Kling 3 4K", "Máxima nitidez."),
+            _m("bytedance/seedance-2.5/us/image-to-video", "Seedance 2.5", "Cámara cinematográfica, muy coherente."),
+            _m("alibaba/wan-3.0-prime/image-to-video", "Wan 3.0 Prime", "Gran calidad a buen precio."),
+            _m("fal-ai/minimax/hailuo-2.3/pro/image-to-video", "Hailuo 2.3 Pro", "Movimiento expresivo."),
+            _m("fal-ai/kling-video/v2.5-turbo/pro/image-to-video", "Kling 2.5 Turbo Pro", "Rápido y económico."),
         ],
     },
 }
 FAL_CATEGORY = {"generate": "text-to-image", "edit": "image-to-image", "video": "image-to-video"}
-_live: dict[tuple, tuple[float, list]] = {}
+_live: dict[str, tuple[float, list]] = {}
 LIVE_TTL = 6 * 3600
 
 
+def _price(text: str) -> str:
+    """«Your request will cost **$0.15** per image…» → «$0.15 por imagen» (aproximado: fal manda la letra chica)."""
+    t = (text or "").lower()
+    m = re.search(r"\$\s?([\d.]+)", t)
+    if not m:
+        return ""
+    if "token" in t:
+        return "según tokens"
+    unit = ("segundo" if re.search(r"per second|/sec|each second|every second|per \*\*second", t) else
+            "megapíxel" if "megapixel" in t else
+            "imagen" if re.search(r"per (output )?image|each image|per generated image|/image", t) else
+            "video" if re.search(r"per video|\d+ ?s(econd)? video|per \*\*\d", t) else "")
+    return f"${m.group(1).rstrip('.')}" + (f" por {unit}" if unit else "")
+
+
+def _fal_item(it: dict, role: str) -> dict | None:
+    if it.get("deprecated") or it.get("removed"):
+        return None
+    tags = set((it.get("discovery") or {}).get("tags") or [])
+    if role == "edit" and "task:edit-image" not in tags:
+        return None                     # en «imagen a imagen» también hay mejoradores, quitafondos… solo editores
+    mid = it.get("id") or it.get("endpoint_id")
+    if not mid:
+        return None
+    return {"id": mid, "name": it.get("title") or mid, "good": (it.get("shortDescription") or "")[:160],
+            "price": _price(it.get("pricingInfoOverride") or ""), "best": False,
+            "date": (it.get("publishedAt") or it.get("date") or "")[:10]}
+
+
 async def fal_live(api_key: str, role: str) -> list[dict]:
-    """Catálogo en vivo de fal (si su API lo da); si falla, vacío y queda la lista curada."""
-    key = (api_key[-6:], role)
-    hit = _live.get(key)
+    """TODO el catálogo de fal para esa tarea (con precio), desde su catálogo público. Se guarda 6 horas."""
+    hit = _live.get(role)
     if hit and time.time() - hit[0] < LIVE_TTL:
         return hit[1]
     out: list[dict] = []
     try:
-        async with httpx.AsyncClient(timeout=20) as c:
-            cursor, pages = None, 0
-            while pages < 5:
-                params = {"category": FAL_CATEGORY[role], "limit": 100, "status": "active"}
-                if cursor:
-                    params["cursor"] = cursor
-                r = await c.get("https://api.fal.ai/v1/models", params=params,
-                                headers={"Authorization": f"Key {api_key}"})
+        async with httpx.AsyncClient(timeout=30) as c:
+            page, pages = 1, 1
+            while page <= min(pages, 15):
+                r = await c.get("https://fal.ai/api/models", params={"categories": FAL_CATEGORY[role], "page": page})
                 if r.status_code >= 400:
                     break
                 j = r.json()
-                items = j.get("models") or j.get("items") or j.get("data") or (j if isinstance(j, list) else [])
-                for m in items:
-                    meta = m.get("metadata") or m
-                    mid = m.get("endpoint_id") or m.get("id") or meta.get("endpoint_id")
-                    if not mid:
-                        continue
-                    out.append({"id": mid, "name": meta.get("display_name") or meta.get("title") or mid,
-                                "good": (meta.get("description") or "")[:140], "best": False})
-                cursor = j.get("next_cursor") if isinstance(j, dict) else None
-                pages += 1
-                if not cursor or not (isinstance(j, dict) and j.get("has_more", True)):
-                    break
+                pages = int(j.get("pages") or 1)
+                out += [x for x in (_fal_item(it, role) for it in j.get("items") or []) if x]
+                page += 1
     except Exception as e:  # noqa: BLE001
-        log.info("Catálogo en vivo de fal no disponible: %s", e)
-    _live[key] = (time.time(), out)
-    return out
+        log.info("Catálogo público de fal no disponible: %s", e)
+    if not out and api_key:                      # respaldo: la API de plataforma de fal (con la clave)
+        try:
+            async with httpx.AsyncClient(timeout=20) as c:
+                cursor = None
+                for _ in range(10):
+                    params = {"category": FAL_CATEGORY[role], "limit": 100, "status": "active"}
+                    if cursor:
+                        params["cursor"] = cursor
+                    r = await c.get("https://api.fal.ai/v1/models", params=params,
+                                    headers={"Authorization": f"Key {api_key}"})
+                    if r.status_code >= 400:
+                        break
+                    j = r.json()
+                    for m in j.get("models") or []:
+                        meta = m.get("metadata") or {}
+                        if m.get("endpoint_id"):
+                            out.append({"id": m["endpoint_id"], "name": meta.get("display_name") or m["endpoint_id"],
+                                        "good": (meta.get("description") or "")[:160], "price": "", "best": False})
+                    cursor = j.get("next_cursor")
+                    if not cursor or not j.get("has_more"):
+                        break
+        except Exception as e:  # noqa: BLE001
+            log.info("API de modelos de fal no disponible: %s", e)
+    seen, uniq = set(), []
+    for m in out:
+        if m["id"] not in seen:
+            seen.add(m["id"])
+            uniq.append(m)
+    if uniq:
+        _live[role] = (time.time(), uniq)
+    return uniq
 
 
 def _conn(cid: str) -> Connection:
@@ -122,12 +223,21 @@ async def catalog_for(cid: str) -> dict:
         curated = [dict(m) for m in CATALOG[c.type][role]]
         seen = {m["id"] for m in curated}
         live = []
-        if c.type == "fal" and cfg.get("api_key"):
-            live = [m for m in await fal_live(cfg["api_key"], role) if m["id"] not in seen]
+        if c.type == "fal":
+            everything = await fal_live(cfg.get("api_key", ""), role)
+            info = {m["id"]: m for m in everything}
+            for m in curated:                                  # precio y fecha de fal para los recomendados también
+                if m["id"] in info:
+                    m["price"] = info[m["id"]].get("price", "")
+            live = [m for m in everything if m["id"] not in seen]
         current = cfg.get(FIELD[role]) or next((m["id"] for m in curated if m["best"]), "")
         roles[role] = {"label": ROLES[role], "current": current, "custom": bool(cfg.get(FIELD[role])),
                        "models": curated + live, "live_count": len(live)}
     return {"id": c.id, "name": c.name, "type": c.type, "roles": roles}
+
+
+def _recommended(kind: str, role: str) -> str:
+    return next((m["id"] for m in CATALOG[kind][role] if m["best"]), "")
 
 
 class PickIn(BaseModel):
@@ -160,6 +270,12 @@ async def api_pick(cid: str, body: PickIn):
             cfg[FIELD[body.role]] = model
         else:
             cfg.pop(FIELD[body.role], None)
+        if body.role == "video":
+            item = next((m for m in CATALOG[c.type]["video"] if m["id"] == (model or _recommended(c.type, "video"))), {})
+            if item.get("cfg", {}).get("image_field"):
+                cfg["image_field"] = item["cfg"]["image_field"]
+            else:
+                cfg.pop("image_field", None)
         c.config = cfg
         s.flush()
     from app.engines import reset_cache
