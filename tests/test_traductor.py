@@ -28,15 +28,31 @@ def test_glossary_fallback_when_translator_not_ready(monkeypatch):
     assert how == "glosario" and "woman" in en and "nude" in en and "natural light" in en
 
 
-def test_uses_the_local_translator_when_ready(monkeypatch, tmp_path):
+FAKE_SERVER = ("import json,sys\nprint('READY', flush=True)\nfor line in sys.stdin:\n"
+               "    d=json.loads(line)\n    print(json.dumps({'texts':['EN '+t for t in d['texts']]}), flush=True)\n")
+
+
+def _fake_server(monkeypatch, tmp_path):
     fake = tmp_path / "fake.py"
-    fake.write_text("import json,sys\nd=json.load(sys.stdin)\n"
-                    "json.dump({'texts':['EN: '+t for t in d['texts']]}, sys.stdout)\n")
+    fake.write_text(FAKE_SERVER)
     monkeypatch.setattr(traductor, "SCRIPT", fake)
-    monkeypatch.setattr(traductor, "find_python", lambda: sys.executable)
-    monkeypatch.setattr(traductor, "model_ready", lambda: True)
-    en, how = asyncio.run(traductor.to_english("mujer en la playa al atardecer"))
-    assert how == "placa" and en == "EN: mujer en la playa al atardecer"
+    monkeypatch.setattr(traductor, "engine", lambda: ("marian", sys.executable))
+    monkeypatch.setattr(traductor, "_proc", None)
+    monkeypatch.setattr(traductor, "_lock", None)
+    traductor._cache.clear()
+    return fake
+
+
+def test_uses_the_local_translator_when_ready(monkeypatch, tmp_path):
+    _fake_server(monkeypatch, tmp_path)
+
+    async def go():
+        a = await traductor.to_english("mujer en la playa al atardecer")
+        b = await traductor.to_english("necesito una mujer")          # el mismo proceso, ya cargado
+        traductor._proc.kill()
+        return a, b
+    a, b = asyncio.run(go())
+    assert a == ("EN mujer en la playa al atardecer", "placa") and b == ("EN necesito una mujer", "placa")
 
 
 def test_translator_script_splits_by_commas(monkeypatch, tmp_path):
@@ -106,13 +122,31 @@ def test_adult_zone_sends_english_to_sdxl(monkeypatch):
 
 def test_live_translation_endpoint_and_cache(monkeypatch, tmp_path):
     from app import privado
-    fake = tmp_path / "fake.py"
-    fake.write_text("import json,sys\nd=json.load(sys.stdin)\njson.dump({'texts':['EN '+t for t in d['texts']]}, sys.stdout)\n")
-    monkeypatch.setattr(traductor, "SCRIPT", fake)
-    monkeypatch.setattr(traductor, "find_python", lambda: sys.executable)
-    monkeypatch.setattr(traductor, "model_ready", lambda: True)
+    _fake_server(monkeypatch, tmp_path)
     monkeypatch.setattr(privado, "_admin", lambda req: {"username": "admin"})
-    r = asyncio.run(privado.api_translate(privado.TranslateIn(text="mujer de pie en la playa"), None))
+
+    async def go():
+        r = await privado.api_translate(privado.TranslateIn(text="mujer de pie en la playa"), None)
+        traductor._proc.kill()
+        await traductor._proc.wait()
+        return r
+    r = asyncio.run(go())
     assert r["en"] == "EN mujer de pie en la playa" and r["how"] == "placa"
-    fake.write_text("raise SystemExit(1)\n")                       # la segunda vez sale de la memoria
+    traductor._proc = None
+    traductor._lock = None
+    monkeypatch.setattr(traductor, "engine", lambda: None)               # la segunda vez sale de la memoria
     assert asyncio.run(traductor.to_english("mujer de pie en la playa"))[0] == "EN mujer de pie en la playa"
+
+
+def test_short_spanish_is_detected_and_marian_layout_is_ready(tmp_path):
+    import traducir
+    assert traductor.looks_spanish("necesito una vagina") or traductor.looks_spanish("necesito una mujer")
+    assert traductor.looks_spanish("quiero una foto")
+    (tmp_path / "opus-mt-es-en").mkdir()
+    (tmp_path / "opus-mt-es-en" / "config.json").write_text("{}")
+    assert traducir.ready(tmp_path) == "marian"
+    pkg = tmp_path / "x"
+    (pkg / "model").mkdir(parents=True)
+    (pkg / "model" / "model.bin").write_bytes(b"x")
+    (pkg / "bpe.model").write_bytes(b"x")                                 # Argos 1.9 trae BPE: no sirve
+    assert traducir._find(pkg) is None
