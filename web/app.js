@@ -478,7 +478,7 @@ function tileHTML(p, selectable) {
     return parts.slice(-3).join(" ").slice(0, 32) || String(s || "").split("/").pop();
   };
   const mtag = mw.video ? `🎬 ${short(mw.video)}` : mw.image ? `🖼️ ${short(mw.image)}` : "";
-  return `${selectable ? '<div class="check"></div>' : ""}${mtag ? `<span class="model-tag" title="${esc(Object.entries(mw).map(([k, v]) => `${k}: ${v}`).join(" · "))}">${esc(mtag)}</span>` : ""}${img}<div class="meta">${chip(p.status)}${judge}<span class="idea">${esc(p.platform_name)} · ${esc(p.idea)}</span>${p.qa_score ? `<span class="score ${scoreCls(p.qa_score)}">${Math.round(p.qa_score)}</span>` : ""}</div>`;
+  return `${selectable ? '<div class="check"></div>' : ""}${mtag ? `<span class="model-tag" title="${esc(Object.entries(mw).map(([k, v]) => `${k}: ${v}`).join(" · "))}">${esc(mtag)}</span>` : ""}${img}<div class="meta">${chip(p.status)}${judge}<span class="idea">${esc(p.platform_name)} · ${esc(p.idea)}</span>${p.qa_score ? `<span class="score ${scoreCls(p.qa_score)}" title="Nota del juez">${Math.round(p.qa_score)}</span>` : ""}${p.human_score ? `<span class="score ${scoreCls(p.human_score)}" title="Tu nota">👤${Math.round(p.human_score)}</span>` : ""}${(p.alternatives || []).length ? `<span class="chip" title="Intentos que el juez no eligió (ábrela para verlos)">🗂 +${p.alternatives.length}</span>` : ""}</div>`;
 }
 function refreshPost(p) {
   const prev = S.posts.get(p.id);
@@ -581,7 +581,10 @@ async function openPost(id, refetch = true, keepScroll = false) {
       <textarea id="d-script" rows="2" style="margin-top:8px" placeholder="Guion exacto (vacío = lo escribe el Locutor)"></textarea>
       <div class="row" style="margin-top:8px"><button class="btn sm" id="d-audio">${icon("mic", 15)} Agregar voz${isVid ? "" : " (crea video)"}</button><button class="btn sm ghost" id="d-sfx-only">${icon("wave", 15)} Solo sonido</button></div></div>
     ${p.qa_notes ? `<div class="d-sec"><h4>Opinión del juez (tú decides)</h4><div class="qa-box">${esc(p.qa_notes)}</div></div>` : ""}
-    ${(p.alternatives || []).length ? `<div class="d-sec"><h4>Otros intentos guardados</h4><div class="hint" style="margin-bottom:8px">El juez los puntuó más bajo, pero no se borran. Si crees que se equivocó, elige uno.</div><div class="grid" style="gap:8px">${p.alternatives.map((a, i) => `<div class="alt"><img src="${esc(a.image_url)}"><div class="grow"><span class="score ${scoreCls(a.score)}">${a.score}/100</span><div class="muted" style="margin:4px 0 8px">${esc((a.issues || []).join("; ") || a.summary)}</div><button class="btn sm" data-alt="${i}">Usar esta</button></div></div>`).join("")}</div></div>` : ""}
+    ${p.image_url && p.qa_score ? `<div class="d-sec"><h4>⚖️ Califica al juez</h4><div class="hint" style="margin-bottom:8px">El juez le puso <b>${Math.round(p.qa_score)}/100</b> a la elegida${(p.alternatives || []).length ? ` y descartó ${p.alternatives.length} intento(s) (abajo)` : ""}. ¿Acertó? Tu nota le enseña al juez.</div>
+      <div class="row" style="gap:6px;flex-wrap:wrap"><button class="btn sm ${p.judge_review === "agree" ? "good" : ""}" data-jr="1">👍 Acertó</button><button class="btn sm ${p.judge_review === "disagree" ? "bad" : ""}" data-jr="0">👎 Se equivocó</button>
+      <input id="jr-score" type="number" min="0" max="100" style="width:110px" placeholder="Tu nota 0-100" value="${p.human_score || ""}"><input id="jr-note" class="grow" placeholder="¿Por qué? (opcional)"><button class="btn sm primary" id="jr-save">Guardar</button></div></div>` : ""}
+    ${(p.alternatives || []).length ? `<div class="d-sec"><h4>🗂 Intentos que el juez descartó (${p.alternatives.length})</h4><div class="hint" style="margin-bottom:8px">El juez los puntuó más bajo, pero no se borran. Si crees que se equivocó, elige uno.</div><div class="grid" style="gap:8px">${p.alternatives.map((a, i) => `<div class="alt"><img src="${esc(a.image_url)}"><div class="grow"><span class="score ${scoreCls(a.score)}">${a.score}/100</span><div class="muted" style="margin:4px 0 8px">${esc((a.issues || []).join("; ") || a.summary)}</div><button class="btn sm" data-alt="${i}">Usar esta</button></div></div>`).join("")}</div></div>` : ""}
     ${p.error ? `<div class="d-sec"><h4>Error</h4><div class="qa-box" style="color:#fca5a5">${esc(p.error)}</div></div>` : ""}
     ${(p.publish_log || []).length ? `<div class="d-sec"><h4>Publicaciones</h4>${p.publish_log.map((l) => `<div class="small muted">✔ ${esc(l.target)} · ${when(l.at)}</div>`).join("")}</div>` : ""}
     <div class="d-sec"><h4>Idea</h4><div class="muted">${esc(p.idea)}</div></div>
@@ -592,6 +595,13 @@ async function openPost(id, refetch = true, keepScroll = false) {
   const run = (fn, msg) => async () => { try { const r = await fn(); if (msg) toast(msg, "good"); return r; } catch (e) { toast(esc(e.message), "bad"); } };
   $("#d-x").onclick = closeDrawer;
   $$("[data-v]", d).forEach((im) => im.onclick = () => openPost(im.dataset.v));
+  const jr = async (agree) => {
+    const sc = $("#jr-score", d)?.value, note = $("#jr-note", d)?.value || "";
+    try { await api(`/api/posts/${id}/juez`, { method: "POST", body: { agree, score: sc === "" || sc == null ? null : +sc, note } }); toast("Gracias: el juez aprende de tu nota", "good", "⚖️"); openPost(id); }
+    catch (e) { toast(esc(e.message), "bad"); }
+  };
+  $$("[data-jr]", d).forEach((b) => b.onclick = () => jr(b.dataset.jr === "1"));
+  if ($("#jr-save", d)) $("#jr-save", d).onclick = () => jr(null);
   $$("[data-alt]", d).forEach((b) => b.onclick = run(async () => { await api(`/api/posts/${id}/use-alternative`, { method: "POST", body: { index: +b.dataset.alt } }); openPost(id); }, "Usando la imagen que elegiste"));
   $("#d-ok").onclick = run(() => api(`/api/posts/${id}`, { method: "PATCH", body: { status: "approved" } }), "Aprobado");
   $("#d-no").onclick = run(() => api(`/api/posts/${id}`, { method: "PATCH", body: { status: "rejected" } }), "Rechazado");

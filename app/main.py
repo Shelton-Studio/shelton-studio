@@ -327,6 +327,34 @@ class AltIn(BaseModel):
     index: int
 
 
+class JudgeRatingIn(BaseModel):
+    score: float | None = None      # tu nota 0-100 para esta imagen
+    agree: bool | None = None       # ¿el juez acertó?
+    note: str = ""
+
+
+@app.post("/api/posts/{pid}/juez")
+async def rate_judge(pid: str, body: JudgeRatingIn):
+    """⚖️ Calificar al juez: tu nota y si acertó. Queda como aprendizaje para el juez (Shelton revisa estas notas)."""
+    from app.db import Feedback
+    from app.serialize import post_dict
+    with session() as s:
+        p = s.get(Post, pid)
+        if not p:
+            raise HTTPException(404, "No existe")
+        if body.score is not None:
+            p.human_score = max(0.0, min(100.0, float(body.score)))
+        if body.agree is not None:
+            p.judge_review = "agree" if body.agree else "disagree"
+        s.add(Feedback(post_id=pid, action="judge_rating",
+                       detail={"judge_score": p.qa_score, "human_score": p.human_score, "agree": body.agree,
+                               "note": body.note[:500], "judge_notes": (p.qa_notes or "")[:500], "idea": p.idea}))
+        s.flush()
+        data = post_dict(p)
+    events.publish({"type": "post", "post": data})
+    return data
+
+
 @app.post("/api/posts/{pid}/use-alternative")
 async def use_alternative(pid: str, body: AltIn):
     """Tú decides: usar un intento que el juez puntuó más bajo."""
