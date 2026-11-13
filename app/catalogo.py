@@ -231,7 +231,8 @@ async def catalog_for(cid: str) -> dict:
             for m in curated:                                  # precio y fecha de fal para los recomendados también
                 if m["id"] in info:
                     m["price"] = info[m["id"]].get("price", "")
-            live = [m for m in everything if m["id"] not in seen]
+            live = sorted((m for m in everything if m["id"] not in seen),       # lo más nuevo primero
+                          key=lambda m: m.get("date") or "", reverse=True)
         current = cfg.get(FIELD[role]) or next((m["id"] for m in curated if m["best"]), "")
         roles[role] = {"label": ROLES[role], "current": current, "custom": bool(cfg.get(FIELD[role])),
                        "models": curated + live, "live_count": len(live)}
@@ -251,6 +252,77 @@ class PickIn(BaseModel):
 async def api_cloud_connections():
     from app.connections import list_enabled
     return [{"id": c.id, "name": c.name, "type": c.type} for c in list_enabled("engine") if c.type in CATALOG]
+
+
+def _name(kind: str, role: str, model_id: str) -> str:
+    """Nombre lindo de un modelo («bytedance/seedream/v5/pro/text-to-image» → «Seedream 5.0 Pro»)."""
+    for m in CATALOG.get(kind, {}).get(role, []):
+        if m["id"] == model_id:
+            return m["name"].replace(" ⭐", "")
+    hit = _live.get(role)
+    for m in (hit[1] if hit else []):
+        if m["id"] == model_id:
+            return m["name"]
+    parts = [x for x in model_id.split("/") if x not in ("fal-ai", "text-to-image", "image-to-video", "edit")]
+    return " ".join(parts[-2:]) or model_id
+
+
+def active(choice: str | None) -> dict:
+    """Qué modelo usa hoy cada tarea con el Motor elegido (para mostrarlo arriba del chat)."""
+    from app.config import settings
+    from app.connections import TYPES, engine_for_role, list_enabled
+    from app.engines import PRESET_INFO, VIDEO_INFO
+    choice = choice or ""
+    video_default = VIDEO_INFO.get(settings.VIDEO_PRESET, ("Wan 2.2", ""))[0]
+
+    def conn_models(c) -> dict:
+        cfg = c.config or {}
+        if c.type in CATALOG:
+            out = {}
+            for role in ROLES:
+                mid = cfg.get(FIELD[role]) or _recommended(c.type, role)
+                out[role] = f"{_name(c.type, role, mid)} · {c.name or TYPES[c.type]['name']}"
+            return out
+        name = c.name or TYPES.get(c.type, {}).get("name", c.type)
+        return {"generate": name, "edit": name, "video": cfg.get("model_video") or video_default}
+
+    if choice.startswith("conn:"):
+        c = next((x for x in list_enabled("engine") if x.id == choice[5:]), None)
+        if c:
+            return {"label": c.name, **conn_models(c)}
+    if choice.startswith("rtx:"):
+        from app import granja
+        _, cid, preset = (choice.split(":", 2) + ["", ""])[:3]
+        node = next((n for n in granja.remote_nodes() if n["conn_id"] == cid), None)
+        where = node["label"] if node else "RTX"
+        img = "Qwen-Image 20B" if preset == "quality" else "Z-Image Turbo + LoRA del Banco"
+        edit_m = "Qwen-Image-Edit 2509" if preset == "quality" else "Z-Image + LoRA / Qwen-Image-Edit"
+        return {"label": f"⚡ {where}", "generate": f"{img} · ⚡ {where}", "edit": f"{edit_m} · ⚡ {where}",
+                "video": video_default}
+    if choice == "openrouter":
+        return {"label": "OpenRouter", "generate": f"OpenRouter · {settings.OPENROUTER_IMAGE_MODEL}",
+                "edit": f"OpenRouter · {settings.OPENROUTER_IMAGE_MODEL}", "video": "OpenRouter (video)"}
+    if choice in PRESET_INFO:
+        label = PRESET_INFO[choice][0]
+        return {"label": label, "generate": f"{label} · placa", "edit": "Qwen-Image-Edit · placa", "video": video_default}
+    # Automático: lo que tenga asignado cada tarea en Conexiones, o la placa
+    out = {"label": "Automático"}
+    for role in ROLES:
+        c = engine_for_role(role)
+        if c:
+            out[role] = conn_models(c)[role]
+        elif role == "video":
+            out[role] = f"{video_default} · placa"
+        elif role == "edit":
+            out[role] = "Qwen-Image-Edit · placa"
+        else:
+            out[role] = f"{PRESET_INFO.get(settings.GEN_PRESET, ('Z-Image Turbo', ''))[0]} · placa"
+    return out
+
+
+@router.get("/activo/ahora")
+async def api_active(choice: str = ""):
+    return active(choice)
 
 
 @router.get("/{cid}")
