@@ -93,7 +93,9 @@ class Settings:
     # --- Cadena de producción ---
     QA_MIN_SCORE = int(os.getenv("QA_MIN_SCORE", "70"))      # por debajo se regenera
     QA_MAX_RETRIES = int(os.getenv("QA_MAX_RETRIES", "2"))   # reintentos por imagen
-    WORKERS = int(os.getenv("WORKERS", "3"))                 # posts en paralelo (la GPU va de a uno)
+    # Posts en paralelo (cada GPU dibuja de a uno; el resto piensa, escribe y espera su turno sin trabar a los demás).
+    # El 3 de los .env viejos se sube a 8: con una foto esperando la GPU, las demás seguían trabadas.
+    WORKERS = 8 if os.getenv("WORKERS", "8").strip() in ("", "3") else int(os.getenv("WORKERS", "8"))
     CONTENT_LANGUAGE = os.getenv("CONTENT_LANGUAGE", "es")
 
     # --- Publicación ---

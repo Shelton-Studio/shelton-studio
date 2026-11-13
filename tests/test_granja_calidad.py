@@ -344,3 +344,28 @@ def test_choose_the_rtx_to_train_and_to_generate(monkeypatch):
     eng = engines.get_engine("generate", "rtx:c1:quality")
     assert eng.url.startswith("http://100.1.1.1:8288") and hasattr(eng, "ensure_loras")
     engines.reset_cache()
+
+
+
+def test_photos_go_to_the_rtx_when_the_placa_is_busy(monkeypatch):
+    """Si la placa está entrenando (o dibujando) y la RTX está prendida, la foto va a la RTX: nunca queda trabada."""
+    import time
+    from app import engines, granja
+    from app.config import settings
+    node = {"id": "node:c9", "conn_id": "c9", "slots": 3, "profile": "estandar", "label": "RTX PRO 6000",
+            "url": "http://100.9.9.9:8299", "token": "t", "comfy_url": "http://100.9.9.9:8288", "kind": "remote"}
+    monkeypatch.setattr(granja, "remote_nodes", lambda: [node])
+    monkeypatch.setitem(granja._health, "node:c9", (time.time(), {"ok": True}))
+    monkeypatch.setattr(engines, "infra_mode", lambda: "local")
+    engines.reset_cache()
+    assert engines._rtx_when_placa_busy("generate", None) is None              # placa libre: sigue en la placa
+    engines._busy[settings.COMFYUI_URL] = 1                                    # la placa está dibujando/entrenando
+    try:
+        e = engines._rtx_when_placa_busy("generate", None)
+        assert e is not None and e.url.startswith("http://100.9.9.9:8288")
+        assert engines._rtx_when_placa_busy("video", None) is None             # video no (otros motores)
+        assert engines._rtx_when_placa_busy("generate", "sdxl") is None        # perfiles que la RTX no tiene: no
+    finally:
+        engines._busy[settings.COMFYUI_URL] = 0
+        engines.reset_cache()
+    assert settings.WORKERS >= 8
