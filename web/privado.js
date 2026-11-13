@@ -43,8 +43,11 @@ VIEWS.privado = async (el) => {
           <label class="f grow">Motor<select id="pv-pre"><option value="sdxl">SDXL</option><option value="flux">Flux.1 Dev</option><option value="zimage">Z-Image (LoRA del Banco)</option></select></label>
           <label class="f grow">Checkpoint (SDXL)<select id="pv-ckpt"><option value="">Por defecto</option>${(st.checkpoints || []).map((c) => `<option>${esc(c)}</option>`).join("")}</select></label>
         </div>
-        <label class="f">Pedido<textarea id="pv-prompt" rows="4" placeholder="Describe la escena: pose, lugar, luz, cámara…"></textarea></label>
-        <label class="f">Evitar (opcional)<input id="pv-neg" placeholder="Ej: tatuajes, ropa roja…"></label>
+        <div class="pv-tr">
+          <label class="f">Pedido <span class="faint small">(en español)</span><textarea id="pv-prompt" rows="5" placeholder="Describe la escena: pose, lugar, luz, cámara…"></textarea></label>
+          <label class="f" id="pv-en-box">En inglés <span class="faint small" id="pv-en-how">(lo que recibe SDXL · puedes corregirlo)</span><textarea id="pv-en" rows="5" placeholder="Aquí aparece la traducción mientras escribes"></textarea></label>
+        </div>
+        <label class="f">Evitar (opcional)<input id="pv-neg" placeholder="Ej: tatuajes, ropa roja…"><span class="faint small" id="pv-neg-en"></span></label>
         <div class="row" style="gap:8px">
           <label class="f grow">Formato<select id="pv-size"><option value="vertical">Vertical</option><option value="historia">Historia 9:16</option><option value="cuadrado">Cuadrado</option><option value="horizontal">Horizontal</option></select></label>
           <label class="f" style="width:110px">Cantidad<select id="pv-n">${[1, 2, 3, 4].map((n) => `<option>${n}</option>`).join("")}</select></label>
@@ -98,11 +101,39 @@ VIEWS.privado = async (el) => {
     try { await api(`/api/privado/modelos/${b.dataset.pvok}/confirmar`, { method: "POST", body: { inventada: true, mayor: true } }); route(); }
     catch (e) { toast(esc(e.message), "bad"); }
   });
+  // Traducción en vivo, como un traductor lado a lado (en la placa, sin nube). Solo para SDXL/Flux.
+  let enEdited = false; const trTimer = {}, trSeq = {};
+  const needsEn = () => ["sdxl", "flux"].includes($("#pv-pre", el).value);
+  const paintEnBox = () => { $("#pv-en-box", el).style.display = needsEn() ? "" : "none"; };
+  const translateLive = (src, dst, isNeg) => {
+    clearTimeout(trTimer[src]);
+    trTimer[src] = setTimeout(async () => {
+      const text = $(src, el).value.trim(), seq = trSeq[src] = (trSeq[src] || 0) + 1;
+      if (!needsEn()) return;
+      if (!text) { if (isNeg) $(dst, el).textContent = ""; else $(dst, el).value = ""; return; }
+      if (!isNeg) $("#pv-en-how", el).textContent = "(traduciendo…)";
+      try {
+        const r = await api("/api/privado/traducir", { method: "POST", body: { text } });
+        if (seq !== trSeq[src]) return;
+        if (isNeg) $(dst, el).textContent = r.how ? `→ ${r.en}` : "";
+        else {
+          $(dst, el).value = r.en; enEdited = false;
+          $("#pv-en-how", el).textContent = r.how === "glosario" ? `(básica: ${r.status?.why || "el traductor no está listo"})`
+            : "(lo que recibe SDXL · puedes corregirlo)";
+        }
+      } catch { if (!isNeg) $("#pv-en-how", el).textContent = "(no pude traducir)"; }
+    }, 600);
+  };
+  $("#pv-prompt", el).addEventListener("input", () => translateLive("#pv-prompt", "#pv-en", false));
+  $("#pv-neg", el).addEventListener("input", () => translateLive("#pv-neg", "#pv-neg-en", true));
+  $("#pv-en", el).addEventListener("input", () => { enEdited = true; });
+  $("#pv-pre", el).addEventListener("change", () => { paintEnBox(); translateLive("#pv-prompt", "#pv-en", false); });
+  paintEnBox();
   $("#pv-go", el).onclick = async () => {
     try {
       const r = await api("/api/privado/generar", { method: "POST", body: {
         subject_id: $("#pv-sub", el).value, preset: $("#pv-pre", el).value, ckpt: $("#pv-ckpt", el).value,
-        prompt: $("#pv-prompt", el).value, negative: $("#pv-neg", el).value, count: +$("#pv-n", el).value,
+        prompt: (needsEn() && $("#pv-en", el).value.trim()) || $("#pv-prompt", el).value, negative: $("#pv-neg", el).value, count: +$("#pv-n", el).value,
         size: $("#pv-size", el).value, strength: +$("#pv-st", el).value || null } });
       toast(`Generando ${r.count} en la placa${r.with_lora ? " con su LoRA" : ""}.${r.note ? " " + esc(r.note) : ""}`, r.note ? "warn" : "good", "🔒");
       refresh();

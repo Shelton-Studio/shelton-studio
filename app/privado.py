@@ -393,6 +393,19 @@ class GenIn(BaseModel):
     strength: float | None = None
 
 
+class TranslateIn(BaseModel):
+    text: str = ""
+
+
+@router.post("/traducir")
+async def api_translate(body: TranslateIn, request: Request):
+    """Traducción en vivo mientras se escribe (en la placa, sin nube), para ver qué recibe SDXL/Flux."""
+    _admin(request)
+    from app import traductor
+    en, how = await traductor.to_english(body.text[:2000])
+    return {"en": en, "how": how, "status": traductor.status()}
+
+
 class ConfirmIn(BaseModel):
     inventada: bool
     mayor: bool
