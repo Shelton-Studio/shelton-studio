@@ -38,11 +38,15 @@ async def lifespan(_: FastAPI):
     from app import privado
     privado.recover_after_restart()
     gpu_meter = asyncio.create_task(consumo.sample_loop())
-    try:
-        health = await get_engine().health()
-    except Exception as e:
-        health = {"ok": False, "error": str(e)}
-    log.info("Motor de imagen: %s", json.dumps(health, ensure_ascii=False))
+
+    async def _engine_check():
+        # en segundo plano: si la placa está ocupada (entrenando) o ComfyUI tarda, Shelton abre igual al instante
+        try:
+            health = await asyncio.wait_for(get_engine().health(), 120)
+        except Exception as e:  # noqa: BLE001
+            health = {"ok": False, "error": str(e) or "ComfyUI no respondió a tiempo"}
+        log.info("Motor de imagen: %s", json.dumps(health, ensure_ascii=False))
+    engine_check = asyncio.create_task(_engine_check())
     from app.llm import provider
     if not settings.ANTHROPIC_API_KEY and not settings.OPENROUTER_API_KEY:
         log.warning("Falta ANTHROPIC_API_KEY u OPENROUTER_API_KEY en .env (o en Conexiones): Shelton no podrá pensar")
@@ -54,6 +58,7 @@ async def lifespan(_: FastAPI):
     learning.cancel()
     network.cancel()
     gpu_meter.cancel()
+    engine_check.cancel()
     await pipeline.stop_workers()
 
 
