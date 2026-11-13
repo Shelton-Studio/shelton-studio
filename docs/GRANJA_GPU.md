@@ -108,7 +108,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/juancamp7777/alligator-AI/ma
 5. Revisa **Granja de GPUs** (menú, solo administradores): tiene que decir **conectado**.
 
 **Cómo trabaja:**
-- La fila usa primero la placa y después los nodos con lugar libre.
+- Si hay una tarjeta alquilada prendida, la fila la usa **primero** (es la más rápida y se paga por hora) hasta llenar sus lugares; después usa la placa.
 - Sube las fotos y el punto de partida, sigue el avance, trae la LoRA a la placa (respaldo incluido), la copia a los nodos que generan y **borra las fotos del nodo**.
 - Las LoRA se entrenan siempre sobre **Z-Image Turbo**, así generan en las 3090 de la placa cuando devuelvan la tarjeta alquilada.
 

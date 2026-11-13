@@ -85,15 +85,9 @@ async def health(node: dict, fresh: bool = False) -> dict:
 
 
 async def free_slot(used: dict[str, int], big: bool = False, only: str = "") -> dict | None:
-    """El primer lugar libre: GPUs de la placa primero, después los nodos (si están prendidos y con lugar).
+    """El primer lugar libre. Si hay una tarjeta alquilada prendida (se paga por hora y es la más rápida), va
+    PRIMERO a ella hasta llenarla; recién después usa las GPUs de la placa.
     big=True (modelos grandes como Qwen-Image): nunca en una GPU chica de la placa (solo placa «pro» o tarjetas alquiladas)."""
-    for s in local_slots():
-        if only and s["id"] != only:
-            continue
-        if big and s.get("profile") != "pro":
-            continue
-        if used.get(s["id"], 0) < s["slots"]:
-            return s
     for n in remote_nodes():      # las tarjetas alquiladas siempre son grandes: con perfil estándar, Qwen va comprimido
         if only and n["id"] != only:
             continue
@@ -102,6 +96,13 @@ async def free_slot(used: dict[str, int], big: bool = False, only: str = "") -> 
         h = await health(n)
         if h.get("ok") and h.get("trainer", True) and int(h.get("free", n["slots"])) > 0:
             return n
+    for s in local_slots():
+        if only and s["id"] != only:
+            continue
+        if big and s.get("profile") != "pro":
+            continue
+        if used.get(s["id"], 0) < s["slots"]:
+            return s
     return None
 
 
@@ -214,7 +215,7 @@ async def _follow_remote(subject_id: str, node: dict, jid: str, ctx: dict, steps
                     start_at = int(ctx.get("base") or 0)
                     pct = 100.0 * max(0, done - start_at) / max(1, steps - start_at)
                     _update(subject_id, lora_progress=min(99.0, pct),
-                            info={"phase": f"Entrenando en {node['label']}: paso {done} de {steps}", "step": done,
+                            info={"phase": f"⚡ Entrenando en {node['label']}: paso {done} de {steps}", "step": done,
                                   "eta_min": round(spp * (steps - done) / 60) if spp else None})
                 elif st.get("phase"):
                     _update(subject_id, info={"phase": f"{node['label']}: {st['phase']}"})
