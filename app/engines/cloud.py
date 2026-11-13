@@ -438,5 +438,146 @@ class OpenRouterVideoEngine(_Base):
         return v.content, 30
 
 
-CLOUD_ENGINES = {"openrouter_video": OpenRouterVideoEngine, "openrouter_image": OpenRouterImageEngine, "fal": FalEngine, "replicate": ReplicateEngine, "openai_images": OpenAIImagesEngine,
+
+# ------------------------------------------------------------------ Higgsfield
+class HiggsfieldEngine(_Base):
+    """Higgsfield (api.higgsfield.ai): se envía el pedido al modelo y se consulta hasta que termina.
+    Clave: Key ID + Key Secret de console.higgsfield.ai (cabecera «Authorization: Key ID:SECRET»).
+    Los modelos se eligen en la conexión (ej. «higgsfield-ai/soul/v2/standard», «bytedance/seedream/v4/edit»,
+    «wan/v2.7/image-to-video»). Campos extra de cada modelo: JSON en «Parámetros extra»."""
+    name = "higgsfield"
+    BASE = "https://api.higgsfield.ai"
+    transport = None
+    POLL = 3.0
+
+    def _headers(self) -> dict:
+        key, secret = (self.cfg.get("api_key") or "").strip(), (self.cfg.get("api_secret") or "").strip()
+        cred = f"{key}:{secret}" if secret else key
+        return {"Authorization": f"Key {cred}", "Content-Type": "application/json"}
+
+    def _extra(self, kind: str) -> dict:
+        raw = self.cfg.get(f"extra_{kind}") or self.cfg.get("extra") or ""
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else {}
+        except ValueError:
+            raise RuntimeError("Higgsfield: «Parámetros extra» no es un JSON válido (ej: {\"resolution\": \"2K\"})")
+
+    def _client(self, timeout: float) -> httpx.AsyncClient:
+        return httpx.AsyncClient(timeout=timeout, transport=self.transport, follow_redirects=True)
+
+    async def _run(self, model: str, body: dict, limit_s: float, on_progress: Progress = None) -> dict:
+        model = model.strip("/")
+        async with self._client(120) as c:
+            r = await c.post(f"{self.BASE}/{model}", json=body, headers=self._headers())
+            if r.status_code in (401, 403):
+                raise RuntimeError("Higgsfield rechazó la clave: revisa Key ID y Key Secret en Conexiones")
+            if r.status_code >= 400:
+                raise RuntimeError(f"Higgsfield {r.status_code} ({model}): {r.text[:400]}")
+            j = r.json()
+            from app.consumo import report_cost
+            if self._outputs(j):
+                return j
+            rid = j.get("request_id") or j.get("id")
+            url = j.get("status_url") or f"{self.BASE}/requests/{rid}/status"
+            start = asyncio.get_event_loop().time()
+            while asyncio.get_event_loop().time() - start < limit_s:
+                await asyncio.sleep(self.POLL)
+                s = await c.get(url, headers=self._headers())
+                if s.status_code >= 400:
+                    raise RuntimeError(f"Higgsfield (estado) {s.status_code}: {s.text[:300]}")
+                j = s.json()
+                st = str(j.get("status") or "").lower()
+                if st == "completed" or (not st and self._outputs(j)):
+                    report_cost(j.get("cost") or (j.get("usage") or {}).get("cost"))
+                    return j
+                if st in ("failed", "canceled", "cancelled"):
+                    raise RuntimeError(f"Higgsfield: el pedido terminó como «{st}». {j.get('error') or ''}".strip())
+                if st == "nsfw":
+                    raise RuntimeError("Higgsfield bloqueó el resultado por contenido sensible (nsfw). Cambia la idea o el prompt.")
+                if on_progress:
+                    await on_progress(f"Higgsfield · {st or 'en cola'} ({int(asyncio.get_event_loop().time() - start)}s)")
+            try:
+                await c.post(f"{self.BASE}/requests/{rid}/cancel", headers=self._headers())
+            except Exception:  # noqa: BLE001
+                pass
+            raise RuntimeError("Higgsfield: tiempo de espera agotado")
+
+    @staticmethod
+    def _outputs(j: dict):
+        out = j.get("output") if isinstance(j.get("output"), dict) else j
+        return out.get("images") or out.get("video") or out.get("videos")
+
+    @staticmethod
+    def _image_url(j: dict) -> str:
+        out = j.get("output") if isinstance(j.get("output"), dict) else j
+        imgs = out.get("images") or []
+        first = imgs[0] if imgs else None
+        url = first.get("url") if isinstance(first, dict) else first
+        if not url:
+            raise RuntimeError(f"Higgsfield terminó pero no devolvió imagen: {str(j)[:200]}")
+        return url
+
+    @staticmethod
+    def _video_url(j: dict) -> str:
+        out = j.get("output") if isinstance(j.get("output"), dict) else j
+        v = out.get("video") or (out.get("videos") or [None])[0]
+        url = v.get("url") if isinstance(v, dict) else v
+        if not url:
+            raise RuntimeError(f"Higgsfield terminó pero no devolvió video: {str(j)[:200]}")
+        return url
+
+    async def _upload(self, data: bytes) -> str:
+        """Sube una imagen propia a Higgsfield (URL firmada) y devuelve la URL para usarla en el pedido."""
+        if (self.cfg.get("upload") or "").lower() == "data":
+            return _data_uri(data)
+        async with self._client(120) as c:
+            r = await c.post(f"{self.BASE}/files/generate-upload-url", json={"content_type": "image/png"},
+                             headers=self._headers())
+            if r.status_code >= 400:
+                raise RuntimeError(f"Higgsfield (subir imagen) {r.status_code}: {r.text[:300]}")
+            j = r.json()
+            up = j.get("upload_url") or j.get("url")
+            pub = j.get("public_url") or j.get("file_url") or j.get("download_url") or j.get("url")
+            if not up or not pub:
+                raise RuntimeError(f"Higgsfield (subir imagen): respuesta inesperada {str(j)[:200]}")
+            p = await c.put(up, content=data, headers={"Content-Type": "image/png"})
+            if p.status_code >= 400:
+                raise RuntimeError(f"Higgsfield (subir imagen) {p.status_code}")
+        return pub
+
+    async def generate(self, prompt, width, height, seed, on_progress: Progress = None) -> bytes:
+        model = self.cfg.get("model_generate") or "higgsfield-ai/soul/v2/standard"
+        self.last_model = model
+        body = {"prompt": prompt, "aspect_ratio": _ratio(width, height) if width and height else "3:4",
+                **self._extra("generate")}
+        j = await self._run(model, body, 600, on_progress)
+        return await _fetch(self._image_url(j))
+
+    async def _edit_many(self, images, prompt, width, height, seed) -> bytes:
+        model = self.cfg.get("model_edit") or "bytedance/seedream/v4/edit"
+        self.last_model = model
+        urls = [await self._upload(i) for i in images[:4]]
+        body = {"prompt": prompt, self.cfg.get("images_field") or "image_urls": urls, **self._extra("edit")}
+        if width and height:
+            body.setdefault("aspect_ratio", _ratio(width, height))
+        j = await self._run(model, body, 600)
+        return await _fetch(self._image_url(j))
+
+    async def video(self, image, prompt, negative, width, height, seed, preset=None, on_progress: Progress = None):
+        model = self.cfg.get("model_video") or "wan/v2.7/image-to-video"
+        self.last_model = model
+        url = await self._upload(image)
+        body = {"prompt": prompt + (f"\nAvoid: {negative}" if negative else ""),
+                self.cfg.get("image_field") or "image_url": url, **self._extra("video")}
+        j = await self._run(model, body, 1500, on_progress)
+        return await _fetch(self._video_url(j)), 30
+
+    async def health(self) -> dict:
+        ok = bool(self.cfg.get("api_key"))
+        return {"ok": ok, "engine": self.name, **({} if ok else {"error": "Falta la clave de Higgsfield"})}
+
+CLOUD_ENGINES = {"higgsfield": HiggsfieldEngine, "openrouter_video": OpenRouterVideoEngine, "openrouter_image": OpenRouterImageEngine, "fal": FalEngine, "replicate": ReplicateEngine, "openai_images": OpenAIImagesEngine,
                  "gemini_image": GeminiImageEngine, "http_engine": HttpEngine}

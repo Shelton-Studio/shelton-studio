@@ -230,3 +230,15 @@ def test_node_that_does_not_answer_sends_the_model_back_to_the_queue(monkeypatch
     assert granja._health["node:x"][1]["ok"] is False          # no se la vuelve a elegir enseguida
     granja._health.clear()
     lora._update(sid, lora_status="canceled")
+
+
+def test_mixed_gpus_in_the_same_pc_have_their_own_profile(monkeypatch):
+    """3090 + RTX PRO 6000 en la misma placa: cada GPU entrena con su perfil."""
+    monkeypatch.setenv("LORA_GPUS", "0,1")
+    monkeypatch.setenv("LORA_GPU_PROFILES", "0:estandar,1:pro")
+    assert lora.local_gpus() == ["0", "1"]
+    assert lora.profile_for_gpu("0") == "estandar" and lora.profile_for_gpu("1") == "pro"
+    assert lora.profile_for_gpu(None) == "estandar"
+    cfg = lora.config_dict("job", "/w", "trig", 100, lora.profile_for_gpu("1"))
+    proc = cfg["config"]["process"][0]
+    assert proc["network"]["linear"] == 32 and proc["model"]["quantize"] is False

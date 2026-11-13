@@ -47,6 +47,33 @@ Arriba del Banco aparece qué está entrenando, con su porcentaje y el tiempo qu
 
 Desde ahí, la fila entrena una modelo por GPU a la vez. Mientras una GPU entrena, solo se pausa el ComfyUI de esa misma GPU.
 
+## 4b. 3090 + RTX PRO 6000 en la misma placa
+
+1. Instala un segundo ComfyUI en la PRO 6000, sin tocar el de la 3090:
+
+```bash
+COMFY_INSTANCE=6000 COMFY_GPU=1 COMFY_PORT=8388 bash /root/shelton-studio/scripts/gpu_setup.sh
+```
+
+   (Mira con `nvidia-smi` qué número tiene cada tarjeta. En este ejemplo la 3090 es la 0 y la PRO 6000 la 1.)
+
+2. En `/root/shelton-studio/.env`:
+
+```
+LORA_GPUS=0,1
+LORA_GPU_PROFILES=0:estandar,1:pro
+```
+
+3. Reinicia Shelton:
+
+```bash
+systemctl restart shelton-studio
+```
+
+4. En Shelton → Conexiones → ComfyUI: agrega `http://127.0.0.1:8388` con «GPU de la placa» = 1 y los roles que quieras (generar, editar…).
+
+Desde ahí: dos entrenamientos a la vez (la 3090 en estándar, la 6000 en pro), y las fotos se reparten a la tarjeta más libre.
+
 ## 5. Tarjetas alquiladas (RunPod / Vast)
 
 **Recomendado:** RunPod → *Secure Cloud* → **RTX PRO 6000** + **Network Volume** montado en `/workspace`. Así los ~20-30 GB de modelos se bajan una sola vez.
