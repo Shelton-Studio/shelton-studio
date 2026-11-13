@@ -263,3 +263,21 @@ def test_uses_her_bank_lora_engine_by_default():
     assert privado.parse_request("foto de Valeria con sdxl")["preset"] == "sdxl"
     cfg, _ = privado._engine("zimage", "")
     assert cfg["preset"] == "fast"
+
+
+def test_valentina_con_sdxl_uses_her_sdxl_version():
+    """«Valentina con sdxl» usa «Valentina · SDXL» (su LoRA SDXL), que hereda la confirmación de la original."""
+    from app import lora
+    init_db()
+    with session() as s:
+        sub = Subject(name="Ámbar", kind="person", description="mujer inventada de 30 años",
+                      lora_status="ready", lora_name="ambar.safetensors")
+        s.add(sub)
+        s.flush()
+        sid = sub.id
+    privado.confirm(sid, "admin", True, True)
+    var = lora.make_variant(sid, "sdxl")
+    lora._update(var["id"], lora_status="ready", lora_name="ambar_sdxl.safetensors")
+    p = privado.parse_request("hazme una foto de Ámbar con sdxl en la playa")
+    assert p["subject"]["name"] == "Ámbar · SDXL" and p["preset"] == "sdxl" and "Ámbar" not in p["prompt"]
+    assert privado.parse_request("hazme una foto de Ámbar en la playa")["preset"] == "zimage"
