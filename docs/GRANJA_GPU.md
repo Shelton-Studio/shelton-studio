@@ -122,3 +122,32 @@ bash /workspace/start_worker.sh &
 - Todo pasa por Tailscale; el trabajador pide token.
 - Las fotos se borran del nodo al terminar cada entrenamiento.
 - Claves (Tailscale, RunPod, tokens) nunca en el chat ni en el repositorio.
+
+
+## 7. SDXL y Flux (motores locales)
+
+**Bajar los modelos** en el ComfyUI de la placa (3090) y en el de la PRO 6000 si es otro:
+
+```bash
+/root/ComfyUI/venv/bin/python /root/shelton-studio/scripts/download_models.py --comfy /root/ComfyUI sdxl flux
+```
+
+- `sdxl`: RealVisXL V5 (~7 GB, hiperrealista).
+- `flux`: Flux.1 Dev fp8 todo en uno (~17 GB).
+- Otros checkpoints de SDXL (Pony, CyberRealistic…) se bajan a mano y van en `ComfyUI/models/checkpoints/`. Para usarlos, en la conexión ComfyUI se pone su nombre en «Checkpoint».
+
+**Usarlos:** en el chat, en el selector «Motor», elegir **SDXL · RealVisXL** o **Flux.1 Dev**. También se puede poner `preset` = `sdxl` / `flux` en una conexión ComfyUI (por ejemplo, la de la PRO 6000 en Flux).
+
+**La cara de cada modelo en SDXL / Flux:** en el Banco, **«➕ Versión SDXL / Flux»** crea «Nombre · SDXL» o «Nombre · Flux» con las mismas fotos. Se entrena con el botón de siempre y queda su propia LoRA para ese motor. Shelton nunca mezcla una LoRA con un motor que no es el suyo.
+
+**Entrenar LoRA de Flux** pide aceptar la licencia de FLUX.1-dev en Hugging Face (con la cuenta que se use) y entrar en la placa con:
+
+```bash
+/root/ai-toolkit/venv/bin/hf auth login
+```
+
+Flux entrena mucho mejor en la RTX PRO 6000 (perfil pro). En la 3090 entra con el perfil estándar (comprimido), pero es más lento.
+
+**Licencia:** FLUX.1-dev tiene licencia no comercial para el modelo. Antes de usarlo para trabajo pago de la empresa, revisen la licencia de Black Forest Labs (tienen licencia comercial). RealVisXL / SDXL tienen licencias más abiertas.
+
+**Contenido adulto:** solo con modelos inventadas y mayores de edad. Las fotos de entrenamiento también tienen que ser generadas, no de personas reales.

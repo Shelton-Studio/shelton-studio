@@ -2,6 +2,7 @@
 
 Se configura desde .env o desde una conexión "ComfyUI" en la web (puedes tener varias: 3050, 3090...).
 """
+import os
 import uuid
 
 from app.comfyui.client import ComfyUIClient, ComfyUIError, fill_workflow, load_workflow, placeholders
@@ -20,7 +21,17 @@ PRESETS = {
                 "gen_vae": settings.EDIT_VAE, "gen_lora": settings.QWEN_IMAGE_LORA, "gen_steps": settings.QWEN_IMAGE_STEPS},
     "lite": {"workflow_generate": "z_image_turbo_gguf.json", "gen_unet": "z_image_turbo-Q4_K_M.gguf",
              "gen_clip": settings.GEN_CLIP, "gen_vae": settings.GEN_VAE, "gen_steps": settings.GEN_STEPS},
+    # SDXL (RealVisXL u otro checkpoint: Pony, CyberRealistic… en models/checkpoints)
+    "sdxl": {"workflow_generate": "sdxl.json", "gen_ckpt": os.getenv("SDXL_CKPT", "RealVisXL_V5.0_fp16.safetensors"),
+             "gen_steps": int(os.getenv("SDXL_STEPS", "30")), "gen_cfg": float(os.getenv("SDXL_CFG", "5.0"))},
+    # Flux.1 Dev (checkpoint fp8 todo en uno de Comfy-Org)
+    "flux": {"workflow_generate": "flux_dev.json", "gen_ckpt": os.getenv("FLUX_CKPT", "flux1-dev-fp8.safetensors"),
+             "gen_steps": int(os.getenv("FLUX_STEPS", "20")), "gen_guidance": float(os.getenv("FLUX_GUIDANCE", "3.5"))},
 }
+# Arquitectura de cada perfil: una LoRA solo sirve en el mismo modelo base con el que se entrenó
+PRESET_ARCH = {"fast": "zimage", "lite": "zimage", "quality": "qwen", "sdxl": "sdxl", "flux": "flux"}
+SDXL_NEGATIVE = ("lowres, blurry, bad anatomy, bad hands, extra fingers, deformed, disfigured, watermark, text, "
+                 "logo, cartoon, 3d render, plastic skin, oversaturated")
 
 
 VIDEO_PRESETS = {
@@ -39,7 +50,9 @@ class ComfyEngine:
 
     def __init__(self, cfg: dict | None = None):
         cfg = {k: v for k, v in (cfg or {}).items() if v not in (None, "")}
-        preset = PRESETS.get(cfg.get("preset") or settings.GEN_PRESET, {})
+        pname = cfg.get("preset") or settings.GEN_PRESET
+        preset = PRESETS.get(pname, {})
+        self.arch = PRESET_ARCH.get(pname, "zimage") if preset else (cfg.get("arch") or "zimage")
         if not cfg.get("preset") and settings.GEN_PRESET == "custom":
             preset = {}
         cfg = {**preset, **cfg}
@@ -55,7 +68,10 @@ class ComfyEngine:
         self.values = {
             "generate": {"unet": cfg.get("gen_unet", settings.GEN_UNET), "clip": cfg.get("gen_clip", settings.GEN_CLIP),
                          "vae": cfg.get("gen_vae", settings.GEN_VAE), "steps": int(cfg.get("gen_steps", settings.GEN_STEPS)),
-                         "lora": cfg.get("gen_lora", settings.QWEN_IMAGE_LORA)},
+                         "lora": cfg.get("gen_lora", settings.QWEN_IMAGE_LORA),
+                         "ckpt": cfg.get("gen_ckpt", ""), "cfg": float(cfg.get("gen_cfg", 5.0)),
+                         "guidance": float(cfg.get("gen_guidance", 3.5)),
+                         "negative": cfg.get("gen_negative", SDXL_NEGATIVE)},
             "edit": {"unet": settings.EDIT_UNET, "clip": settings.EDIT_CLIP, "vae": settings.EDIT_VAE,
                      "lora": settings.EDIT_LORA, "steps": settings.EDIT_STEPS},
         }
@@ -207,7 +223,8 @@ def _attach_extra_refs(wf: dict, names: list[str]) -> None:
 
 def inject_loras(wf: dict, loras: list[tuple[str, float]]) -> dict:
     """Agrega nodos LoraLoaderModelOnly entre el modelo base (UNETLoader/UnetLoaderGGUF) y lo que lo usa."""
-    base = next((k for k, v in wf.items() if isinstance(v, dict) and v.get("class_type") in ("UNETLoader", "UnetLoaderGGUF")), None)
+    base = next((k for k, v in wf.items() if isinstance(v, dict)
+                 and v.get("class_type") in ("UNETLoader", "UnetLoaderGGUF", "CheckpointLoaderSimple")), None)
     if not base or not loras:
         return wf
     prev = base

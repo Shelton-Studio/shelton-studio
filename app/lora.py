@@ -182,10 +182,45 @@ PROFILES = {
 }
 
 
-def config_dict(name: str, root: str, trigger: str, steps: int, profile: str = "estandar") -> dict:
-    """Configuración de ai-toolkit para Z-Image Turbo. root = carpeta de trabajo (local o la del nodo remoto).
-    Siempre sobre Z-Image Turbo: así la LoRA sirve para generar en las 3090 de la placa."""
+BASES = {"zimage": "Z-Image Turbo", "sdxl": "SDXL", "flux": "Flux.1 Dev"}
+
+
+def base_of(subject_id: str) -> str:
+    """Modelo base de la LoRA de este modelo del banco (zimage por defecto; las «versiones» SDXL/Flux lo cambian)."""
+    with session() as s:
+        sub = s.get(Subject, subject_id)
+        b = ((sub.lora_info or {}).get("base") if sub else None) or "zimage"
+    return b if b in BASES else "zimage"
+
+
+def _arch_parts(base: str, pf: dict, trigger: str) -> tuple[dict, dict, dict]:
+    """(modelo, ajustes de entrenamiento, muestras) de ai-toolkit para cada modelo base."""
+    if base == "sdxl":
+        ckpt = os.getenv("SDXL_TRAIN_MODEL") or str(Path(settings.COMFY_LORA_DIR).expanduser().parent / "checkpoints"
+                                                     / os.getenv("SDXL_CKPT", "RealVisXL_V5.0_fp16.safetensors"))
+        return ({"name_or_path": ckpt, "is_xl": True, "quantize": False},
+                {"noise_scheduler": "ddpm", "lr": 1e-4},
+                {"sampler": "ddpm", "sample_every": 100000, "width": 1024, "height": 1024,
+                 "prompts": [f"a photo of {trigger}"], "guidance_scale": 5, "sample_steps": 25})
+    if base == "flux":
+        return ({"name_or_path": os.getenv("FLUX_TRAIN_MODEL", "black-forest-labs/FLUX.1-dev"), "is_flux": True,
+                 "quantize": pf["quantize"] or pf["low_vram"], "low_vram": pf["low_vram"]},
+                {"noise_scheduler": "flowmatch", "lr": 1e-4},
+                {"sampler": "flowmatch", "sample_every": 100000, "width": 1024, "height": 1024,
+                 "prompts": [f"a photo of {trigger}"], "guidance_scale": 4, "sample_steps": 20})
+    return ({"name_or_path": "Tongyi-MAI/Z-Image-Turbo", "arch": "zimage:turbo", "quantize": pf["quantize"],
+             "qtype": "qfloat8", "quantize_te": pf["quantize"], "low_vram": pf["low_vram"],
+             "assistant_lora_path": "ostris/zimage_turbo_training_adapter/zimage_turbo_training_adapter_v2.safetensors"},
+            {"noise_scheduler": "flowmatch", "timestep_type": "weighted", "lr": 1e-4},
+            {"sampler": "flowmatch", "sample_every": 100000, "width": 1024, "height": 1024,
+             "prompts": [f"a photo of {trigger}"], "guidance_scale": 1, "sample_steps": 9})
+
+
+def config_dict(name: str, root: str, trigger: str, steps: int, profile: str = "estandar", base: str = "zimage") -> dict:
+    """Configuración de ai-toolkit. root = carpeta de trabajo (local o la del nodo remoto).
+    base: zimage (por defecto, la de siempre), sdxl o flux (las «versiones» de un modelo para esos motores)."""
     pf = PROFILES.get(profile, PROFILES["estandar"])
+    model, train_extra, sample = _arch_parts(base, pf, trigger)
     return {"job": "extension", "config": {"name": name, "process": [{
         "type": "sd_trainer", "training_folder": f"{root}/output", "device": "cuda:0", "trigger_word": trigger,
         "network": {"type": "lora", "linear": pf["rank"], "linear_alpha": pf["rank"]},
@@ -193,19 +228,15 @@ def config_dict(name: str, root: str, trigger: str, steps: int, profile: str = "
         "datasets": [{"folder_path": f"{root}/dataset", "caption_ext": "txt", "caption_dropout_rate": 0.05,
                       "shuffle_tokens": False, "cache_latents_to_disk": True, "resolution": pf["resolution"]}],
         "train": {"batch_size": 1, "steps": int(steps), "gradient_accumulation": 1, "train_unet": True,
-                  "train_text_encoder": False, "gradient_checkpointing": True, "noise_scheduler": "flowmatch",
-                  "timestep_type": "weighted", "optimizer": "adamw8bit", "lr": 1e-4, "dtype": "bf16",
-                  "unload_text_encoder": False, "disable_sampling": True},
-        "model": {"name_or_path": "Tongyi-MAI/Z-Image-Turbo", "arch": "zimage:turbo", "quantize": pf["quantize"],
-                  "qtype": "qfloat8", "quantize_te": pf["quantize"], "low_vram": pf["low_vram"],
-                  "assistant_lora_path": "ostris/zimage_turbo_training_adapter/zimage_turbo_training_adapter_v2.safetensors"},
-        "sample": {"sampler": "flowmatch", "sample_every": 100000, "width": 1024, "height": 1024,
-                   "prompts": [f"a photo of {trigger}"], "guidance_scale": 1, "sample_steps": 9},
-    }]}, "meta": {"name": name, "version": "1.0"}}
+                  "train_text_encoder": False, "gradient_checkpointing": True, "optimizer": "adamw8bit",
+                  "dtype": "bf16", "unload_text_encoder": False, "disable_sampling": True, **train_extra},
+        "model": model,
+        "sample": sample,
+    }]}, "meta": {"name": name, "version": "1.0", "base": base}}
 
 
-def _config(name: str, work: Path, trigger: str, steps: int, profile: str = "estandar") -> Path:
-    cfg = config_dict(name, str(work), trigger, steps, profile)
+def _config(name: str, work: Path, trigger: str, steps: int, profile: str = "estandar", base: str = "zimage") -> Path:
+    cfg = config_dict(name, str(work), trigger, steps, profile, base)
     path = work / "config.json"
     path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     return path
@@ -474,7 +505,7 @@ async def _run(subject_id: str, steps: int, base: int = 0, mode: str = "restart"
     ctx = await _pre(subject_id, mode, base, profile_for_gpu(gpu))
     if not ctx:
         return
-    cfg = _config(ctx["job"], ctx["work"], ctx["trigger"], steps, profile_for_gpu(gpu))
+    cfg = _config(ctx["job"], ctx["work"], ctx["trigger"], steps, profile_for_gpu(gpu), base_of(subject_id))
     t0 = time.time()
     _update(subject_id, lora_status="training", lora_progress=0, lora_trigger=ctx["trigger"],
             info={"images": ctx["n"], "steps": steps, "from_step": ctx["base"], "mode": mode, "requeued": False,
@@ -703,7 +734,8 @@ async def _finish(subject_id: str, ctx: dict, steps: int, final: Path | None, t0
     mins = round((time.time() - t0) / 60)
     try:
         from app.consumo import record
-        record("lora", provider, "Z-Image Turbo", seconds=time.time() - t0, agent="lora_trainer", cost_usd=cost_usd,
+        record("lora", provider, BASES.get(base_of(subject_id), "Z-Image Turbo"), seconds=time.time() - t0,
+               agent="lora_trainer", cost_usd=cost_usd,
                note=f"LoRA de {name_human}: {base} → {steps} pasos ({n} fotos){' · ' + where if where else ''}")
     except Exception:  # noqa: BLE001
         log.warning("No pude registrar el consumo del entrenamiento", exc_info=True)
@@ -1016,6 +1048,33 @@ async def _resume(sid: str, item: dict) -> None:
     _publish_queue()
 
 
+def make_variant(subject_id: str, base: str) -> dict:
+    """Crea «<nombre> · SDXL» o «<nombre> · Flux»: mismas fotos y descripción, con su propia LoRA para ese motor.
+    El modelo original y su LoRA de Z-Image no se tocan."""
+    if base not in ("sdxl", "flux"):
+        raise ValueError("Elige sdxl o flux")
+    from app.serialize import subject_dict
+    with session() as s:
+        src = s.get(Subject, subject_id)
+        if not src:
+            raise ValueError("Ese modelo no existe")
+        name = f"{src.name} · {'Flux' if base == 'flux' else 'SDXL'}"
+        if s.query(Subject).filter(Subject.name == name).first():
+            raise ValueError(f"Ya existe «{name}»")
+        new = Subject(name=name, kind=src.kind, description=src.description, notes=src.notes,
+                      references=list(src.references or []), lora_info={"base": base, "variant_of": src.id})
+        for f in ("voice_path", "voice_style"):
+            if hasattr(src, f) and hasattr(new, f):
+                setattr(new, f, getattr(src, f))
+        s.add(new)
+        s.flush()
+        return subject_dict(new)
+
+
+def engine_arch(engine) -> str:
+    return getattr(engine, "arch", "zimage") or "zimage"
+
+
 def strength_of(subject: Subject) -> float:
     try:
         v = float((subject.lora_info or {}).get("strength") or 0)
@@ -1026,6 +1085,14 @@ def strength_of(subject: Subject) -> float:
 
 def strengths_for(subjects: list[Subject]) -> list[float]:
     return [strength_of(s) for s in subjects]
+
+
+def loras_for_engine(subjects: list[Subject], engine) -> list[tuple[str, str]]:
+    """Como loras_for, pero solo si cada LoRA es del mismo modelo base que el motor (nunca se mezclan)."""
+    arch = engine_arch(engine)
+    if any(((s.lora_info or {}).get("base") or "zimage") != arch for s in subjects):
+        return []
+    return loras_for(subjects)
 
 
 def loras_for(subjects: list[Subject]) -> list[tuple[str, str]]:

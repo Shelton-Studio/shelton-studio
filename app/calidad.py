@@ -116,10 +116,13 @@ def enhance(wf: dict, opts: dict, nodes: set) -> list[str]:
         image = ["shl_decode", 0]
         done.append("detalle")
     clip_loader = next(iter(_find(wf, "CLIPLoader") + _find(wf, "DualCLIPLoader")), None)
-    if opts.get("face", True) and clip_loader and all(n in nodes for n in FACE_NODES):
+    clip_ref = [clip_loader, 0] if clip_loader else None
+    if not clip_ref and _find(wf, "CheckpointLoaderSimple"):
+        clip_ref = [_find(wf, "CheckpointLoaderSimple")[0], 1]
+    if opts.get("face", True) and clip_ref and all(n in nodes for n in FACE_NODES):
         wf["shl_facedet"] = {"class_type": "UltralyticsDetectorProvider", "inputs": {"model_name": FACE_MODEL}}
         wf["shl_face"] = {"class_type": "FaceDetailer", "inputs": {
-            "image": image, "model": k["model"], "clip": [clip_loader, 0], "vae": vae,
+            "image": image, "model": k["model"], "clip": clip_ref, "vae": vae,
             "positive": k["positive"], "negative": k["negative"], "bbox_detector": ["shl_facedet", 0],
             "guide_size": 768, "guide_size_for": True, "max_size": 1536, "seed": k["seed"], "steps": k["steps"],
             "cfg": k["cfg"], "sampler_name": k["sampler_name"], "scheduler": k["scheduler"], "denoise": 0.4,
