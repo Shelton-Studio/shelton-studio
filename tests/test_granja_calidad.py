@@ -305,7 +305,8 @@ def test_qwen_professional_lora_trains_only_on_big_cards(monkeypatch):
     async def ok(n, fresh=False):
         return {"ok": True, "free": 1}
     monkeypatch.setattr(granja, "health", ok)
-    assert asyncio.run(granja.free_slot({}))["id"] == "local:0"             # Z-Image: la placa primero, como siempre
+    assert asyncio.run(granja.free_slot({}))["id"] == "n1"                  # la tarjeta alquilada prendida va primero
+    assert asyncio.run(granja.free_slot({"n1": 1}))["id"] == "local:0"      # llena: recién ahí la placa
     assert asyncio.run(granja.free_slot({}, big=True))["id"] == "n1"         # Qwen: solo la tarjeta grande
     assert asyncio.run(granja.free_slot({"n1": 1}, big=True)) is None        # si está ocupada, espera (no usa la 3090)
 

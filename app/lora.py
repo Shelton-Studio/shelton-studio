@@ -710,8 +710,8 @@ async def _follow(subject_id: str, state: dict, steps: int) -> tuple[int | None,
                 if now_t - last_pub > 5 or catching_up:
                     rate = spp_now or spp_hint
                     eta = round(rate * (steps - done) / 60) if rate else None
-                    label = (f"Entrenando: paso {done} de {steps} (esta sesión: {done - start_at} de {session_total})"
-                             if start_at else f"Entrenando: paso {done} de {steps}")
+                    label = (f"🦎 Entrenando en la placa (3090): paso {done} de {steps} (esta sesión: {done - start_at} de {session_total})"
+                             if start_at else f"🦎 Entrenando en la placa (3090): paso {done} de {steps}")
                     _update(subject_id, lora_progress=min(99.9, pct),
                             info={"phase": label, "eta_min": eta, "step": done,
                                   **({"sec_per_step": round(spp_now, 3)} if spp_now else {})})
