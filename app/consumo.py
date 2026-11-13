@@ -41,7 +41,7 @@ PROVIDERS = {"openrouter": "OpenRouter", "openrouter_image": "OpenRouter", "open
              "openai_images": "OpenAI", "gemini_image": "Google Gemini", "http_engine": "API propia",
              "elevenlabs": "ElevenLabs", "http_tts": "API propia", "comfyui": "GPU local · ComfyUI",
              "local_tts": "GPU local · voz", "whisper": "Local · Whisper", "ai-toolkit": "GPU local · ai-toolkit",
-             "mock": "Simulado (demo)", "cloud": "Nube"}
+             "mock": "Simulado (demo)", "cloud": "Nube", "higgsfield": "Higgsfield"}
 LOCAL = {"comfyui", "local_tts", "whisper", "ai-toolkit", "mock"}
 
 # Precio por millón de tokens (entrada, salida) cuando el proveedor no informa el costo
@@ -52,6 +52,7 @@ DEFAULT_TOKEN_PRICE = (3, 15)
 UNIT_PRICES = {("fal", "imagen"): 0.03, ("fal", "video"): 0.40, ("replicate", "imagen"): 0.03,
                ("replicate", "video"): 0.40, ("openai_images", "imagen"): 0.04, ("gemini_image", "imagen"): 0.039,
                ("openrouter_image", "imagen"): 0.039, ("openrouter_video", "video"): 0.50,
+               ("higgsfield", "imagen"): 0.05, ("higgsfield", "video"): 0.60,
                ("elevenlabs", "voz"): 0.03, ("openrouter_tts", "voz"): 0.01, ("openrouter", "transcripcion"): 0.002}
 DEFAULT_GPU_WATTS = 300.0
 SAMPLE_EVERY = 30

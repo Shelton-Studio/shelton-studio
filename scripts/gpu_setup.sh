@@ -17,6 +17,11 @@ die() { printf "\n\033[1;31m✖ %s\033[0m\n" "$*"; exit 1; }
 SHELTON_DIR="${SHELTON_DIR:-$HOME/shelton-studio}"
 COMFY="${COMFY_DIR:-$HOME/ComfyUI}"
 COMFY_PORT="${COMFY_PORT:-8288}"
+# Otra GPU en la misma placa (ej. la RTX PRO 6000): un ComfyUI más, en esa GPU y en otro puerto, sin tocar el primero
+#   COMFY_INSTANCE=6000 COMFY_GPU=1 COMFY_PORT=8388 bash gpu_setup.sh
+COMFY_INSTANCE="${COMFY_INSTANCE:-}"
+COMFY_GPU="${COMFY_GPU:-}"
+SVC="shelton-studio-comfy${COMFY_INSTANCE:+-$COMFY_INSTANCE}"
 VOZ_PORT="${VOZ_PORT:-8289}"
 port_busy() { python3 -c "import socket,sys;s=socket.socket();s.settimeout(.3);sys.exit(0 if s.connect_ex(('127.0.0.1',int(sys.argv[1])))==0 else 1)" "$1"; }
 [ "$(id -u)" = "0" ] || die "Córrelo como root: sudo -i y luego este comando"
@@ -31,7 +36,7 @@ ok "GPU lista"
 USED=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -n1)
 [ "${USED:-0}" -gt 4000 ] && echo "  ⚠ La GPU ya tiene ${USED} MB en uso por otros programas: los modelos grandes (video 14B) pueden quedarse sin memoria. Coordina con quien los usa."
 for P in "$COMFY_PORT" "$VOZ_PORT"; do
-  if port_busy "$P" && ! systemctl is-active -q shelton-studio-comfy shelton-studio-voz 2>/dev/null; then
+  if port_busy "$P" && ! systemctl is-active -q "$SVC" shelton-studio-voz 2>/dev/null; then
     die "El puerto $P ya lo usa otro programa. Elige otros: COMFY_PORT=8388 VOZ_PORT=8389 bash $0"
   fi
 done
@@ -48,13 +53,14 @@ else git clone -q https://github.com/comfyanonymous/ComfyUI "$COMFY" && ok "Desc
 say "Calidad máxima: mejora de rostro (Impact Pack)"
 bash "$SHELTON_DIR/scripts/quality_nodes.sh" "$COMFY" || echo "  ⚠ No se pudo instalar la mejora de rostro: la calidad máxima funciona sin ella"
 
-cat > /etc/systemd/system/shelton-studio-comfy.service <<UNIT
+cat > "/etc/systemd/system/${SVC}.service" <<UNIT
 [Unit]
 Description=ComfyUI (IA local de Shelton)
 After=network-online.target
 
 [Service]
 WorkingDirectory=${COMFY}
+${COMFY_GPU:+Environment=CUDA_VISIBLE_DEVICES=${COMFY_GPU}}
 ExecStart=${COMFY}/venv/bin/python main.py --listen 127.0.0.1 --port ${COMFY_PORT} ${COMFY_ARGS:---disable-smart-memory}
 Restart=always
 RestartSec=5
@@ -62,8 +68,13 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 UNIT
-systemctl daemon-reload && systemctl enable -q shelton-studio-comfy && systemctl restart shelton-studio-comfy
-ok "Servicio shelton-studio-comfy en 127.0.0.1:${COMFY_PORT}"
+systemctl daemon-reload && systemctl enable -q "$SVC" && systemctl restart "$SVC"
+ok "Servicio $SVC en 127.0.0.1:${COMFY_PORT}${COMFY_GPU:+ (GPU $COMFY_GPU)}"
+if [ -n "$COMFY_INSTANCE" ]; then
+  ok "Listo. En Shelton: Conexiones → Agregar → ComfyUI con URL http://127.0.0.1:${COMFY_PORT} y «GPU de la placa» = ${COMFY_GPU:-0}"
+  echo "  Y en $SHELTON_DIR/.env: LORA_GPUS con las dos GPU (ej. 0,1) y LORA_GPU_PROFILES (ej. 0:estandar,1:pro); después: systemctl restart shelton-studio"
+  exit 0
+fi
 
 say "Voz local (Chatterbox)"
 TTS="$SHELTON_DIR/tts_server"

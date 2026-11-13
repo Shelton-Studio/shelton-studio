@@ -471,10 +471,10 @@ async def _pre(subject_id: str, mode: str, base: int, profile: str = "estandar")
 
 
 async def _run(subject_id: str, steps: int, base: int = 0, mode: str = "restart", gpu: str | None = None) -> None:
-    ctx = await _pre(subject_id, mode, base, _local_profile())
+    ctx = await _pre(subject_id, mode, base, profile_for_gpu(gpu))
     if not ctx:
         return
-    cfg = _config(ctx["job"], ctx["work"], ctx["trigger"], steps, _local_profile())
+    cfg = _config(ctx["job"], ctx["work"], ctx["trigger"], steps, profile_for_gpu(gpu))
     t0 = time.time()
     _update(subject_id, lora_status="training", lora_progress=0, lora_trigger=ctx["trigger"],
             info={"images": ctx["n"], "steps": steps, "from_step": ctx["base"], "mode": mode, "requeued": False,
@@ -724,6 +724,17 @@ def local_gpus() -> list[str]:
     """GPU de la placa que pueden entrenar (LORA_GPUS=0,1,2). Por defecto la primera."""
     raw = os.getenv("LORA_GPUS", "0").strip()
     return [g.strip() for g in raw.split(",") if g.strip()] or ["0"]
+
+
+def profile_for_gpu(gpu: str | None) -> str:
+    """Perfil de entrenamiento de cada GPU de la placa. Con tarjetas distintas (ej. 3090 + RTX PRO 6000):
+    LORA_GPU_PROFILES=0:estandar,1:pro. Si no se indica, el perfil general (LORA_LOCAL_PROFILE)."""
+    raw = os.getenv("LORA_GPU_PROFILES", "")
+    for part in raw.split(","):
+        k, _, v = part.partition(":")
+        if gpu is not None and k.strip() == str(gpu) and v.strip().lower() in PROFILES:
+            return v.strip().lower()
+    return _local_profile()
 
 
 def _local_profile() -> str:

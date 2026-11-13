@@ -59,7 +59,7 @@ def local_slots() -> list[dict]:
         return []
     gpus = lora.local_gpus()
     return [{"id": f"local:{g}", "kind": "local", "gpu": g, "slots": 1,
-             "label": "Placa" if len(gpus) == 1 else f"Placa · GPU {g}", "profile": lora._local_profile()} for g in gpus]
+             "label": "Placa" if len(gpus) == 1 else f"Placa · GPU {g}", "profile": lora.profile_for_gpu(g)} for g in gpus]
 
 
 def _headers(node: dict) -> dict:
