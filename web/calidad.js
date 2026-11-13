@@ -178,7 +178,7 @@ VIEWS.banco = async (el) => {
   $$(".subject-card").forEach((card) => {
     const sid = $("[data-del]", card)?.dataset.del, s = byId[sid];
     if (!s || $("[data-lrtx]", card) || !["person", "pet", "creature"].includes(s.kind)) return;
-    if (["training", "queued"].includes(s.lora_status)) return;
+    if (["training", "queued"].includes(s.lora?.status)) return;      // ya está entrenando o en la fila
     const b = document.createElement("button");
     b.className = "btn sm"; b.dataset.lrtx = sid; b.textContent = `⚡ Entrenar en ${node.label}`;
     b.title = "Lo mismo que Entrenar, pero en la tarjeta rápida (la RTX alquilada). Sigue donde quedó su LoRA.";
