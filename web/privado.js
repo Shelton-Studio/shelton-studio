@@ -34,7 +34,7 @@ VIEWS.privado = async (el) => {
           ${m.lora_ready ? `<span class="chip">${esc(m.base.toUpperCase())}</span>` : ""}
           ${m.usable ? '<span class="chip good">Confirmada</span>' : m.confirmed ? `<span class="chip bad" title="${esc(m.why)}">Bloqueada</span>`
             : `<button class="btn sm" data-pvok="${esc(m.id)}" data-pvname="${esc(m.name)}">Confirmar +18 e inventada</button>`}</div>`).join("") || empty("👥", "No hay modelos de tipo persona en el banco.")}</div>
-        <div class="faint small" style="margin-top:8px">Para que salga <b>con su cara</b>, la modelo necesita una LoRA del mismo motor: en el Banco, «➕ Versión SDXL / Flux» y entrenarla.</div>
+        <div class="faint small" style="margin-top:8px">Para que salga <b>con su cara</b>, la modelo necesita su LoRA entrenada (la etiqueta muestra el motor). Nómbrala en el chat y uso su LoRA sola. Las que no tienen etiqueta todavía no tienen LoRA: entrénala en el Banco con el botón de siempre.</div>
       </div>
       <div class="card">
         <b>Generar</b>
