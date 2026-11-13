@@ -78,8 +78,25 @@ def model_dir() -> Path:
     return settings.DATA_DIR / "traductor"
 
 
+def _script():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("shelton_traducir", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def model_ready() -> bool:
-    return any(p.parent.joinpath("model", "model.bin").exists() for p in model_dir().rglob("sentencepiece.model"))
+    try:
+        return _script()._find(model_dir()) is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def files() -> list[str]:
+    """Para diagnosticar: qué hay en la carpeta del traductor."""
+    root = model_dir()
+    return sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file())[:40] if root.exists() else []
 
 
 def status() -> dict:

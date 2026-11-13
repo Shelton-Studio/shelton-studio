@@ -22,11 +22,17 @@ INDEX = "https://raw.githubusercontent.com/argosopentech/argospm-index/main/inde
 
 
 def _find(root: Path) -> tuple[Path, Path] | None:
-    """Carpeta del modelo ctranslate2 y su sentencepiece dentro del paquete descomprimido."""
-    for sp in root.rglob("sentencepiece.model"):
-        model = sp.parent / "model"
-        if (model / "model.bin").exists():
-            return model, sp
+    """Carpeta del modelo ctranslate2 y su tokenizador sentencepiece dentro del paquete descomprimido.
+    Los paquetes cambian un poco entre versiones: busca el model.bin y el .model más cercano (fuera de «stanza»)."""
+    if not root.exists():
+        return None
+    for binf in sorted(root.rglob("model.bin")):
+        model = binf.parent
+        for base in (model, model.parent, model.parent.parent):
+            sps = [p for p in base.rglob("*.model") if "stanza" not in p.parts and p.is_file()]
+            sps.sort(key=lambda p: (p.name != "sentencepiece.model", len(p.parts)))
+            if sps:
+                return model, sps[0]
     return None
 
 
