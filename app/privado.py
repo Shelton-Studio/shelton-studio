@@ -220,18 +220,29 @@ async def generate(by: str, prompt: str, subject_id: str = "", preset: str = "sd
         ckpt = best_checkpoint(await checkpoints())
     from app.engines.comfy import SDXL_NEGATIVE
     neg = ", ".join(x for x in [negative.strip(), SDXL_NEGATIVE, SAFE_NEGATIVE] if x)
+    # SDXL y Flux entienden casi solo inglés: se traduce en la placa (sin IA en la nube). Z-Image entiende español.
+    prompt_en, how = prompt, ""
+    if preset in ("sdxl", "flux"):
+        from app import traductor
+        prompt_en, how = await traductor.to_english(prompt)
+        neg_en, _ = await traductor.to_english(negative or "")
+        if negative and neg_en:
+            neg = ", ".join(x for x in [neg_en, SDXL_NEGATIVE, SAFE_NEGATIVE] if x)
+        why = minor_problem(prompt_en)
+        if why:
+            raise ValueError(f"Bloqueado: el pedido {why}. La Adult Zone es solo para adultos.")
     cfg, engine = _engine(preset, ckpt)
-    full = enrich(f"{trigger}, adult, {prompt}" if trigger else f"adult, {prompt}", preset, ckpt)
+    full = enrich(f"{trigger}, adult, {prompt_en}" if trigger else f"adult, {prompt_en}", preset, ckpt)
     batch = uuid.uuid4().hex[:10]
     for i in range(count):
         _append({"id": f"{batch}-{i}", "batch": batch, "at": datetime.now().isoformat(timespec="seconds"), "by": by,
                  "subject": subject_id and name or "", "subject_id": subject_id or "", "preset": preset,
-                 "ckpt": ckpt, "prompt": prompt,
+                 "ckpt": ckpt, "prompt": prompt, "prompt_en": prompt_en if how else "", "translated": how,
                  "negative": negative, "lora": bool(loras), "status": "queued", "file": "",
                  # todo lo necesario para rehacerla sola si Shelton se reinicia o se corta la conexión
                  "job": {"full": full, "neg": neg, "w": w, "h": h, "loras": [list(x) for x in loras]}})
     asyncio.get_event_loop().create_task(_run(batch, count, engine, cfg, full, neg, w, h, loras))
-    return {"batch": batch, "count": count, "with_lora": bool(loras),
+    return {"batch": batch, "count": count, "with_lora": bool(loras), "translated": how, "prompt_en": prompt_en,
             "note": "" if loras or not subject_id else
             f"{name} todavía no tiene LoRA para {ENGINES[preset]}: sale sin su cara. "
             f"Pídela sin elegir motor (uso el de su LoRA) o créale la versión {ENGINES[preset]} en el Banco."}
@@ -365,7 +376,7 @@ async def checkpoints() -> list[str]:
         info = await ComfyUIClient().object_info("CheckpointLoaderSimple")
         req = info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"]
         opts = req[0] if isinstance(req[0], list) else (req[1] or {}).get("options", [])
-        return sorted(opts)
+        return sorted(o for o in opts if "flux" not in o.lower())   # la lista es de SDXL: Flux va aparte
     except Exception:  # noqa: BLE001
         return []
 
@@ -491,6 +502,11 @@ async def chat(by: str, text: str) -> dict:
     msg = (f"Listo: genero {p['count']} {'foto' if p['count'] == 1 else 'fotos'}{who} en la placa con "
            f"{ENGINES[p['preset']]}{' y su LoRA (aprendida de sus fotos del Banco)' if r['with_lora'] else ''}, formato {p['size']}. "
            "Aparecen abajo en unos segundos.")
+    if r.get("translated") == "placa":
+        msg += f" Se lo pasé al inglés en la placa: «{r['prompt_en'][:300]}»."
+    elif r.get("translated") == "glosario":
+        msg += (" El traductor de la placa todavía no está listo: traduje solo las palabras básicas. "
+                "Para lo más preciso, escribe la descripción en inglés por ahora.")
     if r.get("note"):
         msg += " " + r["note"]
     if not sub and usable_names():
@@ -536,6 +552,15 @@ def private_paths(sid: str) -> list[str]:
     try:
         info = _sub_info(sid)
     except ValueError:
+        return []
+    if info.get("variant_of") and not private_refs(sid):
+        # «Valentina · SDXL» entrena también con las fotos privadas de Valentina (si ahí eligieron usarlas)
+        try:
+            orig = _sub_info(info["variant_of"])
+        except ValueError:
+            return []
+        if orig.get("adult_ok") and (orig.get("train_private") or info.get("train_private")):
+            return [str(_dir() / Path(f).name) for f in private_refs(info["variant_of"])]
         return []
     if not (info.get("adult_ok") and info.get("train_private")):
         return []

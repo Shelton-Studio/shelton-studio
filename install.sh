@@ -42,6 +42,9 @@ venv/bin/pip install -q --upgrade pip >/dev/null
 venv/bin/pip install -q -r requirements.txt
 # Las redes cambian seguido: yt-dlp (el que baja videos por link) siempre a su última versión
 venv/bin/pip install -q -U yt-dlp >/dev/null 2>&1 || true
+# Traductor español → inglés en la placa (para SDXL/Flux en la Adult Zone). Opcional: si no se puede, no frena nada.
+venv/bin/pip install -q ctranslate2 sentencepiece >/dev/null 2>&1 || \
+  { [ -x "$HOME/ComfyUI/venv/bin/pip" ] && "$HOME/ComfyUI/venv/bin/pip" install -q ctranslate2 sentencepiece >/dev/null 2>&1; } || true
 ok "Listo"
 
 if [ ! -f .env ]; then
