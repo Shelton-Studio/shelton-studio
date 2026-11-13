@@ -532,11 +532,17 @@ function renderSelbar() {
   if (!S.selected.size) { slot.innerHTML = ""; return; }
   slot.innerHTML = `<div class="selbar"><b>${S.selected.size} seleccionados</b><div class="grow"></div>
     <button class="btn sm good" data-a="approved">${icon("check", 15)} Aprobar</button><button class="btn sm bad" data-a="rejected">Rechazar</button>
-    <button class="btn sm" data-a="reel">${icon("film", 15)} Hacer reel</button><button class="btn sm" data-a="zip">${icon("download", 15)} ZIP</button><button class="btn sm ghost" data-a="clear">Limpiar</button></div>`;
+    <button class="btn sm" data-a="reel">${icon("film", 15)} Hacer reel</button><button class="btn sm" data-a="zip">${icon("download", 15)} ZIP</button><button class="btn sm" data-a="cancel" title="Corta las que están en cola o haciéndose y libera el lugar">⏹ Cancelar</button><button class="btn sm bad" data-a="delete" title="Borra las seleccionadas (si se estaban haciendo, primero las corta)">🗑 Eliminar</button><button class="btn sm ghost" data-a="clear">Quitar selección</button></div>`;
   $$("[data-a]", slot).forEach((b) => b.onclick = async () => {
     const ids = [...S.selected], a = b.dataset.a;
     if (a === "clear") { S.selected.clear(); $$(".tile.sel").forEach((t) => t.classList.remove("sel")); return renderSelbar(); }
     if (a === "zip") return location.href = `/api/export?ids=${ids.join(",")}`;
+    if (a === "cancel" || a === "delete") {
+      if (a === "delete" && !confirm(`¿Eliminar ${ids.length}? No se puede deshacer.`)) return;
+      await Promise.all(ids.map((id) => a === "cancel" ? api(`/api/posts/${id}/cancel`, { method: "POST" }) : api(`/api/posts/${id}`, { method: "DELETE" })));
+      toast(a === "cancel" ? `${ids.length} cancelados: el lugar quedó libre` : `${ids.length} eliminados`, "good", a === "cancel" ? "⏹" : "🗑");
+      S.selected.clear(); renderSelbar(); return route();
+    }
     if (a === "reel") { const r = await api("/api/reels", { method: "POST", body: { post_ids: ids, idea: "" } }); toast("Montando el reel: las imágenes se animan primero.", "good", "🎬"); S.selected.clear(); renderSelbar(); return openPost(r.id); }
     await Promise.all(ids.map((id) => api(`/api/posts/${id}`, { method: "PATCH", body: { status: a } })));
     toast(`${ids.length} ${a === "approved" ? "aprobados" : "rechazados"}`, a === "approved" ? "good" : "");

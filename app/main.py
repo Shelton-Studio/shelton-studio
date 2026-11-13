@@ -364,8 +364,17 @@ async def patch_post(pid: str, body: PostPatch):
     return data
 
 
+@app.post("/api/posts/{pid}/cancel")
+async def cancel_post(pid: str):
+    """⏹ Cancelar una foto en cola o haciéndose (libera el lugar y la GPU)."""
+    return {"ok": True, "had_job": pipeline.cancel_post(pid)}
+
+
 @app.delete("/api/posts/{pid}")
 async def delete_post(pid: str):
+    with session() as s:
+        if (p := s.get(Post, pid)) and p.status in ("queued", "generating"):
+            pipeline.cancel_post(pid)                  # si se estaba haciendo, primero se corta
     with session() as s:
         if p := s.get(Post, pid):
             s.delete(p)
