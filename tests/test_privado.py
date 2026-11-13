@@ -292,3 +292,19 @@ def test_review_adult_images_privately():
     assert next(x for x in privado.entries() if x["id"] == "rev-0")["review"] == "rejected"
     privado.review("rev-0", None)
     assert next(x for x in privado.entries() if x["id"] == "rev-0")["review"] == ""
+
+
+def test_sdxl_version_trains_with_her_private_photos():
+    """«Valentina · SDXL» aprende también de las fotos privadas de Valentina (si ahí eligieron usarlas)."""
+    from app import lora
+    init_db()
+    sid = _subject("Brisa")
+    privado.confirm(sid, "admin", True, True)
+    privado._append({"id": "br-0", "batch": "br", "at": "2099", "status": "done", "file": "br-0.png", "subject_id": sid})
+    (settings.DATA_DIR / "privado" / "br-0.png").write_bytes(_png("green"))
+    privado.add_ref_from_entry(sid, "br-0")
+    var = lora.make_variant(sid, "sdxl")
+    assert privado.private_paths(var["id"]) == []                 # todavía no eligieron usarlas
+    lora._update(sid, info={"train_private": True})
+    assert len(privado.private_paths(var["id"])) == 1
+    assert any(privado.is_private_path(p) for p in lora.dataset_images(var["id"]))

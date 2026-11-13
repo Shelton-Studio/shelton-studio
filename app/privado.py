@@ -537,6 +537,15 @@ def private_paths(sid: str) -> list[str]:
         info = _sub_info(sid)
     except ValueError:
         return []
+    if info.get("variant_of") and not private_refs(sid):
+        # «Valentina · SDXL» entrena también con las fotos privadas de Valentina (si ahí eligieron usarlas)
+        try:
+            orig = _sub_info(info["variant_of"])
+        except ValueError:
+            return []
+        if orig.get("adult_ok") and (orig.get("train_private") or info.get("train_private")):
+            return [str(_dir() / Path(f).name) for f in private_refs(info["variant_of"])]
+        return []
     if not (info.get("adult_ok") and info.get("train_private")):
         return []
     return [str(_dir() / Path(f).name) for f in private_refs(sid)]
