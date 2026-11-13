@@ -60,11 +60,13 @@ TYPES: dict[str, dict] = {
                               F("model_edit", "Modelo para editar / con referencias", placeholder="bytedance/seedream/v4/edit"),
                               F("model_video", "Modelo de video (imagen a video)", placeholder="wan/v2.7/image-to-video"),
                               F("extra", "Parámetros extra (JSON, opcional)", placeholder='{"resolution": "2K"}')]},
-    "fal": {"category": "engine", "name": "fal.ai", "help": "Modelos en la nube (FLUX, Qwen-Image, Seedream...). Pon el id del endpoint de fal.",
+    "fal": {"category": "engine", "name": "fal.ai", "help": "Todos los modelos de fal (Seedream, FLUX, Imagen, Nano Banana, Kling, Veo…). "
+            "Pega tu clave y listo: los modelos se eligen con el botón «🎨 Modelos» del chat (vacío = el recomendado).",
             "fields": [F("api_key", "API key", "secret", required=True),
-                       F("model_generate", "Endpoint generar", placeholder="fal-ai/qwen-image"),
-                       F("model_edit", "Endpoint editar / referencias", placeholder="fal-ai/qwen-image-edit-plus"),
-                       F("model_video", "Endpoint video", placeholder="fal-ai/kling-video/v2.1/standard/image-to-video")]},
+                       F("model_generate", "Modelo para generar (opcional)", placeholder="fal-ai/bytedance/seedream/v4/text-to-image"),
+                       F("model_edit", "Modelo para editar / referencias (opcional)", placeholder="fal-ai/nano-banana/edit"),
+                       F("model_video", "Modelo de video (opcional)", placeholder="fal-ai/kling-video/v2.1/master/image-to-video"),
+                       F("extra", "Parámetros extra (JSON, opcional)", placeholder='{"num_inference_steps": 30}')]},
     "replicate": {"category": "engine", "name": "Replicate", "fields": [
         F("api_token", "API token", "secret", required=True),
         F("model_generate", "Modelo generar (owner/name)", placeholder="black-forest-labs/flux-1.1-pro"),

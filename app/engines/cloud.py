@@ -68,38 +68,80 @@ class _Base:
 
 # ------------------------------------------------------------------ fal.ai
 class FalEngine(_Base):
+    """fal.ai: cualquier modelo de su catálogo. Cada modelo pide campos un poco distintos: si uno rechaza el pedido
+    (400/422), se reintenta con lo mínimo que todos entienden (prompt, imagen, proporción)."""
     name = "fal"
 
-    async def _run(self, model: str, payload: dict) -> bytes:
-        async with httpx.AsyncClient(timeout=300) as c:
-            r = await c.post(f"https://fal.run/{model}", json=payload,
-                             headers={"Authorization": f"Key {self.cfg['api_key']}"})
-            if r.status_code >= 400:
-                raise RuntimeError(f"fal.ai {r.status_code}: {r.text[:400]}")
-            j = r.json()
-        return await _fetch(j["images"][0]["url"])
+    @staticmethod
+    def _aspect(width, height) -> str:
+        if not (width and height):
+            return "1:1"
+        r = width / height
+        return min({"9:16": 9 / 16, "3:4": 3 / 4, "1:1": 1, "4:3": 4 / 3, "16:9": 16 / 9}.items(),
+                   key=lambda kv: abs(kv[1] - r))[0]
+
+    async def _post(self, model: str, payloads: list[dict], timeout: float) -> dict:
+        last = None
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            for payload in payloads:
+                r = await c.post(f"https://fal.run/{model.strip('/')}", json=payload,
+                                 headers={"Authorization": f"Key {self.cfg['api_key']}"})
+                if r.status_code in (400, 422):
+                    last = r
+                    continue
+                if r.status_code >= 400:
+                    raise RuntimeError(f"fal.ai {r.status_code} ({model}): {r.text[:400]}")
+                return r.json()
+        raise RuntimeError(f"fal.ai {last.status_code} ({model}): {last.text[:400]}")
+
+    async def _run(self, model: str, payload: dict, minimal: dict | None = None) -> bytes:
+        j = await self._post(model, [payload] + ([minimal] if minimal else []), 300)
+        img = (j.get("images") or [None])[0] or j.get("image") or {}
+        url = img.get("url") if isinstance(img, dict) else img
+        if not url:
+            raise RuntimeError(f"fal.ai ({model}) no devolvió imagen: {str(j)[:300]}")
+        return await _fetch(url)
+
+    def _extra(self) -> dict:
+        import json as _json
+        try:
+            return _json.loads(self.cfg.get("extra") or "{}")
+        except ValueError:
+            return {}
 
     async def generate(self, prompt, width, height, seed, on_progress: Progress = None) -> bytes:
-        return await self._run(self.cfg.get("model_generate") or "fal-ai/qwen-image", {
+        model = self.cfg.get("model_generate") or "fal-ai/bytedance/seedream/v4/text-to-image"
+        return await self._run(model, {
             "prompt": prompt, "image_size": {"width": width, "height": height}, "seed": seed,
-            "num_images": 1, "enable_safety_checker": True})
+            "num_images": 1, "enable_safety_checker": True, **self._extra()},
+            {"prompt": prompt, "aspect_ratio": self._aspect(width, height), "num_images": 1})
 
     async def _edit_many(self, images, prompt, width, height, seed) -> bytes:
-        payload = {"prompt": prompt, "image_urls": [_data_uri(i) for i in images[:3]], "seed": seed, "num_images": 1}
+        uris = [_data_uri(i) for i in images[:3]]
+        payload = {"prompt": prompt, "image_urls": uris, "seed": seed, "num_images": 1, **self._extra()}
         if width and height:
             payload["image_size"] = {"width": width, "height": height}
-        return await self._run(self.cfg.get("model_edit") or "fal-ai/qwen-image-edit-plus", payload)
+        model = self.cfg.get("model_edit") or "fal-ai/nano-banana/edit"
+        j_payloads = [payload, {"prompt": prompt, "image_urls": uris, "num_images": 1},
+                      {"prompt": prompt, "image_url": uris[0]}]        # modelos de una sola imagen (Kontext)
+        j = await self._post(model, j_payloads, 300)
+        img = (j.get("images") or [None])[0] or j.get("image") or {}
+        url = img.get("url") if isinstance(img, dict) else img
+        if not url:
+            raise RuntimeError(f"fal.ai ({model}) no devolvió imagen: {str(j)[:300]}")
+        return await _fetch(url)
 
     async def video(self, image, prompt, negative, width, height, seed, preset=None, on_progress: Progress = None):
-        model = self.cfg.get("model_video") or "fal-ai/kling-video/v2.1/standard/image-to-video"
-        async with httpx.AsyncClient(timeout=900) as c:
-            r = await c.post(f"https://fal.run/{model}", headers={"Authorization": f"Key {self.cfg['api_key']}"},
-                             json={"prompt": prompt, "image_url": _data_uri(image), "duration": "5",
-                                   "negative_prompt": negative})
-            if r.status_code >= 400:
-                raise RuntimeError(f"fal.ai {r.status_code}: {r.text[:400]}")
-            j = r.json()
-        return await _fetch(j["video"]["url"]), 30
+        model = self.cfg.get("model_video") or "fal-ai/kling-video/v2.1/master/image-to-video"
+        uri = _data_uri(image)
+        j = await self._post(model, [
+            {"prompt": prompt, "image_url": uri, "duration": "5", "negative_prompt": negative},
+            {"prompt": prompt, "image_url": uri}], 900)
+        vid = j.get("video") or {}
+        url = vid.get("url") if isinstance(vid, dict) else vid
+        if not url:
+            raise RuntimeError(f"fal.ai ({model}) no devolvió video: {str(j)[:300]}")
+        return await _fetch(url), 30
 
     async def health(self) -> dict:
         return {"ok": bool(self.cfg.get("api_key")), "engine": self.name}
