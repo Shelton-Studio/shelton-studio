@@ -528,3 +528,10 @@ audio { width: 100%; height: 40px; }
 .pv-tr { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .pv-tr #pv-en { background: rgba(139, 92, 246, .06); }
 @media (max-width: 720px) { .pv-tr { grid-template-columns: 1fr; } }
+
+/* 🎨 Modelos de cada ecosistema */
+.cm-role { margin-top: 14px; display: grid; gap: 6px; }
+.cm-list { display: grid; gap: 6px; max-height: 320px; overflow: auto; }
+.cm-item { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--line, rgba(255,255,255,.08)); border-radius: 10px; cursor: pointer; }
+.cm-item.on { border-color: rgba(139, 92, 246, .7); background: rgba(139, 92, 246, .08); }
+.cm-item code { word-break: break-all; }
