@@ -288,3 +288,23 @@ def test_variant_for_flux_trains_its_own_lora_and_never_mixes(monkeypatch, tmp_p
         z, f = s.get(Subject, sid), s.get(Subject, v["id"])
         assert lora.loras_for_engine([z], Eng("zimage")) and not lora.loras_for_engine([z], Eng("flux"))
         assert lora.loras_for_engine([f], Eng("flux")) and not lora.loras_for_engine([f], Eng("zimage"))
+
+
+def test_qwen_professional_lora_trains_only_on_big_cards(monkeypatch):
+    """La versión «Qwen» (Profesional) se entrena solo en tarjetas «pro» (RTX PRO 6000) y genera con Calidad máxima."""
+    import asyncio
+    from app import granja, lora
+    big = lora.config_dict("v", "/tmp/x", "vlntn", 1000, profile="pro", base="qwen")["config"]["process"][0]
+    assert big["model"]["arch"] == "qwen_image" and big["model"]["quantize"] is False
+    assert big["train"]["cache_text_embeddings"] is True
+    small = lora.config_dict("v", "/tmp/x", "vlntn", 1000, profile="estandar", base="qwen")["config"]["process"][0]
+    assert small["model"]["quantize"] is True and "uint3" in small["model"]["qtype"]
+    monkeypatch.setattr(granja, "local_slots", lambda: [{"id": "local:0", "slots": 1, "profile": "estandar"}])
+    monkeypatch.setattr(granja, "remote_nodes", lambda: [{"id": "n1", "slots": 1, "profile": "pro", "label": "RTX PRO 6000"}])
+
+    async def ok(n, fresh=False):
+        return {"ok": True, "free": 1}
+    monkeypatch.setattr(granja, "health", ok)
+    assert asyncio.run(granja.free_slot({}))["id"] == "local:0"             # Z-Image: la placa primero, como siempre
+    assert asyncio.run(granja.free_slot({}, big=True))["id"] == "n1"         # Qwen: solo la tarjeta grande
+    assert asyncio.run(granja.free_slot({"n1": 1}, big=True)) is None        # si está ocupada, espera (no usa la 3090)
