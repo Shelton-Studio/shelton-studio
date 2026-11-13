@@ -94,6 +94,7 @@ CATALOG = {
         "generate": [
             _m("fal-ai/nano-banana-pro", "Nano Banana Pro (Google)", "Lo más avanzado de Google: realismo y fidelidad altísimos.", True),
             _m("bytedance/seedream/v5.5/text-to-image", "Seedream 5.5", "Lo último de ByteDance: fotos muy reales y detalladas."),
+            _m("bytedance/seedream/v5/pro/text-to-image", "Seedream 5.0 Pro", "El Seedream que usa la app de Higgsfield: realismo muy alto."),
             _m("fal-ai/flux-2-max", "FLUX 2 Max", "Máxima calidad de FLUX."),
             _m("fal-ai/flux-2-pro", "FLUX 2 Pro", "Muy buena calidad, barato por megapíxel."),
             _m("openai/gpt-image-2", "GPT Image 2 (OpenAI)", "Muy fiel a pedidos largos y con texto."),
@@ -103,7 +104,8 @@ CATALOG = {
         "edit": [
             _m("fal-ai/nano-banana-pro/edit", "Nano Banana Pro Edit (Google)", "El mejor manteniendo la misma cara al editar y combinar referencias.", True),
             _m("fal-ai/nano-banana-2/edit", "Nano Banana 2 Edit (Google)", "Muy bueno con caras, más barato que Pro."),
-            _m("bytedance/seedream/v5/pro/edit", "Seedream 5.0 Pro Edit", "Combina varias referencias con calidad altísima."),
+            _m("bytedance/seedream/v5/pro/edit", "Seedream 5.0 Pro Edit", "Combina varias referencias con calidad altísima (el de la app de Higgsfield)."),
+            _m("bytedance/seedream/v5.5/edit", "Seedream 5.5 Edit", "La versión más nueva de Seedream para editar con referencias."),
             _m("fal-ai/flux-2-pro/edit", "FLUX 2 Pro Edit", "Ediciones precisas y económicas."),
             _m("openai/gpt-image-2/edit", "GPT Image 2 Edit (OpenAI)", "Sigue instrucciones complejas al editar."),
             _m("fal-ai/flux-pro/kontext/max", "FLUX Kontext Max", "Cambios precisos (ropa, fondo) sin tocar el resto."),
