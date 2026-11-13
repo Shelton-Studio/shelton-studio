@@ -70,6 +70,8 @@ from app.lora_compare import router as compare_router  # noqa: E402
 app.include_router(calidad_router)
 app.include_router(granja_router)
 app.include_router(compare_router)
+from app.privado import router as privado_router  # noqa: E402
+app.include_router(privado_router)
 app.mount("/static", StaticFiles(directory=ROOT / "web"), name="static")
 app.mount("/media", StaticFiles(directory=settings.media_dir), name="media")
 (settings.DATA_DIR / "voices").mkdir(parents=True, exist_ok=True)
