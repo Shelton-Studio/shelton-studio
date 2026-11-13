@@ -125,7 +125,7 @@ async def run_remote(subject_id: str, steps: int, base: int, mode: str, node: di
                   "requeued": False,
                   "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "phase": f"Subiendo fotos a {node['label']}",
                   "error": "", "eta_min": None})
-    cfg = config_dict(job, "__JOB__", trigger, steps, node["profile"])
+    cfg = config_dict(job, "__JOB__", trigger, steps, node["profile"], lora.base_of(subject_id))
     async with _client(120) as c:
         _remote_jobs[subject_id] = (node, jid)
         try:

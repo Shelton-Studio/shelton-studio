@@ -242,3 +242,49 @@ def test_mixed_gpus_in_the_same_pc_have_their_own_profile(monkeypatch):
     cfg = lora.config_dict("job", "/w", "trig", 100, lora.profile_for_gpu("1"))
     proc = cfg["config"]["process"][0]
     assert proc["network"]["linear"] == 32 and proc["model"]["quantize"] is False
+
+
+def test_sdxl_and_flux_workflows_with_lora_and_quality():
+    from app.comfyui.client import fill_workflow, placeholders
+    from app.engines.comfy import ComfyEngine, inject_loras
+    for preset, wfname in (("sdxl", "sdxl.json"), ("flux", "flux_dev.json")):
+        e = ComfyEngine({"preset": preset})
+        assert e.arch == preset and e.workflows["generate"] == wfname
+        wf = e._wf("generate", {"prompt": "foto", "width": 896, "height": 1152, "seed": 3})
+        assert not placeholders(wf)
+        inject_loras(wf, [("x.safetensors", 0.8)])
+        ks = next(v for v in wf.values() if v["class_type"] == "KSampler")
+        assert ks["inputs"]["model"] == ["shl_lora_0", 0]              # la LoRA se enchufa al checkpoint
+        assert any(v["inputs"].get("clip") == ["1", 1] for v in wf.values() if v["class_type"] == "CLIPTextEncode")
+        done = calidad.enhance(wf, {"refine": True, "face": True}, {"FaceDetailer", "UltralyticsDetectorProvider"})
+        assert done == ["detalle", "rostro"] and wf["shl_face"]["inputs"]["clip"] == ["1", 1]
+
+
+def test_variant_for_flux_trains_its_own_lora_and_never_mixes(monkeypatch, tmp_path):
+    init_db()
+    _setup(monkeypatch, tmp_path)
+    sid = _subject(9)
+    v = lora.make_variant(sid, "flux")
+    assert v["name"].endswith("· Flux") and lora.base_of(v["id"]) == "flux" and lora.base_of(sid) == "zimage"
+    cfg = lora.config_dict("j", "/w", "t", 100, "pro", "flux")["config"]["process"][0]
+    assert cfg["model"]["is_flux"] and cfg["train"]["noise_scheduler"] == "flowmatch"
+    cfg = lora.config_dict("j", "/w", "t", 100, "estandar", "sdxl")["config"]["process"][0]
+    assert cfg["model"]["is_xl"] and cfg["model"]["name_or_path"].endswith("RealVisXL_V5.0_fp16.safetensors")
+    try:
+        lora.make_variant(sid, "flux")
+    except ValueError as e:
+        assert "Ya existe" in str(e)
+    else:
+        raise AssertionError
+
+    class Eng:
+        def __init__(self, arch):
+            self.arch, self.name = arch, "comfyui"
+    with session() as s:
+        z, f = s.get(Subject, sid), s.get(Subject, v["id"])
+        for x in (z, f):
+            x.lora_status, x.lora_name, x.lora_trigger = "ready", f"{x.id}.safetensors", "trig"
+    with session() as s:
+        z, f = s.get(Subject, sid), s.get(Subject, v["id"])
+        assert lora.loras_for_engine([z], Eng("zimage")) and not lora.loras_for_engine([z], Eng("flux"))
+        assert lora.loras_for_engine([f], Eng("flux")) and not lora.loras_for_engine([f], Eng("zimage"))

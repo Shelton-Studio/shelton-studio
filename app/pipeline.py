@@ -294,7 +294,8 @@ async def _create_post(post_id: str, payload: dict) -> None:
         found = lora_mod.loras_for(subjects)
         if found:
             gen_engine = get_engine("generate", choice)
-            if getattr(gen_engine, "name", "") == "comfyui" and hasattr(gen_engine, "generate_with_loras"):
+            found = lora_mod.loras_for_engine(subjects, gen_engine) if getattr(gen_engine, "name", "") == "comfyui" else found
+            if found and getattr(gen_engine, "name", "") == "comfyui" and hasattr(gen_engine, "generate_with_loras"):
                 from app.agents import training as _tr
                 loras, refs = found, []
                 lora_note = ("The recurring subject(s) below are LEARNED by the image model (custom LoRA). Write each "

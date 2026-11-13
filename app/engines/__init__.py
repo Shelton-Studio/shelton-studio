@@ -52,6 +52,8 @@ PRESET_INFO = {
     "fast": ("Rápido · Z-Image Turbo", "Fotorrealista, ~5-10 s por imagen en una 3090. Ideal para volumen diario."),
     "quality": ("Calidad máxima · Qwen-Image 20B", "Más detalle y el mejor texto dentro de la imagen (carteles, frases). ~2-3x más lento."),
     "lite": ("Lite · Z-Image GGUF", "Para GPUs de 6-8 GB como la 3050. Algo menos de detalle."),
+    "sdxl": ("SDXL · RealVisXL", "Hiperrealismo fotográfico y miles de estilos (Pony, CyberRealistic…). ~10-15 s por imagen."),
+    "flux": ("Flux.1 Dev", "Máximo realismo, manos y texto. Más pesado: ideal en la RTX PRO 6000 (~20-40 s en una 3090)."),
 }
 VIDEO_INFO = {
     "cinema": ("Video cine · Wan 2.2 14B", "Lo mejor en local: 720p, movimiento realista, interpolado a 30 fps. ~2-4 min por clip en una 3090."),

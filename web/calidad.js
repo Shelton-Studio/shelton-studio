@@ -56,6 +56,22 @@ VIEWS.banco = async (el) => {
   const byId = Object.fromEntries(subs.map((s) => [s.id, s]));
   $$(".subject-card").forEach((card) => {
     const sid = $("[data-del]", card)?.dataset.del, s = byId[sid];
+    if (!s || $("[data-lvar]", card) || $(".base-chip", card)) return;
+    const base = (s.lora?.info || {}).base;
+    if (base === "sdxl" || base === "flux") {
+      const chip = document.createElement("span"); chip.className = "chip accent base-chip";
+      chip.textContent = base === "flux" ? "LoRA para Flux" : "LoRA para SDXL"; chip.title = "Su LoRA se entrena y se usa con ese motor";
+      ($(".lora-box", card) || $(".body", card))?.prepend(chip);
+    } else if (s.kind === "person" || s.kind === "pet" || s.kind === "creature") {
+      const b = document.createElement("button");
+      b.className = "btn sm ghost"; b.dataset.lvar = sid; b.textContent = "➕ Versión SDXL / Flux";
+      b.title = "Una copia con las mismas fotos que aprende su cara para el motor SDXL o Flux";
+      b.onclick = () => variantDialog(sid, s.name);
+      ($(".lora-box", card) || $(".body", card))?.append(b);
+    }
+  });
+  $$(".subject-card").forEach((card) => {
+    const sid = $("[data-del]", card)?.dataset.del, s = byId[sid];
     const L = s?.lora || {};
     if (!s || !L.trigger || $("[data-lcmp]", card)) return;
     const b = document.createElement("button");
@@ -127,5 +143,23 @@ function renderCompare(out, job, sid) {
       await api(`/api/subjects/${sid}/lora/choose`, { method: "POST", body: { key: b.dataset.choose, strength: +b.dataset.st } });
       closeModal(); toast("Listo: esa versión queda en uso (y el próximo «seguir entrenando» sigue desde ahí).", "good", "🎓"); route();
     } catch (e) { toast(esc(e.message), "bad"); }
+  });
+}
+
+// ------------------------------------------------------------------ Versión SDXL / Flux de un modelo
+function variantDialog(sid, name) {
+  const box = modal(`➕ Versión de ${esc(name)} para otro motor`, `
+    <div class="hint">Cada motor necesita su propia LoRA: la de Z-Image no sirve en SDXL ni en Flux. Esto crea <b>${esc(name)} · SDXL</b> o <b>${esc(name)} · Flux</b>
+      con las mismas fotos y descripción. Después se entrena con el botón de siempre. La original no cambia.</div>
+    <div class="grid g2" style="gap:10px">
+      <button class="card q-row" data-vb="sdxl" style="text-align:left"><div><b>SDXL</b><div class="faint small">Hiperrealismo (RealVisXL) y miles de estilos. Entrena bien en la 3090.</div></div></button>
+      <button class="card q-row" data-vb="flux" style="text-align:left"><div><b>Flux.1 Dev</b><div class="faint small">El más realista, manos y texto. Ideal entrenarla en la RTX PRO 6000. Pide aceptar la licencia de Flux en Hugging Face.</div></div></button>
+    </div>
+    <div class="faint small">Para generar con ella: en la conversación, elige el motor «SDXL» o «Flux» (o pídeselo a Shelton) y nombra a «${esc(name)} · SDXL» / «· Flux».</div>`,
+    `<button class="btn ghost" onclick="closeModal()">Cerrar</button>`);
+  $$("[data-vb]", box).forEach((b) => b.onclick = async () => {
+    try { const r = await api(`/api/subjects/${sid}/lora/variante`, { method: "POST", body: { base: b.dataset.vb } });
+      closeModal(); toast(`Creada <b>${esc(r.name)}</b>. Ahora entrénala con «🎓 Entrenar LoRA».`, "good", "➕"); route(); }
+    catch (e) { toast(esc(e.message), "bad"); }
   });
 }

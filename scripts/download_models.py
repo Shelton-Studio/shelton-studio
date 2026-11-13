@@ -5,7 +5,9 @@ Uso (en la PC con la GPU):
     python scripts/download_models.py --comfy ~/ComfyUI imagen edicion  # solo algunos grupos
 
 Grupos: imagen (Z-Image Turbo), calidad (Qwen-Image), edicion (Qwen-Image-Edit, banco de modelos),
-video (Wan 2.2 14B), video_rapido (Wan 2.2 5B), sonido (Stable Audio Open).
+video (Wan 2.2 14B), video_rapido (Wan 2.2 5B), sonido (Stable Audio Open),
+sdxl (RealVisXL V5, hiperrealista), flux (Flux.1 Dev fp8, todo en uno).
+Otros checkpoints (Pony, CyberRealistic…) se bajan a mano de su página y van en ComfyUI/models/checkpoints/.
 Busca cada archivo POR NOMBRE dentro de su repositorio de Hugging Face (no depende de la carpeta interna) y lo deja
 en la carpeta de ComfyUI que corresponde. Si ya está, lo salta. Vuelve a correrlo si se corta.
 Stable Audio Open pide aceptar la licencia en Hugging Face y un token: `hf auth login` (o HF_TOKEN).
@@ -42,8 +44,13 @@ MODELS = [
     ("video_rapido", "umt5_xxl_fp8_e4m3fn_scaled.safetensors", "text_encoders", "Comfy-Org/Wan_2.1_ComfyUI_repackaged", 6.7),
     ("sonido", "stable_audio_open_1.0.safetensors", "checkpoints", "stabilityai/stable-audio-open-1.0", 4.9),
     ("sonido", "t5_base.safetensors", "text_encoders", "Comfy-Org/stable-audio-open-1.0_repackaged", 0.9),
+    ("sdxl", "RealVisXL_V5.0_fp16.safetensors", "checkpoints", "SG161222/RealVisXL_V5.0", 6.9),
+    ("flux", "flux1-dev-fp8.safetensors", "checkpoints", "Comfy-Org/flux1-dev", 17.2),
 ]
-GROUPS = ["imagen", "calidad", "edicion", "video", "video_rapido", "sonido"]
+GROUPS = ["imagen", "calidad", "edicion", "video", "video_rapido", "sonido", "sdxl", "flux"]
+# Si el repositorio renombró el archivo, se busca uno parecido (y se guarda con el nombre que espera Shelton)
+ALTERNATIVES = {"RealVisXL_V5.0_fp16.safetensors": ("RealVisXL", ".safetensors", "fp16"),
+                "flux1-dev-fp8.safetensors": ("flux1-dev", ".safetensors", "fp8")}
 
 
 def main() -> int:
@@ -87,7 +94,14 @@ def main() -> int:
     for g, name, folder, repo, gb, dest in todo:
         print(f"\n▶ {name} ({repo})")
         try:
-            match = [f for f in list_repo_files(repo) if f.endswith("/" + name) or f == name]
+            files = list_repo_files(repo)
+            match = [f for f in files if f.endswith("/" + name) or f == name]
+            if not match and name in ALTERNATIVES:
+                start, end, prefer = ALTERNATIVES[name]
+                similar = [f for f in files if Path(f).name.startswith(start) and f.endswith(end) and "/" not in f]
+                match = sorted(similar, key=lambda f: (prefer not in f, len(f)))[:1]
+                if match:
+                    print(f"  (se usa {match[0]})")
             if not match:
                 print(f"  ✖ No está en {repo} con ese nombre. Búscalo en https://huggingface.co/{repo} y déjalo en "
                       f"{dest.parent}/ (si tiene otro nombre, ajusta el nombre en el .env de Shelton).")

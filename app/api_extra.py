@@ -465,6 +465,20 @@ async def lora_use_version(sid: str, body: LoraVersionIn):
         raise HTTPException(404, str(e))
 
 
+class LoraVariantIn(BaseModel):
+    base: str
+
+
+@router.post("/subjects/{sid}/lora/variante")
+async def lora_variant(sid: str, body: LoraVariantIn):
+    """Crea la versión SDXL o Flux de un modelo (mismas fotos, su propia LoRA para ese motor)."""
+    from app import lora
+    try:
+        return lora.make_variant(sid, body.base)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @router.post("/subjects/{sid}/lora/cancel")
 async def lora_cancel(sid: str):
     from app import lora
