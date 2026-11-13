@@ -21,10 +21,16 @@ def _data_uri(data: bytes) -> str:
     return "data:image/png;base64," + _b64(data)
 
 
-def _ratio(width: int, height: int) -> str:
+def _ratio(width: int, height: int, allowed: tuple | None = None) -> str:
     options = {"1:1": 1, "4:5": 0.8, "3:4": 0.75, "2:3": 2 / 3, "9:16": 0.5625, "16:9": 16 / 9, "3:2": 1.5, "4:3": 4 / 3, "5:4": 1.25}
+    if allowed:
+        options = {k: v for k, v in options.items() if k in allowed}
     r = width / height
     return min(options, key=lambda k: abs(options[k] - r))
+
+
+# Proporciones que aceptan todos los modelos de Higgsfield (4:5 y 5:4 no): se usa la más parecida
+HF_RATIOS = ("1:1", "3:4", "4:3", "2:3", "3:2", "9:16", "16:9")
 
 
 async def _fetch(url_or_data: str) -> bytes:
@@ -609,7 +615,7 @@ class HiggsfieldEngine(_Base):
         self.last_model = model
         extra = self._extra("generate")
         best = {k: v for k, v in self._best("generate", model).items() if k not in extra}
-        body = {"prompt": prompt, "aspect_ratio": _ratio(width, height) if width and height else "3:4", **best, **extra}
+        body = {"prompt": prompt, "aspect_ratio": _ratio(width, height, HF_RATIOS) if width and height else "3:4", **best, **extra}
         j = await self._run(model, body, 600, on_progress, optional=tuple(best))
         return await _fetch(self._image_url(j))
 
@@ -621,7 +627,7 @@ class HiggsfieldEngine(_Base):
         best = {k: v for k, v in self._best("edit", model).items() if k not in extra}
         body = {"prompt": prompt, self.cfg.get("images_field") or "image_urls": urls, **best, **extra}
         if width and height:
-            body.setdefault("aspect_ratio", _ratio(width, height))
+            body.setdefault("aspect_ratio", _ratio(width, height, HF_RATIOS))
         j = await self._run(model, body, 600, optional=tuple(best))
         return await _fetch(self._image_url(j))
 

@@ -55,7 +55,7 @@ def test_generate_submits_and_polls_until_completed():
     assert out == _png()
     post = seen[0]
     assert post[2] == "Key KID:SECRET"                                  # cabecera oficial: Key ID:SECRET
-    assert post[3] == {"prompt": "Valentina en un café", "aspect_ratio": "4:5", "resolution": "2K"}   # lo de la conexión manda
+    assert post[3] == {"prompt": "Valentina en un café", "aspect_ratio": "3:4", "resolution": "2K"}   # lo de la conexión manda; 4:5 no existe en Higgsfield → 3:4
     assert e.last_model == "higgsfield-ai/soul/v2/standard"
 
 
