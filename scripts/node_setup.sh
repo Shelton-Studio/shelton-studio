@@ -72,7 +72,7 @@ if [ "${NODE_COMFY:-0}" = "1" ]; then
   "$COMFY/venv/bin/pip" install -q torch torchvision torchaudio --extra-index-url "https://download.pytorch.org/whl/${CUDA_WHEEL:-cu128}"
   "$COMFY/venv/bin/pip" install -q -r "$COMFY/requirements.txt" huggingface_hub
   bash "$SRC/scripts/quality_nodes.sh" "$COMFY" || echo "  ⚠ No pude instalar la mejora de rostro (se usa sin ella)"
-  "$COMFY/venv/bin/python" "$SRC/scripts/download_models.py" --comfy "$COMFY" imagen calidad || echo "  ⚠ Faltan modelos: vuelve a correr"
+  "$COMFY/venv/bin/python" "$SRC/scripts/download_models.py" --comfy "$COMFY" imagen calidad edicion || echo "  ⚠ Faltan modelos: vuelve a correr"
   pkill -f "ComfyUI/main.py" 2>/dev/null || true
   nohup "$COMFY/venv/bin/python" "$COMFY/main.py" --listen 0.0.0.0 --port 8288 >"$BASE/comfy.log" 2>&1 &
   LORA_DIR="$COMFY/models/loras"

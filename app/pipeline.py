@@ -27,6 +27,8 @@ log = logging.getLogger("shelton.pipeline")
 _queue: asyncio.Queue[str] = asyncio.Queue()
 _done: dict[str, asyncio.Event] = {}      # target_id -> evento al terminar
 _workers: list[asyncio.Task] = []
+_running: dict[str, asyncio.Task] = {}   # post -> tarea que lo está haciendo (para poder cancelarlo)
+_user_canceled: set[str] = set()
 _reels_in_progress: set[str] = set()   # reels cuyo montaje ya está en marcha en este proceso (evita duplicarlo)
 
 
@@ -194,9 +196,23 @@ async def _run_job(job_id: str) -> None:
 
     handler = {"create": _create_post, "edit": _edit_post, "subject": _create_subject,
                "video": _video_post, "reel": _reel_post, "audio": _audio_post, "track": _track_post}[kind]
+    if target in _user_canceled:
+        status, error = "canceled", "Cancelado"
+        with session() as s:
+            job = s.get(Job, job_id)
+            job.status, job.error = status, error
+        _done.setdefault(target, asyncio.Event()).set()
+        return
+    task = asyncio.ensure_future(handler(target, payload))
+    _running[target] = task
     try:
-        await handler(target, payload)
+        await task
         status, error = "done", ""
+    except asyncio.CancelledError:
+        if target not in _user_canceled:
+            raise                                   # se está apagando Shelton: no es una cancelación del usuario
+        status, error = "canceled", "Cancelado"
+        _update_post(target, status="failed", error="⏹ Cancelado por ti (libera el lugar para otras fotos)")
     except Exception as e:
         log.error("job %s (%s) falló: %s\n%s", job_id, kind, e, traceback.format_exc())
         from app.errores import friendly
@@ -205,10 +221,29 @@ async def _run_job(job_id: str) -> None:
             events.publish({"type": "subject_failed", "id": target, "error": error})
         else:
             _update_post(target, status="failed", error=error)
+    finally:
+        _running.pop(target, None)
     with session() as s:
         job = s.get(Job, job_id)
         job.status, job.error = status, error
     _done.setdefault(target, asyncio.Event()).set()
+
+
+def cancel_post(post_id: str) -> bool:
+    """⏹ Cancela una foto en cola o haciéndose: libera su lugar (y la GPU) para las demás."""
+    _user_canceled.add(post_id)
+    with session() as s:
+        jobs = s.query(Job).filter(Job.post_id == post_id, Job.status.in_(["pending", "running"])).all()
+        for j in jobs:
+            if j.status == "pending":
+                j.status, j.error = "canceled", "Cancelado"
+        found = bool(jobs)
+    t = _running.get(post_id)
+    if t and not t.done():
+        t.cancel()
+    _update_post(post_id, status="failed", error="⏹ Cancelado por ti (libera el lugar para otras fotos)")
+    _done.setdefault(post_id, asyncio.Event()).set()
+    return found
 
 
 # ============================================================ Utilidades

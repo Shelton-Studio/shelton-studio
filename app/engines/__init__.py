@@ -152,6 +152,10 @@ def get_engine(role: str = "generate", choice: str | None = None) -> ImageEngine
             _cache[key] = eng
         return _cache[key]
 
+    alt = _rtx_when_placa_busy(role, choice)
+    if alt is not None:
+        return alt
+
     mode = infra_mode() if not choice else "auto"
     if mode in ("local", "cloud"):
         key, kind, cfg = _routed(role, mode)
@@ -184,6 +188,44 @@ def get_engine(role: str = "generate", choice: str | None = None) -> ImageEngine
     if key not in _cache:
         _cache[key] = _build(kind, cfg)
     return _cache[key]
+
+
+def _rtx_when_placa_busy(role: str, choice: str | None):
+    """Si la placa está ocupada (entrenando una LoRA o dibujando otra foto) y hay una tarjeta alquilada prendida
+    con ComfyUI, la foto va a la tarjeta (mismo motor: Z-Image o Calidad máxima). Así nunca queda trabada."""
+    if role not in ("generate", "edit", "subject") or (choice or "") not in ("", "fast", "quality"):
+        return None
+    if infra_mode() == "cloud":
+        return None
+    import time as _t
+    from app import granja
+    nodes = [n for n in granja.remote_nodes() if n["comfy_url"]]
+    if not nodes:
+        return None
+    hit = granja._health.get(nodes[0]["id"])
+    if not hit or not hit[1].get("ok") or _t.time() - hit[0] > 300:
+        return None                                     # solo si la vimos prendida hace poco
+    if not _placa_busy():
+        return None
+    preset = choice or settings.GEN_PRESET or "fast"
+    preset = preset if preset in ("fast", "quality") else "fast"
+    try:
+        return get_engine(role, f"rtx:{nodes[0]['conn_id']}:{preset}")
+    except ValueError:
+        return None
+
+
+def _placa_busy() -> bool:
+    """La placa está entrenando una LoRA o ya tiene una foto dibujándose."""
+    if busy(settings.COMFYUI_URL) > 0 or any(busy(k) > 0 for k in list(_busy) if "127.0.0.1" in k or "localhost" in k):
+        return True
+    from app.db import Subject, session
+    with session() as s:
+        for x in s.query(Subject).filter(Subject.lora_status == "training"):
+            where = str((x.lora_info or {}).get("where") or "")
+            if not where or where.lower().startswith("placa"):
+                return True
+    return False
 
 
 def _least_busy(role: str):
