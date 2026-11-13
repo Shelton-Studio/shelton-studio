@@ -37,6 +37,8 @@ async def lifespan(_: FastAPI):
     consumo.apply_savers_once()
     from app import privado
     privado.recover_after_restart()
+    from app import traductor
+    translator_setup = asyncio.create_task(traductor.prepare())     # baja el traductor la primera vez
     gpu_meter = asyncio.create_task(consumo.sample_loop())
 
     async def _engine_check():
@@ -58,6 +60,7 @@ async def lifespan(_: FastAPI):
     learning.cancel()
     network.cancel()
     gpu_meter.cancel()
+    translator_setup.cancel()
     engine_check.cancel()
     await pipeline.stop_workers()
 
