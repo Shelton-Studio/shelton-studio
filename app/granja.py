@@ -48,7 +48,8 @@ def remote_nodes() -> list[dict]:
         out.append({"id": f"node:{c.id}", "kind": "remote", "conn_id": c.id, "label": c.name or cfg["url"],
                     "url": cfg["url"].rstrip("/"), "token": cfg.get("token", ""), "slots": slots,
                     "profile": "pro" if str(cfg.get("profile", "pro")).lower().startswith("pro") else "estandar",
-                    "cost_hour": cost, "comfy_url": (cfg.get("comfy_url") or "").rstrip("/")})
+                    "cost_hour": cost, "comfy_url": (cfg.get("comfy_url") or "").rstrip("/"),
+                    "runpod": bool(cfg.get("runpod_api_key") and cfg.get("runpod_pod_id"))})
     return out
 
 
@@ -347,6 +348,60 @@ async def overview() -> dict:
     return {"training": training, "local": {"gpus": local.get("gpus", []), "trainer_ready": ok, "trainer_msg": why,
                                             "slots": local_slots(), "profile": lora._local_profile()},
             "nodes": nodes, "profiles": {k: v["label"] for k, v in lora.PROFILES.items()}}
+
+
+# ------------------------------------------------------------------ ▶ prender / ⏸ pausar la tarjeta en RunPod
+RUNPOD_GQL = "https://api.runpod.io/graphql"
+
+
+async def runpod(cid: str, query: str) -> dict:
+    from app.connections import list_enabled
+    c = next((x for x in list_enabled("gpu") if x.id == cid), None)
+    cfg = (c.config or {}) if c else {}
+    key, pod = cfg.get("runpod_api_key"), cfg.get("runpod_pod_id")
+    if not key or not pod:
+        raise ValueError("Falta la clave de API de RunPod o el ID del pod: Conexiones → la tarjeta → Editar")
+    async with _client(30) as cl:
+        r = await cl.post(RUNPOD_GQL, params={"api_key": key}, json={"query": query.replace("POD_ID", pod)},
+                          headers={"Authorization": f"Bearer {key}"})
+    if r.status_code in (401, 403):
+        raise ValueError("RunPod rechazó la clave de API: créala de nuevo en RunPod → Settings → API Keys")
+    try:
+        j = r.json()
+    except ValueError:
+        raise ValueError(f"RunPod respondió {r.status_code}")
+    if j.get("errors"):
+        msg = "; ".join(str(e.get("message", e)) for e in j["errors"])[:300]
+        if "not enough" in msg.lower() or "no longer any instances" in msg.lower():
+            msg = "RunPod no tiene esa tarjeta libre ahora mismo en su datacenter. Prueba en unos minutos. (" + msg + ")"
+        raise ValueError(msg)
+    return j.get("data") or {}
+
+
+@router.get("/granja/rtx/{cid}")
+async def rtx_status(cid: str):
+    try:
+        d = await runpod(cid, 'query { pod(input: {podId: "POD_ID"}) { id name desiredStatus costPerHr } }')
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    p = d.get("pod") or {}
+    return {"status": p.get("desiredStatus", ""), "name": p.get("name", ""), "cost_hour": p.get("costPerHr")}
+
+
+@router.post("/granja/rtx/{cid}/{action}")
+async def rtx_power(cid: str, action: str):
+    """▶ prender o ⏸ pausar la tarjeta alquilada. Al prender, se conecta sola en 2-4 minutos (arranque automático)."""
+    if action not in ("prender", "pausar"):
+        raise HTTPException(400, "Acción desconocida")
+    q = ('mutation { podResume(input: {podId: "POD_ID", gpuCount: 1}) { id desiredStatus costPerHr } }' if action == "prender"
+         else 'mutation { podStop(input: {podId: "POD_ID"}) { id desiredStatus } }')
+    try:
+        d = await runpod(cid, q)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    _health.pop(f"node:{cid}", None)
+    p = d.get("podResume") or d.get("podStop") or {}
+    return {"ok": True, "status": p.get("desiredStatus", ""), "cost_hour": p.get("costPerHr")}
 
 
 @router.get("/granja")

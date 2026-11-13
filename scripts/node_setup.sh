@@ -91,8 +91,36 @@ nohup "$BASE/start_worker.sh" >"$BASE/worker.log" 2>&1 &
 sleep 2
 grep -q "Trabajador de Shelton" "$BASE/worker.log" && ok "Trabajador escuchando" || { tail -5 "$BASE/worker.log"; die "El trabajador no arrancó"; }
 
+# Arranque automático: al prender el pod, la tarjeta se conecta sola a Shelton (sin abrir la terminal).
+# Las claves quedan en el disco persistente, solo legibles por root.
+umask 077
+cat > "$BASE/.node_env" <<ENV
+WORKER_TOKEN="$WORKER_TOKEN"
+TS_AUTHKEY="${TS_AUTHKEY:-}"
+NODE_NAME="$NODE_NAME"
+NODE_COMFY="${NODE_COMFY:-0}"
+WORKER_SHARE="${WORKER_SHARE:-1}"
+WORKER_GPUS="${WORKER_GPUS:-}"
+BASE="$BASE"
+ENV
+cat > "$BASE/autostart.sh" <<'AUTO'
+#!/usr/bin/env bash
+# Lo corre el pod solo al prenderse (Start command de RunPod). Deja la tarjeta conectada a Shelton.
+BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
+set -a; . "$BASE_DIR/.node_env"; set +a
+curl -fsSL https://raw.githubusercontent.com/Shelton-Studio/shelton-studio/main/scripts/node_setup.sh -o "$BASE_DIR/node_setup.sh.new" \
+  && mv "$BASE_DIR/node_setup.sh.new" "$BASE_DIR/node_setup.sh"
+exec bash "$BASE_DIR/node_setup.sh"
+AUTO
+chmod 700 "$BASE/autostart.sh"
+umask 022
+ok "Arranque automático guardado ($BASE/autostart.sh)"
+
 say "¡Listo! En Shelton → Conexiones → Agregar → «Nodo de GPU (trabajador)»:"
 echo "  URL del trabajador:  http://$TSIP:8299"
 echo "  Token:               (el WORKER_TOKEN que inventaste)"
 [ -n "$LORA_DIR" ] && echo "  ComfyUI del nodo:    http://$TSIP:8288   (agrégalo también como conexión ComfyUI para generar)"
 echo "  Si la máquina se reinicia: bash $BASE/start_worker.sh &"
+echo ""
+echo "  Para que se conecte SOLA cada vez que la prendas (una sola vez, en RunPod → el pod → ⋮ → Edit Pod → Start command):"
+echo "    bash -c \"nohup bash $BASE/autostart.sh > $BASE/autostart.log 2>&1 & if [ -x /start.sh ]; then exec /start.sh; else sleep infinity; fi\""

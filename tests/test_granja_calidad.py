@@ -385,3 +385,38 @@ def test_rtx_off_falls_back_to_the_placa(monkeypatch):
     e = engines.get_engine("generate", "rtx:c7:fast")
     assert not getattr(e, "url", "").startswith("http://100.7.7.7")
     engines.reset_cache()
+
+
+
+def test_power_the_rented_card_from_shelton(monkeypatch):
+    """▶ prender / ⏸ pausar la RTX desde la Granja: Shelton le habla a RunPod con la clave guardada en la conexión."""
+    import asyncio
+    import json as _json
+    import httpx
+    from app import granja
+    from app.db import Connection, init_db, session
+    init_db()
+    with session() as s:
+        c = Connection(type="gpu_node", name="RTX", config={"url": "http://100.1.2.3:8299", "token": "t",
+                       "runpod_api_key": "rk", "runpod_pod_id": "pod123"}, roles=[])
+        s.add(c)
+        s.flush()
+        cid = c.id
+    seen = []
+
+    def handler(req):
+        body = _json.loads(req.content)
+        seen.append((req.url.host, req.headers.get("authorization"), body["query"]))
+        if "podResume" in body["query"]:
+            return httpx.Response(200, json={"data": {"podResume": {"id": "pod123", "desiredStatus": "RUNNING", "costPerHr": 2.69}}})
+        if "podStop" in body["query"]:
+            return httpx.Response(200, json={"data": {"podStop": {"id": "pod123", "desiredStatus": "EXITED"}}})
+        return httpx.Response(200, json={"data": {"pod": {"id": "pod123", "name": "rtx", "desiredStatus": "EXITED", "costPerHr": 0}}})
+    monkeypatch.setattr(granja, "_transport", httpx.MockTransport(handler))
+    assert asyncio.run(granja.rtx_power(cid, "prender"))["status"] == "RUNNING"
+    assert asyncio.run(granja.rtx_power(cid, "pausar"))["status"] == "EXITED"
+    assert asyncio.run(granja.rtx_status(cid))["status"] == "EXITED"
+    assert all(h == "api.runpod.io" and a == "Bearer rk" and "pod123" in q for h, a, q in seen)
+    assert any(n["runpod"] for n in granja.remote_nodes() if n["conn_id"] == cid)
+    with session() as s:
+        s.delete(s.get(Connection, cid))
