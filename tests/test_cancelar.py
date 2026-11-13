@@ -46,3 +46,7 @@ def test_cancel_running_and_pending_photos(monkeypatch):
         assert s.get(Job, jida).status == "canceled" and s.get(Job, jidb).status == "canceled"
         assert s.get(Post, ida).status == "failed" and "Cancelado" in s.get(Post, ida).error
         assert s.get(Post, idb).status == "failed"
+        for pid in (ida, idb):                       # no dejar posts de prueba a las otras pruebas
+            s.delete(s.get(Post, pid))
+        for jid in (jida, jidb):
+            s.delete(s.get(Job, jid))
