@@ -471,9 +471,12 @@ function tileHTML(p, selectable) {
   const busy = p.status === "queued" || p.status === "generating", prog = S.progress.get(p.id);
   const media = p.media_type === "reel" ? `${icon("film", 13)} Reel` : p.media_type === "video" ? `${icon("play", 12)} Video` : "";
   const img = p.image_url && !busy ? `<div class="img" style="background-image:url('${esc(p.image_url)}')">${media ? `<span class="media-tag">${media}${p.duration ? ` · ${Math.round(p.duration)}s` : ""}${p.audio_url ? " · 🔊" : ""}</span>` : ""}</div>`
-    : `<div class="img">${busy ? `<div><div class="spinner"></div>${esc(prog || STATUS[p.status][0])}</div>` : esc(p.error || STATUS[p.status]?.[0] || p.status)}</div>`;
+    : `<div class="img">${busy ? `<div><div class="spinner"></div>${esc(prog || STATUS[p.status][0])}</div>` : `<div class="tile-err" title="${esc(p.error || "")}">${esc((p.error || STATUS[p.status]?.[0] || p.status).split(" — Detalle:")[0])}</div>`}</div>`;
   const judge = p.status === "ready" && p.qa_score && !p.qa_passed ? `<span class="chip bad" title="El juez la reprobó; decides tú">Juez ✖</span>` : "";
-  const mw = p.made_with || {}, short = (s) => String(s || "").split("/").pop();
+  const mw = p.made_with || {}, short = (s) => {   // «bytedance/seedream/v5/pro/text-to-image» → «seedream v5 pro»
+    const parts = String(s || "").split("/").filter((x) => x && !/^(fal-ai|text-to-image|image-to-image|image-to-video|text-to-video|edit|generate|reference-to-video)$/.test(x));
+    return parts.slice(-3).join(" ").slice(0, 32) || String(s || "").split("/").pop();
+  };
   const mtag = mw.video ? `🎬 ${short(mw.video)}` : mw.image ? `🖼️ ${short(mw.image)}` : "";
   return `${selectable ? '<div class="check"></div>' : ""}${mtag ? `<span class="model-tag" title="${esc(Object.entries(mw).map(([k, v]) => `${k}: ${v}`).join(" · "))}">${esc(mtag)}</span>` : ""}${img}<div class="meta">${chip(p.status)}${judge}<span class="idea">${esc(p.platform_name)} · ${esc(p.idea)}</span>${p.qa_score ? `<span class="score ${scoreCls(p.qa_score)}">${Math.round(p.qa_score)}</span>` : ""}</div>`;
 }

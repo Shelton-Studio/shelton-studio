@@ -199,7 +199,8 @@ async def _run_job(job_id: str) -> None:
         status, error = "done", ""
     except Exception as e:
         log.error("job %s (%s) falló: %s\n%s", job_id, kind, e, traceback.format_exc())
-        status, error = "failed", str(e)[:1000]
+        from app.errores import friendly
+        status, error = "failed", friendly(str(e))[:1000]
         if kind == "subject":
             events.publish({"type": "subject_failed", "id": target, "error": error})
         else:
