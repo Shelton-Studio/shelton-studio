@@ -110,7 +110,7 @@ class FalEngine(_Base):
             return {}
 
     async def generate(self, prompt, width, height, seed, on_progress: Progress = None) -> bytes:
-        model = self.cfg.get("model_generate") or "fal-ai/bytedance/seedream/v4/text-to-image"
+        model = self.cfg.get("model_generate") or "fal-ai/nano-banana-pro"
         return await self._run(model, {
             "prompt": prompt, "image_size": {"width": width, "height": height}, "seed": seed,
             "num_images": 1, "enable_safety_checker": True, **self._extra()},
@@ -121,7 +121,7 @@ class FalEngine(_Base):
         payload = {"prompt": prompt, "image_urls": uris, "seed": seed, "num_images": 1, **self._extra()}
         if width and height:
             payload["image_size"] = {"width": width, "height": height}
-        model = self.cfg.get("model_edit") or "fal-ai/nano-banana/edit"
+        model = self.cfg.get("model_edit") or "fal-ai/nano-banana-pro/edit"
         j_payloads = [payload, {"prompt": prompt, "image_urls": uris, "num_images": 1},
                       {"prompt": prompt, "image_url": uris[0]}]        # modelos de una sola imagen (Kontext)
         j = await self._post(model, j_payloads, 300)
@@ -132,7 +132,7 @@ class FalEngine(_Base):
         return await _fetch(url)
 
     async def video(self, image, prompt, negative, width, height, seed, preset=None, on_progress: Progress = None):
-        model = self.cfg.get("model_video") or "fal-ai/kling-video/v2.1/master/image-to-video"
+        model = self.cfg.get("model_video") or "kling/v4/image-to-video"
         uri = _data_uri(image)
         j = await self._post(model, [
             {"prompt": prompt, "image_url": uri, "duration": "5", "negative_prompt": negative},
@@ -512,7 +512,13 @@ class HiggsfieldEngine(_Base):
 
     # Ajustes por defecto para sacar la máxima calidad (como en la web de Higgsfield). Si algún modelo no los acepta,
     # se reintenta solo sin ellos: nunca rompe el pedido.
-    BEST = {"generate": {"resolution": "1080p"}, "edit": {"resolution": "2K"}, "video": {"duration": 5}}
+    BEST = {"generate": {"resolution": "1080p"}, "edit": {"resolution": "2k"}, "video": {"duration": 5}}
+
+    def _best(self, kind: str, model: str) -> dict:
+        best = dict(self.BEST[kind])
+        if "resolution" in best:
+            best["resolution"] = "1080p" if model.startswith("higgsfield-ai/soul") else "2k"
+        return best
 
     async def _run(self, model: str, body: dict, limit_s: float, on_progress: Progress = None,
                    optional: tuple = ()) -> dict:
@@ -602,17 +608,17 @@ class HiggsfieldEngine(_Base):
         model = self.cfg.get("model_generate") or "higgsfield-ai/soul/v2/standard"
         self.last_model = model
         extra = self._extra("generate")
-        best = {k: v for k, v in self.BEST["generate"].items() if k not in extra}
+        best = {k: v for k, v in self._best("generate", model).items() if k not in extra}
         body = {"prompt": prompt, "aspect_ratio": _ratio(width, height) if width and height else "3:4", **best, **extra}
         j = await self._run(model, body, 600, on_progress, optional=tuple(best))
         return await _fetch(self._image_url(j))
 
     async def _edit_many(self, images, prompt, width, height, seed) -> bytes:
-        model = self.cfg.get("model_edit") or "bytedance/seedream/v4/edit"
+        model = self.cfg.get("model_edit") or "alibaba/qwen-image-3/edit"
         self.last_model = model
         urls = [await self._upload(i) for i in images[:4]]
         extra = self._extra("edit")
-        best = {k: v for k, v in self.BEST["edit"].items() if k not in extra}
+        best = {k: v for k, v in self._best("edit", model).items() if k not in extra}
         body = {"prompt": prompt, self.cfg.get("images_field") or "image_urls": urls, **best, **extra}
         if width and height:
             body.setdefault("aspect_ratio", _ratio(width, height))
@@ -625,8 +631,9 @@ class HiggsfieldEngine(_Base):
         url = await self._upload(image)
         extra = self._extra("video")
         best = {k: v for k, v in self.BEST["video"].items() if k not in extra}
+        field = self.cfg.get("image_field") or "image_url"
         body = {"prompt": prompt + (f"\nAvoid: {negative}" if negative else ""),
-                self.cfg.get("image_field") or "image_url": url, **best, **extra}
+                field: [url] if field.endswith("s") else url, **best, **extra}     # «image_urls» lleva lista
         j = await self._run(model, body, 1500, on_progress, optional=tuple(best))
         return await _fetch(self._video_url(j)), 30
 
