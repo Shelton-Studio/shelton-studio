@@ -579,5 +579,116 @@ class HiggsfieldEngine(_Base):
         ok = bool(self.cfg.get("api_key"))
         return {"ok": ok, "engine": self.name, **({} if ok else {"error": "Falta la clave de Higgsfield"})}
 
-CLOUD_ENGINES = {"higgsfield": HiggsfieldEngine, "openrouter_video": OpenRouterVideoEngine, "openrouter_image": OpenRouterImageEngine, "fal": FalEngine, "replicate": ReplicateEngine, "openai_images": OpenAIImagesEngine,
+
+# ------------------------------------------------------------------ WaveSpeed
+class WaveSpeedEngine(_Base):
+    """WaveSpeed (api.wavespeed.ai): Seedream 5.5, Wan, Seedance, Kling, Flux… con una sola clave.
+    Se envía el pedido al modelo (POST /api/v3/<modelo>) y se consulta el resultado hasta que termina."""
+    name = "wavespeed"
+    BASE = "https://api.wavespeed.ai/api/v3"
+    transport = None
+    POLL = 2.0
+
+    def _headers(self) -> dict:
+        return {"Authorization": f"Bearer {(self.cfg.get('api_key') or '').strip()}", "Content-Type": "application/json"}
+
+    def _extra(self) -> dict:
+        raw = self.cfg.get("extra") or ""
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else {}
+        except ValueError:
+            raise RuntimeError("WaveSpeed: «Parámetros extra» no es un JSON válido (ej: {\"output_format\": \"jpeg\"})")
+
+    def _client(self, timeout: float) -> httpx.AsyncClient:
+        return httpx.AsyncClient(timeout=timeout, transport=self.transport, follow_redirects=True)
+
+    @staticmethod
+    def _data(j: dict) -> dict:
+        return j.get("data") if isinstance(j.get("data"), dict) else j
+
+    async def _run(self, model: str, body: dict, limit_s: float, on_progress: Progress = None) -> str:
+        model = model.strip("/")
+        async with self._client(120) as c:
+            r = await c.post(f"{self.BASE}/{model}", json=body, headers=self._headers())
+            if r.status_code in (401, 403):
+                raise RuntimeError("WaveSpeed rechazó la clave: revísala en Conexiones")
+            if r.status_code == 402:
+                raise RuntimeError("WaveSpeed: sin saldo. Recarga créditos en wavespeed.ai")
+            if r.status_code >= 400:
+                raise RuntimeError(f"WaveSpeed {r.status_code} ({model}): {r.text[:400]}")
+            d = self._data(r.json())
+            start = asyncio.get_event_loop().time()
+            url = (d.get("urls") or {}).get("get") or f"{self.BASE}/predictions/{d.get('id')}/result"
+            while True:
+                st = str(d.get("status") or "").lower()
+                if st == "completed" and d.get("outputs"):
+                    out = d["outputs"][0]
+                    return out.get("url") if isinstance(out, dict) else out
+                if st in ("failed", "cancelled", "canceled", "timeout", "deleted"):
+                    raise RuntimeError(f"WaveSpeed: el pedido terminó como «{st}». {d.get('error') or ''}".strip())
+                if asyncio.get_event_loop().time() - start > limit_s:
+                    raise RuntimeError("WaveSpeed: tiempo de espera agotado")
+                if on_progress:
+                    await on_progress(f"WaveSpeed · {st or 'en cola'} ({int(asyncio.get_event_loop().time() - start)}s)")
+                await asyncio.sleep(self.POLL)
+                s = await c.get(url, headers=self._headers())
+                if s.status_code >= 400:
+                    raise RuntimeError(f"WaveSpeed (estado) {s.status_code}: {s.text[:300]}")
+                d = self._data(s.json())
+
+    async def _upload(self, data: bytes) -> str:
+        """Sube una imagen propia y devuelve su URL. Si la subida no está disponible, va como data URI."""
+        if (self.cfg.get("upload") or "").lower() == "data":
+            return _data_uri(data)
+        try:
+            async with self._client(120) as c:
+                r = await c.post(f"{self.BASE}/media/upload/binary", files={"file": ("imagen.png", data, "image/png")},
+                                 headers={"Authorization": self._headers()["Authorization"]})
+            if r.status_code < 400:
+                d = self._data(r.json())
+                url = d.get("download_url") or d.get("url")
+                if url:
+                    return url
+        except httpx.HTTPError:
+            pass
+        return _data_uri(data)
+
+    @staticmethod
+    def _size(width: int, height: int, long_side: int = 2048) -> str:
+        if not (width and height):
+            return f"{long_side}*{long_side}"
+        k = long_side / max(width, height)
+        return f"{int(width * k) // 16 * 16}*{int(height * k) // 16 * 16}"
+
+    async def generate(self, prompt, width, height, seed, on_progress: Progress = None) -> bytes:
+        model = self.cfg.get("model_generate") or "bytedance/seedream-v5.5"
+        self.last_model = model
+        body = {"prompt": prompt, "size": self._size(width, height), "enable_sync_mode": False, **self._extra()}
+        return await _fetch(await self._run(model, body, 600, on_progress))
+
+    async def _edit_many(self, images, prompt, width, height, seed) -> bytes:
+        model = self.cfg.get("model_edit") or "bytedance/seedream-v5.5/edit"
+        self.last_model = model
+        urls = [await self._upload(i) for i in images[:10]]
+        body = {"prompt": prompt, "images": urls, "enable_sync_mode": False, **self._extra()}
+        if width and height:
+            body.setdefault("size", self._size(width, height))
+        return await _fetch(await self._run(model, body, 600))
+
+    async def video(self, image, prompt, negative, width, height, seed, preset=None, on_progress: Progress = None):
+        model = self.cfg.get("model_video") or "wavespeed-ai/wan-2.2/i2v-720p"
+        self.last_model = model
+        body = {"prompt": prompt, "image": await self._upload(image), "duration": 5, **self._extra()}
+        if negative:
+            body.setdefault("negative_prompt", negative)
+        return await _fetch(await self._run(model, body, 1500, on_progress)), 30
+
+    async def health(self) -> dict:
+        ok = bool(self.cfg.get("api_key"))
+        return {"ok": ok, "engine": self.name, **({} if ok else {"error": "Falta la clave de WaveSpeed"})}
+
+CLOUD_ENGINES = {"wavespeed": WaveSpeedEngine, "higgsfield": HiggsfieldEngine, "openrouter_video": OpenRouterVideoEngine, "openrouter_image": OpenRouterImageEngine, "fal": FalEngine, "replicate": ReplicateEngine, "openai_images": OpenAIImagesEngine,
                  "gemini_image": GeminiImageEngine, "http_engine": HttpEngine}
