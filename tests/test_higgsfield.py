@@ -91,7 +91,7 @@ def test_clear_errors_in_spanish():
     try:
         asyncio.run(_engine(bad_key).generate("x", 1, 1, 1))
     except RuntimeError as e:
-        assert "Key ID y Key Secret" in str(e)
+        assert "clave completa" in str(e)
     else:
         raise AssertionError
 
@@ -106,3 +106,15 @@ def test_clear_errors_in_spanish():
     else:
         raise AssertionError
     assert CLOUD_ENGINES["higgsfield"] is HiggsfieldEngine
+
+
+def test_full_key_pasted_in_one_box():
+    seen = []
+
+    def handler(req):
+        seen.append(req.headers.get("authorization"))
+        return httpx.Response(200, json={"status": "completed", "images": [{"url": PNG_URI}]})
+    e = HiggsfieldEngine({"api_key": "KID:SECRET"})
+    e.transport = httpx.MockTransport(handler)
+    asyncio.run(e.generate("x", 1, 1, 1))
+    assert seen[0] == "Key KID:SECRET"

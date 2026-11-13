@@ -452,7 +452,7 @@ class HiggsfieldEngine(_Base):
 
     def _headers(self) -> dict:
         key, secret = (self.cfg.get("api_key") or "").strip(), (self.cfg.get("api_secret") or "").strip()
-        cred = f"{key}:{secret}" if secret else key
+        cred = key if ":" in key or not secret else f"{key}:{secret}"   # la clave completa ya trae «ID:SECRET»
         return {"Authorization": f"Key {cred}", "Content-Type": "application/json"}
 
     def _extra(self, kind: str) -> dict:
@@ -473,7 +473,7 @@ class HiggsfieldEngine(_Base):
         async with self._client(120) as c:
             r = await c.post(f"{self.BASE}/{model}", json=body, headers=self._headers())
             if r.status_code in (401, 403):
-                raise RuntimeError("Higgsfield rechazó la clave: revisa Key ID y Key Secret en Conexiones")
+                raise RuntimeError("Higgsfield rechazó la clave: revisa que pegaste la clave completa en Conexiones")
             if r.status_code >= 400:
                 raise RuntimeError(f"Higgsfield {r.status_code} ({model}): {r.text[:400]}")
             j = r.json()

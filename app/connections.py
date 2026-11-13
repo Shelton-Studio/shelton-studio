@@ -53,10 +53,9 @@ TYPES: dict[str, dict] = {
                              F("model_video", "Modelo de video (imagen a video)", placeholder="wavespeed-ai/wan-2.2/i2v-720p"),
                              F("extra", "Parámetros extra (JSON, opcional)", placeholder='{"output_format": "jpeg"}')]},
     "higgsfield": {"category": "engine", "name": "Higgsfield",
-                   "help": "Imágenes y video de Higgsfield (Soul, Seedream, Wan, Kling, Veo…). Clave doble de "
-                           "console.higgsfield.ai: Key ID y Key Secret. Marca para qué la usas (generar, editar, video).",
-                   "fields": [F("api_key", "Key ID", "secret", required=True),
-                              F("api_secret", "Key Secret", "secret", required=True),
+                   "help": "Imágenes y video de Higgsfield (Soul, Seedream, Wan, Kling, Veo…). Pega la clave completa tal cual "
+                           "te la da Higgsfield. Marca para qué la usas (generar, editar, video).",
+                   "fields": [F("api_key", "API key (pega la clave completa de Higgsfield)", "secret", required=True),
                               F("model_generate", "Modelo para generar", placeholder="higgsfield-ai/soul/v2/standard"),
                               F("model_edit", "Modelo para editar / con referencias", placeholder="bytedance/seedream/v4/edit"),
                               F("model_video", "Modelo de video (imagen a video)", placeholder="wan/v2.7/image-to-video"),
