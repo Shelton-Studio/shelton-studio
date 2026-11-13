@@ -1,6 +1,7 @@
 """Servidor de Shelton: API + interfaz web. Arranque: python -m app.main"""
 import asyncio
 import json
+import re
 import logging
 import uuid
 from contextlib import asynccontextmanager
@@ -184,8 +185,16 @@ class ChatIn(BaseModel):
 
 @app.post("/api/chat")
 async def chat(body: ChatIn):
+    message = body.message
+    if body.upload_ids and re.search(r"@image\d+", message, re.IGNORECASE):
+        # «@image1» = la 1.ª foto adjunta, «@image2» = la 2.ª…: se lo decimos a Shelton tal cual, para que use cada una
+        # exactamente en el rol que pidió la persona
+        refs = "; ".join(f"@image{i} = foto adjunta n.º {i}" for i in range(1, len(body.upload_ids) + 1))
+        message += (f"\n\n[Referencias de las fotos adjuntas, en el mismo orden en que van adjuntas: {refs}. "
+                    "Usa cada foto exactamente para lo que dice su mención.]")
+
     async def gen():
-        async for ev in shelton.chat(body.conversation_id, body.message, body.upload_ids, body.agent, body.engine,
+        async for ev in shelton.chat(body.conversation_id, message, body.upload_ids, body.agent, body.engine,
                                      body.attachments):
             yield sse(ev)
     return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
