@@ -322,3 +322,24 @@ def test_one_big_card_trains_three_at_once_with_worker_share(monkeypatch, tmp_pa
     assert w.SLOTS == ["0/1", "0/2", "0/3"] and {w._device(s) for s in w.SLOTS} == {"0"}
     w._jobs.update({"a": {"status": "running", "slot": "0/1"}, "b": {"status": "running", "slot": "0/2"}})
     assert [s for s in w.SLOTS if s not in w._busy_slots()] == ["0/3"]          # queda 1 lugar para el tercero
+
+
+
+def test_choose_the_rtx_to_train_and_to_generate(monkeypatch):
+    """⚡ Entrenar en la RTX: la fila la manda solo ahí. Y en el chat se puede elegir generar en la RTX."""
+    import asyncio
+    from app import engines, granja
+    node = {"id": "node:c1", "conn_id": "c1", "slots": 3, "profile": "estandar", "label": "RTX PRO 6000",
+            "url": "http://100.1.1.1:8299", "token": "t", "comfy_url": "http://100.1.1.1:8288", "kind": "remote"}
+    monkeypatch.setattr(granja, "local_slots", lambda: [{"id": "local:0", "slots": 1, "profile": "estandar"}])
+    monkeypatch.setattr(granja, "remote_nodes", lambda: [node])
+
+    async def ok(n, fresh=False):
+        return {"ok": True, "free": 3}
+    monkeypatch.setattr(granja, "health", ok)
+    assert asyncio.run(granja.free_slot({}, only="node:c1"))["id"] == "node:c1"     # aunque la placa esté libre
+    ids = [c["id"] for c in engines.engine_choices()]
+    assert "rtx:c1:fast" in ids and "rtx:c1:quality" in ids
+    eng = engines.get_engine("generate", "rtx:c1:quality")
+    assert eng.url.startswith("http://100.1.1.1:8288") and hasattr(eng, "ensure_loras")
+    engines.reset_cache()

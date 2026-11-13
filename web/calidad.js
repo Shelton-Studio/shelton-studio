@@ -164,3 +164,29 @@ function variantDialog(sid, name) {
     catch (e) { toast(esc(e.message), "bad"); }
   });
 }
+
+
+// ------------------------------------------------------------------ ⚡ Entrenar en la RTX PRO 6000 (se suma; el diálogo de entrenar no cambia)
+const _bancoRtx = VIEWS.banco;
+VIEWS.banco = async (el) => {
+  await _bancoRtx(el);
+  let g, subs;
+  try { [g, subs] = await Promise.all([api("/api/granja"), api("/api/subjects")]); } catch { return; }
+  const node = (g.nodes || []).find((n) => n.health?.ok);
+  if (!node) return;
+  const byId = Object.fromEntries(subs.map((s) => [s.id, s]));
+  $$(".subject-card").forEach((card) => {
+    const sid = $("[data-del]", card)?.dataset.del, s = byId[sid];
+    if (!s || $("[data-lrtx]", card) || !["person", "pet", "creature"].includes(s.kind)) return;
+    if (["training", "queued"].includes(s.lora_status)) return;
+    const b = document.createElement("button");
+    b.className = "btn sm"; b.dataset.lrtx = sid; b.textContent = `⚡ Entrenar en ${node.label}`;
+    b.title = "Lo mismo que Entrenar, pero en la tarjeta rápida (la RTX alquilada). Sigue donde quedó su LoRA.";
+    b.onclick = async () => {
+      if (!confirm(`¿Entrenar a ${s.name} en ${node.label}? (cobra por hora mientras esté prendida)`)) return;
+      try { await api(`/api/subjects/${sid}/lora/entrenar-en`, { method: "POST", body: { slot: node.id } }); toast(`${esc(s.name)}: entrenando en ${esc(node.label)}`, "good", "⚡"); route(); }
+      catch (e) { toast(esc(e.message), "bad"); }
+    };
+    ($(".lora-box", card) || $(".body", card))?.append(b);
+  });
+};

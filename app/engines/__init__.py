@@ -138,6 +138,20 @@ def get_engine(role: str = "generate", choice: str | None = None) -> ImageEngine
             _cache[key] = _build(kind, {"model": want})
         return _cache[key]
 
+    if choice and choice.startswith("rtx:"):
+        # «rtx:<conexión>:<perfil>»: generar en el ComfyUI de la tarjeta alquilada (la más rápida y con calidad máxima)
+        from app import granja
+        _, cid, preset = (choice.split(":", 2) + ["", ""])[:3]
+        node = next((n for n in granja.remote_nodes() if n["conn_id"] == cid and n["comfy_url"]), None)
+        if not node:
+            raise ValueError("La tarjeta elegida no está conectada (o no tiene ComfyUI): revisa la Granja de GPUs")
+        key = f"rtx:{cid}:{preset}:{node['comfy_url']}"
+        if key not in _cache:
+            eng = _build("comfyui", {"url": node["comfy_url"], "preset": preset or "fast"})
+            eng.ensure_loras = lambda names, n=node: granja.ensure_loras(n, names)   # sus LoRA, copiadas a la tarjeta
+            _cache[key] = eng
+        return _cache[key]
+
     mode = infra_mode() if not choice else "auto"
     if mode in ("local", "cloud"):
         key, kind, cfg = _routed(role, mode)
@@ -192,6 +206,14 @@ def engine_choices() -> list[dict]:
                     "description": "Imágenes en la nube con tu clave de OpenRouter (sin GPU). Cobra por imagen. "
                                    "Cambia el modelo en .env (OPENROUTER_IMAGE_MODEL) o agrega otra conexión «OpenRouter (imagen)».",
                     "local": False})
+    from app import granja
+    for n in granja.remote_nodes():
+        if n["comfy_url"]:
+            out.append({"id": f"rtx:{n['conn_id']}:fast", "label": f"⚡ {n['label']} · Z-Image (rápido, con LoRA)",
+                        "description": "La tarjeta alquilada: la más rápida. Usa las LoRA de siempre del Banco.", "local": True})
+            out.append({"id": f"rtx:{n['conn_id']}:quality", "label": f"⚡ {n['label']} · Calidad máxima (Qwen-Image)",
+                        "description": "La tarjeta alquilada con Qwen-Image 20B: la mejor calidad, mucho más rápido que en la placa.",
+                        "local": True})
     for c in list_enabled("engine"):
         local = c.type == "comfyui"
         out.append({"id": f"conn:{c.id}", "label": f"{c.name or TYPES[c.type]['name']}",

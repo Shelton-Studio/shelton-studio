@@ -924,7 +924,7 @@ async def _drain() -> None:
         for sid in queue_ids():
             if sid in running:
                 continue
-            slot = await granja.free_slot(used, big=base_of(sid) in BIG_BASES)
+            slot = await granja.free_slot(used, big=base_of(sid) in BIG_BASES, only=_prefer(sid))
             if not slot:
                 break
             used[slot["id"]] = used.get(slot["id"], 0) + 1
@@ -942,13 +942,31 @@ async def _drain() -> None:
             running.pop(sid)
 
 
+def _prefer(subject_id: str) -> str:
+    """Dónde pidieron entrenarla («⚡ Entrenar en la RTX»): solo ahí. Vacío = donde haya lugar."""
+    with session() as s:
+        sub = s.get(Subject, subject_id)
+        return ((sub.lora_info or {}).get("prefer_slot") or "") if sub else ""
+
+
+def start_on(subject_id: str, slot_id: str, **kw) -> dict:
+    """Igual que start(), pero en una tarjeta elegida (ej. la RTX PRO 6000). El diálogo de entrenar no cambia."""
+    _update(subject_id, info={"prefer_slot": slot_id})
+    try:
+        return start(subject_id, _on=True, **kw)
+    except Exception:
+        _update(subject_id, info={"prefer_slot": ""})
+        raise
+
+
 def _publish_queue() -> None:
     """Actualiza en la web la posición de cada modelo en la fila."""
     for pos, sid in enumerate(queue_ids(), 1):
         _update(sid, info={"position": pos, "phase": f"En fila: #{pos}"})
 
 
-def start(subject_id: str, steps: int | None = None, mode: str = "auto", minutes: float | None = None) -> dict:
+def start(subject_id: str, steps: int | None = None, mode: str = "auto", minutes: float | None = None,
+          _on: bool = False) -> dict:
     """Pone el modelo en la fila de entrenamiento (la GPU entrena uno a la vez; los demás esperan su turno).
     mode: continue = sigue desde lo ya aprendido y SUMA pasos · restart = empieza de cero (lo viejo se guarda aparte).
     steps/minutes = cuánto MÁS entrenar en esta sesión (minutes se convierte con la velocidad real medida)."""
@@ -967,6 +985,8 @@ def start(subject_id: str, steps: int | None = None, mode: str = "auto", minutes
     if n < MIN_IMAGES:
         raise ValueError(f"Hay {n} fotos de este modelo y hacen falta al menos {MIN_IMAGES} (mejor 15-30). "
                          "Agrega fotos a su ficha o aprueba posts donde aparezca.")
+    if not _on and _prefer(subject_id):
+        _update(subject_id, info={"prefer_slot": ""})      # con el botón de siempre: donde haya lugar
     p = plan(subject_id, mode, steps, minutes)
     busy = any(x != subject_id for x in queue_ids()) or (_worker is not None and not _worker.done())
     _update(subject_id, lora_status="queued", lora_progress=0,

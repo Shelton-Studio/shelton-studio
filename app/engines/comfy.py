@@ -96,6 +96,9 @@ class ComfyEngine:
     async def generate_with_loras(self, loras: list[tuple[str, float]], prompt, width, height, seed,
                                   on_progress: Progress = None, quality: bool | None = None) -> bytes:
         """Generar con LoRAs propias del banco (aprendidas en la GPU): se enchufan después del modelo base."""
+        hook = getattr(self, "ensure_loras", None)
+        if hook and loras:
+            await hook([name for name, _ in loras])        # en una tarjeta alquilada: le copia las LoRA que falten
         w, h = self._size(width, height)
         wf = self._wf("generate", {"prompt": prompt, "width": w, "height": h, "seed": seed})
         inject_loras(wf, loras)
