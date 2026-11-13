@@ -96,6 +96,8 @@ class Post(Base):
     qa_score: Mapped[float] = mapped_column(Float, default=0)
     qa_notes: Mapped[str] = mapped_column(Text, default="")
     qa_passed: Mapped[bool] = mapped_column(Boolean, default=False)
+    human_score: Mapped[float] = mapped_column(Float, default=0)      # la nota que le pone una persona (0 = sin nota)
+    judge_review: Mapped[str] = mapped_column(String, default="")    # «agree» / «disagree»: ¿el juez acertó?
     # Intentos que el juez puntuó más bajo. Nunca se borran: el humano puede elegir uno.
     alternatives: Mapped[list] = mapped_column(JSON, default=list)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
