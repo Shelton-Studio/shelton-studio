@@ -523,3 +523,8 @@ audio { width: 100%; height: 40px; }
 .pv-msg.bot { background: var(--panel-2); border: 1px solid var(--line); align-self: flex-start; }
 .pv-msg.me { background: var(--accent); color: #fff; align-self: flex-end; }
 .pv-msg.err { border-color: var(--bad); }
+
+/* Adult Zone: pedido en español y su traducción al lado */
+.pv-tr { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.pv-tr #pv-en { background: rgba(139, 92, 246, .06); }
+@media (max-width: 720px) { .pv-tr { grid-template-columns: 1fr; } }

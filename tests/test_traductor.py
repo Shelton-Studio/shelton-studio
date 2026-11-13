@@ -102,3 +102,17 @@ def test_adult_zone_sends_english_to_sdxl(monkeypatch):
         assert "Bloqueado" in str(e)
     else:
         raise AssertionError
+
+
+def test_live_translation_endpoint_and_cache(monkeypatch, tmp_path):
+    from app import privado
+    fake = tmp_path / "fake.py"
+    fake.write_text("import json,sys\nd=json.load(sys.stdin)\njson.dump({'texts':['EN '+t for t in d['texts']]}, sys.stdout)\n")
+    monkeypatch.setattr(traductor, "SCRIPT", fake)
+    monkeypatch.setattr(traductor, "find_python", lambda: sys.executable)
+    monkeypatch.setattr(traductor, "model_ready", lambda: True)
+    monkeypatch.setattr(privado, "_admin", lambda req: {"username": "admin"})
+    r = asyncio.run(privado.api_translate(privado.TranslateIn(text="mujer de pie en la playa"), None))
+    assert r["en"] == "EN mujer de pie en la playa" and r["how"] == "placa"
+    fake.write_text("raise SystemExit(1)\n")                       # la segunda vez sale de la memoria
+    assert asyncio.run(traductor.to_english("mujer de pie en la playa"))[0] == "EN mujer de pie en la playa"

@@ -22,6 +22,7 @@ TIMEOUT = 90
 _python: str | None = None
 _checked = False
 _preparing = False
+_cache: dict[str, str] = {}          # lo ya traducido (al escribir en vivo se repite mucho)
 
 SPANISH_RE = re.compile(
     r"[ñáéíóú¿¡]|\b(de|la|el|los|las|una?|con|en|sin|muy|mujer|chica|foto|cuerpo|pelo|piel|luz|cama|playa|"
@@ -121,6 +122,8 @@ async def to_english(text: str) -> tuple[str, str]:
     text = (text or "").strip()
     if not text or not looks_spanish(text):
         return text, ""
+    if text in _cache:
+        return _cache[text], "placa"
     py = await asyncio.to_thread(find_python)
     if py and model_ready():
         try:
@@ -131,6 +134,9 @@ async def to_english(text: str) -> tuple[str, str]:
             if proc.returncode == 0:
                 en = (json.loads(out.decode()).get("texts") or [""])[0].strip()
                 if en:
+                    if len(_cache) > 300:
+                        _cache.clear()
+                    _cache[text] = en
                     return en, "placa"
             log.warning("Traductor falló: %s", err.decode(errors="ignore")[-300:])
         except Exception as e:  # noqa: BLE001
