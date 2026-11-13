@@ -654,6 +654,8 @@ async def _follow(subject_id: str, state: dict, steps: int) -> tuple[int | None,
     spp_now = None
     buf = b""
     dead_checks = 0
+    catching_up = True       # la primera lectura puede traer horas de log (al reconectarse): no sirve para medir tiempo
+    spp_hint = sec_per_step(subject_id)     # velocidad ya medida en esta placa, para el tiempo restante mientras tanto
     while True:
         chunk = b""
         try:
@@ -684,22 +686,24 @@ async def _follow(subject_id: str, state: dict, steps: int) -> tuple[int | None,
             if m and int(m.group(2)) == steps:
                 done = int(m.group(1))
                 now_t = time.time()
-                if first_seen is None or done < first_seen[0]:
+                if not catching_up and (first_seen is None or done < first_seen[0]):
                     first_seen = (done, now_t)
-                start_at = int(state.get("base") or 0) or first_seen[0]
+                start_at = int(state.get("base") or 0) or (first_seen[0] if first_seen else done)
                 session_total = max(1, steps - start_at)
                 pct = 100.0 * max(0, done - start_at) / session_total   # avance de ESTA sesión
-                did = done - first_seen[0]
+                did = done - first_seen[0] if first_seen else 0
                 if did >= 10:
                     spp_now = (now_t - first_seen[1]) / did
-                if now_t - last_pub > 5:
-                    eta = round(spp_now * (steps - done) / 60) if spp_now else None
+                if now_t - last_pub > 5 or catching_up:
+                    rate = spp_now or spp_hint
+                    eta = round(rate * (steps - done) / 60) if rate else None
                     label = (f"Entrenando: paso {done} de {steps} (esta sesión: {done - start_at} de {session_total})"
                              if start_at else f"Entrenando: paso {done} de {steps}")
                     _update(subject_id, lora_progress=min(99.9, pct),
                             info={"phase": label, "eta_min": eta, "step": done,
                                   **({"sec_per_step": round(spp_now, 3)} if spp_now else {})})
                     last_pub = now_t
+        catching_up = False
         if rcf.exists():
             try:
                 return int(rcf.read_text().strip() or 1), tail, spp_now

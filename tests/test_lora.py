@@ -438,3 +438,25 @@ def test_cut_training_resumes_by_itself(monkeypatch, tmp_path):
         sub = s.get(Subject, sid)
         assert sub.lora_status == "ready", sub.lora_info
         assert sub.lora_info.get("auto_retries") == 0                # terminó bien: contador en cero
+
+
+def test_eta_is_not_zero_after_reconnecting(monkeypatch, tmp_path):
+    """Al reconectarse, se lee de golpe el log viejo: eso no debe hacer creer que va infinitamente rápido."""
+    init_db()
+    _setup(monkeypatch, tmp_path)
+    sid = _subject(9)
+    lora._update(sid, info={"sec_per_step": 2.0})
+    log = tmp_path / "train.log"
+    log.write_text("".join(f"job: {i}/1000 [00:01<00:01]\n" for i in range(1, 801)))
+    rc = tmp_path / "train.rc"
+
+    async def main():
+        t = asyncio.create_task(lora._follow(sid, {"log": str(log), "rc": str(rc), "offset": 0, "base": 0}, 1000))
+        await asyncio.sleep(0.3)
+        rc.write_text("0")
+        return await t
+    _, _, spp = asyncio.run(main())
+    with session() as s:
+        info = s.get(Subject, sid).lora_info
+    assert info["eta_min"] == round(2.0 * 200 / 60)          # usa la velocidad medida, no «0 min»
+    assert spp is None                                       # no inventa una velocidad con el log viejo
