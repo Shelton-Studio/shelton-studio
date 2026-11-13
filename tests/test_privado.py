@@ -155,3 +155,49 @@ def test_stuck_entries_are_cleared_after_restart():
     privado.recover_after_restart()
     e = next(x for x in privado.entries() if x["id"] == "stuck-0")
     assert e["status"] == "failed" and "reinició" in e["error"]
+
+
+
+def test_private_photos_in_the_bank_train_locally_and_never_go_to_the_cloud(monkeypatch):
+    """Las fotos adultas de una modelo se guardan en su ficha (privadas), se pueden usar para entrenar su LoRA y
+    nunca se mandan a la IA de la nube (ni para describirlas)."""
+    import io
+    from app import lora
+    from PIL import Image
+    init_db()
+    sid = _subject("Iris")
+    try:
+        privado.add_ref_upload(sid, _png("red"))
+    except ValueError as e:
+        assert "confirmar" in str(e)
+    else:
+        raise AssertionError("sin confirmar no se suben fotos privadas")
+    privado.confirm(sid, "admin", True, True)
+    b = io.BytesIO()
+    Image.new("RGB", (64, 64), "blue").save(b, "JPEG")
+    r = privado.add_ref_upload(sid, b.getvalue())
+    assert r["count"] == 1
+    f = settings.DATA_DIR / "privado" / r["file"]
+    assert f.exists() and not (settings.media_dir / r["file"]).exists()
+    # desde lo generado en la Adult Zone
+    privado._append({"id": "g-0", "batch": "g", "at": "2099", "status": "done", "file": "g-0.png", "subject_id": sid})
+    (settings.DATA_DIR / "privado" / "g-0.png").write_bytes(_png("green"))
+    privado.add_ref_from_entry(sid, "g-0")
+    assert len(privado.model_private(sid)["refs"]) == 2
+    # al entrenar: solo si eligieron usarlas
+    assert not any(privado.is_private_path(p) for p in lora.dataset_images(sid))
+    lora._update(sid, info={"train_private": True})
+    priv = [p for p in lora.dataset_images(sid) if privado.is_private_path(p)]
+    assert len(priv) == 2
+    # describir fotos para la LoRA usa la nube: lo privado se salta siempre
+    sent = []
+
+    async def fake_json_call(system, content, schema, **k):
+        sent.extend(c for c in content if c.get("type") == "image")
+        return {"captions": []}
+    monkeypatch.setattr("app.llm.json_call", fake_json_call)
+    monkeypatch.setattr(lora, "session_images", lambda sid_: priv)
+    caps = asyncio.run(lora.caption_photos(sid, "trig"))
+    assert sent == [] and all(v == "" for v in caps.values())
+    privado.remove_ref(sid, r["file"])
+    assert len(privado.model_private(sid)["refs"]) == 1

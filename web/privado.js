@@ -63,8 +63,13 @@ VIEWS.privado = async (el) => {
       : `<div class="pv-ph">${e.status === "failed" ? `⚠ ${esc(e.error || "falló")}` : `<div><div class="spinner"></div>${e.status === "waiting" ? esc(e.note || "Esperando la GPU…") : e.status === "queued" ? "En fila…" : "Generando…"}</div>`}</div>`}
       <div class="row small" style="gap:6px;margin-top:4px"><span class="grow faint ellipsis" title="${esc(e.prompt || "")}">${esc(e.subject || "—")} · ${esc((e.preset || "").toUpperCase())}</span>
       ${e.status === "done" ? `<a class="btn sm ghost" href="/api/privado/imagen/${esc(e.id)}" download="privado-${esc(e.id)}.png">${icon("download", 13)}</a>` : ""}
+      ${e.status === "done" && e.subject_id ? `<button class="btn sm ghost" data-pvtoref="${esc(e.id)}" data-pvsid="${esc(e.subject_id)}" title="Guardarla en sus fotos privadas (Banco)">➕</button>` : ""}
       <button class="btn sm ghost" data-pvdel="${esc(e.id)}">${icon("trash", 13)}</button></div></div>`).join("") : `<div class="faint small" style="padding:10px 0">Todavía no hay imágenes.</div>`;
     $$("[data-pvzoom]", g).forEach((im) => im.onclick = () => window.open(im.src, "_blank"));
+    $$("[data-pvtoref]", g).forEach((b) => b.onclick = async () => {
+      try { await api(`/api/privado/modelo/${b.dataset.pvsid}/fotos`, { method: "POST", body: { entry_id: b.dataset.pvtoref } }); toast("Guardada en sus fotos privadas (Banco)", "good", "🔞"); }
+      catch (e) { toast(esc(e.message), "bad"); }
+    });
     $$("[data-pvdel]", g).forEach((b) => b.onclick = async () => {
       if (!confirm(b.closest(".pv-item").querySelector("img") ? "¿Borrar esta imagen? No se puede recuperar." : "¿Cancelar esta foto?")) return;
       await api(`/api/privado/imagen/${b.dataset.pvdel}`, { method: "DELETE" }); refresh();
@@ -98,3 +103,51 @@ VIEWS.privado = async (el) => {
   if (privTimer) clearInterval(privTimer);
   privTimer = setInterval(() => { if (!document.getElementById("pv-grid")) { clearInterval(privTimer); privTimer = null; return; } refresh(); }, 5000);
 };
+
+// ------------------------------------------------------------------ Banco: fotos privadas de cada modelo (solo admin)
+const _bancoPriv = VIEWS.banco;
+VIEWS.banco = async (el) => {
+  await _bancoPriv(el);
+  const admin = !S.authOn || S.me?.role === "admin";
+  if (!admin) return;
+  let subs = [];
+  try { subs = await api("/api/subjects"); } catch { return; }
+  const byId = Object.fromEntries(subs.map((s) => [s.id, s]));
+  $$(".subject-card").forEach((card) => {
+    const sid = $("[data-del]", card)?.dataset.del, s = byId[sid];
+    if (!s || s.kind !== "person" || $("[data-pvbank]", card)) return;
+    const info = s.lora?.info || {}, n = (info.private_refs || []).length;
+    const b = document.createElement("button");
+    b.className = "btn sm ghost"; b.dataset.pvbank = sid;
+    b.textContent = `🔞 Fotos privadas${n ? ` (${n})` : ""}`;
+    b.title = "Solo administradores: sus fotos adultas (no se publican ni van a la nube) y usarlas al entrenar su LoRA";
+    b.onclick = () => privateDialog(sid, s.name);
+    ($(".lora-box", card) || $(".body", card))?.append(b);
+  });
+};
+
+async function privateDialog(sid, name) {
+  let d;
+  try { d = await api(`/api/privado/modelo/${sid}`); } catch (e) { return toast(esc(e.message), "bad"); }
+  const box = modal(`🔞 Fotos privadas · ${esc(name)}`, d.confirmed ? `
+    <div class="hint">Solo administradores. Estas fotos <b>no se publican, no van a /media y nunca se mandan a ninguna IA de la nube</b>. Se usan solo en la placa (o en tus tarjetas alquiladas).</div>
+    <label class="q-row"><input type="checkbox" id="pv-trainp" ${d.train_private ? "checked" : ""}><div><b>Usar estas fotos al entrenar su LoRA</b><div class="faint small">Se suman a sus fotos normales. Se entrena con el botón de siempre (para contenido adulto, mejor en su versión SDXL).</div></div></label>
+    <div class="row" style="gap:8px"><b class="grow">Sus fotos privadas (${d.refs.length})</b>
+      <label class="btn sm">⬆ Subir fotos<input type="file" id="pv-up" accept="image/*" multiple hidden></label></div>
+    <div class="pv-grid">${d.refs.map((f) => `<div class="pv-item"><img src="/api/privado/ref/${esc(f)}" loading="lazy">
+      <button class="btn sm ghost" data-pvrm="${esc(f)}">Quitar</button></div>`).join("") || '<div class="faint small">Todavía no tiene. Súbelas o agrégalas desde lo generado abajo.</div>'}</div>
+    <b style="margin-top:10px">Generadas en la Adult Zone (${d.generated.length})</b>
+    <div class="pv-grid">${d.generated.map((e) => `<div class="pv-item"><img src="/api/privado/imagen/${esc(e.id)}" loading="lazy">
+      ${d.refs.includes(e.file) ? '<span class="chip good">En sus fotos</span>' : `<button class="btn sm" data-pvadd="${esc(e.id)}">➕ A sus fotos</button>`}</div>`).join("") || '<div class="faint small">Todavía no hay. Pídelas en la Adult Zone nombrándola.</div>'}</div>`
+    : `<div class="card pv-rules">Primero confirma en la <b>Adult Zone</b> (Opciones avanzadas) que <b>${esc(name)}</b> es una modelo <b>inventada y mayor de 18</b>.</div>`,
+    `<button class="btn ghost" onclick="closeModal()">Cerrar</button>`, true);
+  if (!d.confirmed) return;
+  $("#pv-trainp", box).onchange = async (ev) => { await api(`/api/privado/modelo/${sid}/entrenar-con-privadas`, { method: "POST", body: { on: ev.target.checked } }); toast(ev.target.checked ? "Se usarán al entrenar su LoRA" : "No se usarán al entrenar", "good", "🎓"); };
+  $("#pv-up", box).onchange = async (ev) => {
+    const fd = new FormData(); [...ev.target.files].forEach((f) => fd.append("files", f));
+    try { await api(`/api/privado/modelo/${sid}/subir`, { method: "POST", body: fd }); privateDialog(sid, name); route(); }
+    catch (e) { toast(esc(e.message), "bad"); }
+  };
+  $$("[data-pvadd]", box).forEach((b) => b.onclick = async () => { try { await api(`/api/privado/modelo/${sid}/fotos`, { method: "POST", body: { entry_id: b.dataset.pvadd } }); privateDialog(sid, name); } catch (e) { toast(esc(e.message), "bad"); } });
+  $$("[data-pvrm]", box).forEach((b) => b.onclick = async () => { await api(`/api/privado/modelo/${sid}/quitar`, { method: "POST", body: { file: b.dataset.pvrm } }); privateDialog(sid, name); });
+}

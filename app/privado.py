@@ -206,7 +206,8 @@ async def generate(by: str, prompt: str, subject_id: str = "", preset: str = "sd
     batch = uuid.uuid4().hex[:10]
     for i in range(count):
         _append({"id": f"{batch}-{i}", "batch": batch, "at": datetime.now().isoformat(timespec="seconds"), "by": by,
-                 "subject": subject_id and name or "", "preset": preset, "ckpt": ckpt, "prompt": prompt,
+                 "subject": subject_id and name or "", "subject_id": subject_id or "", "preset": preset,
+                 "ckpt": ckpt, "prompt": prompt,
                  "negative": negative, "lora": bool(loras), "status": "queued", "file": ""})
     asyncio.get_event_loop().create_task(_run(batch, count, engine, cfg, full, neg, w, h, loras))
     return {"batch": batch, "count": count, "with_lora": bool(loras),
@@ -411,3 +412,149 @@ async def api_chat(body: ChatIn, request: Request):
         return await chat(u.get("username", ""), body.text)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+
+# ------------------------------------------------------------------ fotos privadas en la ficha del modelo (Banco)
+# Viven en data/privado/ (no en /media). Se ven solo con sesión de admin y se usan para entrenar su LoRA
+# EN LA PLACA (o en tus tarjetas alquiladas). Nunca se mandan a ninguna IA de la nube.
+def _sub_info(sid: str) -> dict:
+    with session() as s:
+        sub = s.get(Subject, sid)
+        if not sub:
+            raise ValueError("Ese modelo no existe")
+        return dict(sub.lora_info or {})
+
+
+def private_refs(sid: str) -> list[str]:
+    return [f for f in (_sub_info(sid).get("private_refs") or []) if (_dir() / Path(f).name).exists()]
+
+
+def private_paths(sid: str) -> list[str]:
+    """Rutas de sus fotos privadas, solo si la modelo está confirmada y eligieron usarlas al entrenar."""
+    try:
+        info = _sub_info(sid)
+    except ValueError:
+        return []
+    if not (info.get("adult_ok") and info.get("train_private")):
+        return []
+    return [str(_dir() / Path(f).name) for f in private_refs(sid)]
+
+
+def is_private_path(p: str) -> bool:
+    try:
+        return Path(p).resolve().parent == _dir().resolve()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _set_refs(sid: str, refs: list[str], **extra) -> None:
+    from app.lora import _update
+    _update(sid, info={"private_refs": list(dict.fromkeys(refs)), **extra})
+
+
+def add_ref_from_entry(sid: str, entry_id: str) -> dict:
+    with session() as s:
+        ok, why = subject_ok(s.get(Subject, sid)) if s.get(Subject, sid) else (False, "Ese modelo no existe")
+    if not ok:
+        raise ValueError(why)
+    e = next((x for x in entries() if x["id"] == entry_id and x.get("file")), None)
+    if not e:
+        raise ValueError("Esa imagen no existe")
+    _set_refs(sid, private_refs(sid) + [e["file"]])
+    return {"ok": True, "count": len(private_refs(sid))}
+
+
+def add_ref_upload(sid: str, data: bytes) -> dict:
+    from io import BytesIO
+    from PIL import Image, ImageOps
+    with session() as s:
+        ok, why = subject_ok(s.get(Subject, sid)) if s.get(Subject, sid) else (False, "Ese modelo no existe")
+    if not ok:
+        raise ValueError(why)
+    try:
+        img = ImageOps.exif_transpose(Image.open(BytesIO(data))).convert("RGB")
+    except Exception:  # noqa: BLE001
+        raise ValueError("Ese archivo no es una imagen")
+    name = f"ref_{sid[:8]}_{uuid.uuid4().hex[:8]}.png"
+    img.save(_dir() / name, "PNG")
+    _set_refs(sid, private_refs(sid) + [name])
+    return {"ok": True, "file": name, "count": len(private_refs(sid))}
+
+
+def remove_ref(sid: str, file: str) -> dict:
+    _set_refs(sid, [f for f in private_refs(sid) if f != Path(file).name])
+    return {"ok": True}
+
+
+def model_private(sid: str) -> dict:
+    info = _sub_info(sid)
+    gen = [e for e in entries() if e.get("subject_id") == sid and e.get("file")]
+    return {"refs": private_refs(sid), "generated": gen[:60], "train_private": bool(info.get("train_private")),
+            "confirmed": bool(info.get("adult_ok"))}
+
+
+class TrainPrivIn(BaseModel):
+    on: bool
+
+
+class RefIn(BaseModel):
+    entry_id: str = ""
+    file: str = ""
+
+
+@router.get("/modelo/{sid}")
+async def api_model(sid: str, request: Request):
+    _admin(request)
+    try:
+        return model_private(sid)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@router.post("/modelo/{sid}/fotos")
+async def api_add_ref(sid: str, body: RefIn, request: Request):
+    _admin(request)
+    try:
+        return add_ref_from_entry(sid, body.entry_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/modelo/{sid}/subir")
+async def api_upload_ref(sid: str, request: Request):
+    _admin(request)
+    form = await request.form()
+    out = None
+    try:
+        for f in form.getlist("files"):
+            out = add_ref_upload(sid, await f.read())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return out or {"ok": False}
+
+
+@router.post("/modelo/{sid}/quitar")
+async def api_remove_ref(sid: str, body: RefIn, request: Request):
+    _admin(request)
+    return remove_ref(sid, body.file)
+
+
+@router.post("/modelo/{sid}/entrenar-con-privadas")
+async def api_train_private(sid: str, body: TrainPrivIn, request: Request):
+    _admin(request)
+    with session() as s:
+        if not s.get(Subject, sid):
+            raise HTTPException(404, "Ese modelo no existe")
+    from app.lora import _update
+    _update(sid, info={"train_private": bool(body.on)})
+    return {"ok": True}
+
+
+@router.get("/ref/{file}")
+async def api_ref_file(file: str, request: Request):
+    _admin(request)
+    f = _dir() / Path(file).name
+    if not f.exists():
+        raise HTTPException(404, "No existe")
+    return FileResponse(f, headers={"Cache-Control": "private, no-store"})
