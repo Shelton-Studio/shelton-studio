@@ -5,6 +5,7 @@ Elección del motor (de más a menos específica):
   2. la conexión que tenga asignado el rol (generate / edit / subject) en Conexiones
   3. lo que diga .env (IMAGE_ENGINE + GEN_PRESET), por defecto ComfyUI local
 """
+import logging
 import asyncio
 from typing import Awaitable, Callable, Protocol
 
@@ -24,6 +25,8 @@ class ImageEngine(Protocol):
 
 
 # Cada GPU (cada ComfyUI) procesa de a un trabajo; con varias GPUs se reparten entre ellas.
+log = logging.getLogger("shelton.engines")
+
 _locks: dict[str, asyncio.Semaphore] = {}
 _busy: dict[str, int] = {}
 
@@ -40,6 +43,29 @@ class gpu_slot:
     async def __aexit__(self, *exc):
         _locks[self.key].release()
         _busy[self.key] -= 1
+
+
+_reach: dict[str, tuple[float, bool]] = {}
+
+
+def reachable(url: str, ttl: float = 30.0) -> bool:
+    """¿Responde ese servidor? (abre y cierra una conexión; se recuerda 30 s). Sirve para no mandar fotos a una
+    tarjeta alquilada que está apagada."""
+    import socket
+    import time as _t
+    from urllib.parse import urlparse
+    hit = _reach.get(url)
+    if hit and _t.time() - hit[0] < ttl:
+        return hit[1]
+    u = urlparse(url)
+    ok = False
+    try:
+        with socket.create_connection((u.hostname, u.port or (443 if u.scheme == "https" else 80)), timeout=1.5):
+            ok = True
+    except OSError:
+        ok = False
+    _reach[url] = (_t.time(), ok)
+    return ok
 
 
 def busy(key: str) -> int:
@@ -143,8 +169,10 @@ def get_engine(role: str = "generate", choice: str | None = None) -> ImageEngine
         from app import granja
         _, cid, preset = (choice.split(":", 2) + ["", ""])[:3]
         node = next((n for n in granja.remote_nodes() if n["conn_id"] == cid and n["comfy_url"]), None)
-        if not node:
-            raise ValueError("La tarjeta elegida no está conectada (o no tiene ComfyUI): revisa la Granja de GPUs")
+        if not node or not reachable(node["comfy_url"]):
+            # La tarjeta está apagada (o se quitó): la foto se hace en la placa con el mismo motor, no falla
+            log.info("La RTX no responde: uso la placa (%s)", preset or "fast")
+            return get_engine(role, preset if preset in PRESET_INFO else None)
         key = f"rtx:{cid}:{preset}:{node['comfy_url']}"
         if key not in _cache:
             eng = _build("comfyui", {"url": node["comfy_url"], "preset": preset or "fast"})
@@ -203,8 +231,8 @@ def _rtx_when_placa_busy(role: str, choice: str | None):
     if not nodes:
         return None
     hit = granja._health.get(nodes[0]["id"])
-    if not hit or not hit[1].get("ok") or _t.time() - hit[0] > 300:
-        return None                                     # solo si la vimos prendida hace poco
+    if not hit or not hit[1].get("ok") or _t.time() - hit[0] > 300 or not reachable(nodes[0]["comfy_url"]):
+        return None                                     # solo si la vimos prendida hace poco y responde
     if not _placa_busy():
         return None
     preset = choice or settings.GEN_PRESET or "fast"
@@ -250,7 +278,7 @@ def engine_choices() -> list[dict]:
                     "local": False})
     from app import granja
     for n in granja.remote_nodes():
-        if n["comfy_url"]:
+        if n["comfy_url"] and reachable(n["comfy_url"]):      # si está apagada no se ofrece
             out.append({"id": f"rtx:{n['conn_id']}:fast", "label": f"⚡ {n['label']} · Z-Image (rápido, con LoRA)",
                         "description": "La tarjeta alquilada: la más rápida. Usa las LoRA de siempre del Banco.", "local": True})
             out.append({"id": f"rtx:{n['conn_id']}:quality", "label": f"⚡ {n['label']} · Calidad máxima (Qwen-Image)",

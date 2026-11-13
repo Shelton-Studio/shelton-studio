@@ -294,6 +294,11 @@ def active(choice: str | None) -> dict:
         from app import granja
         _, cid, preset = (choice.split(":", 2) + ["", ""])[:3]
         node = next((n for n in granja.remote_nodes() if n["conn_id"] == cid), None)
+        from app.engines import reachable
+        if not node or not node["comfy_url"] or not reachable(node["comfy_url"]):
+            fallback = active(preset if preset in PRESET_INFO else "")
+            return {**fallback, "label": "RTX apagada → placa",
+                    "generate": fallback["generate"] + " (la RTX está apagada)"}
         where = node["label"] if node else "RTX"
         img = "Qwen-Image 20B" if preset == "quality" else "Z-Image Turbo + LoRA del Banco"
         edit_m = "Qwen-Image-Edit 2509"
