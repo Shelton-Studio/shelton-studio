@@ -84,15 +84,19 @@ async def health(node: dict, fresh: bool = False) -> dict:
     return data
 
 
-async def free_slot(used: dict[str, int], big: bool = False) -> dict | None:
+async def free_slot(used: dict[str, int], big: bool = False, only: str = "") -> dict | None:
     """El primer lugar libre: GPUs de la placa primero, después los nodos (si están prendidos y con lugar).
     big=True (modelos grandes como Qwen-Image): nunca en una GPU chica de la placa (solo placa «pro» o tarjetas alquiladas)."""
     for s in local_slots():
+        if only and s["id"] != only:
+            continue
         if big and s.get("profile") != "pro":
             continue
         if used.get(s["id"], 0) < s["slots"]:
             return s
     for n in remote_nodes():      # las tarjetas alquiladas siempre son grandes: con perfil estándar, Qwen va comprimido
+        if only and n["id"] != only:
+            continue
         if used.get(n["id"], 0) >= n["slots"]:
             continue
         h = await health(n)
@@ -276,6 +280,29 @@ def cancel_remote(subject_id: str) -> None:
         asyncio.get_event_loop().create_task(_go())
     except RuntimeError:
         pass
+
+
+_sent_loras: dict[str, set] = {}
+
+
+async def ensure_loras(node: dict, names: list[str]) -> None:
+    """Antes de generar en la tarjeta alquilada: le copia las LoRA del Banco que todavía no tiene."""
+    from app.config import settings
+    sent = _sent_loras.setdefault(node["id"], set())
+    for name in names:
+        if name in sent:
+            continue
+        path = Path(settings.COMFY_LORA_DIR).expanduser() / name
+        if not path.exists():
+            continue
+        try:
+            async with _client(300) as c:
+                r = await c.post(f"{node['url']}/loras", params={"name": path.name}, content=path.read_bytes(),
+                                 headers=_headers(node))
+            if r.status_code == 200:
+                sent.add(name)
+        except Exception:  # noqa: BLE001
+            log.warning("No pude copiar %s a %s", name, node["label"])
 
 
 async def push_lora(path: Path) -> list[str]:

@@ -479,6 +479,24 @@ async def lora_variant(sid: str, body: LoraVariantIn):
         raise HTTPException(400, str(e))
 
 
+class LoraOnIn(BaseModel):
+    slot: str = ""             # «node:<conexión>»; vacío = la primera tarjeta alquilada conectada
+
+
+@router.post("/subjects/{sid}/lora/entrenar-en")
+async def lora_train_on(sid: str, body: LoraOnIn):
+    """⚡ Entrenar en la RTX PRO 6000 (o la tarjeta elegida): misma fila y mismo entrenamiento, solo cambia dónde."""
+    from app import granja, lora
+    nodes = granja.remote_nodes()
+    slot = body.slot or (nodes[0]["id"] if nodes else "")
+    if not slot or not any(n["id"] == slot for n in nodes):
+        raise HTTPException(400, "No hay ninguna tarjeta alquilada conectada: prende la RTX en RunPod y revisa la Granja")
+    try:
+        return lora.start_on(sid, slot)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @router.post("/subjects/{sid}/lora/cancel")
 async def lora_cancel(sid: str):
     from app import lora
