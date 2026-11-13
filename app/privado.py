@@ -337,6 +337,16 @@ async def _resume(ids: list[str], preset: str, ckpt: str, job: dict) -> None:
     await _run_ids(ids, engine, cfg, job["full"], job["neg"], int(job["w"]), int(job["h"]), loras)
 
 
+def review(entry_id: str, ok: bool | None, by: str = "") -> dict:
+    """Aprobación interna de la Adult Zone (no publica nada: solo marca cuáles sirven y cuáles no)."""
+    e = next((x for x in entries() if x["id"] == entry_id), None)
+    if not e or e.get("status") != "done":
+        raise ValueError("Esa imagen no existe o todavía no está lista")
+    state = "approved" if ok else "rejected" if ok is False else ""
+    _append({"id": entry_id, "review": state, "review_by": by, "review_at": datetime.now().isoformat(timespec="seconds")})
+    return {"ok": True, "review": state}
+
+
 def delete(entry_id: str) -> None:
     e = next((x for x in entries() if x["id"] == entry_id), None)
     if not e:
@@ -409,6 +419,19 @@ async def api_image(entry_id: str, request: Request):
     if not e:
         raise HTTPException(404, "No existe")
     return FileResponse(_dir() / Path(e["file"]).name, headers={"Cache-Control": "private, no-store"})
+
+
+class ReviewIn(BaseModel):
+    ok: bool | None = None          # True aprobar, False rechazar, None volver a «por revisar»
+
+
+@router.post("/imagen/{entry_id}/revisar")
+async def api_review(entry_id: str, body: ReviewIn, request: Request):
+    u = _admin(request)
+    try:
+        return review(entry_id, body.ok, u.get("username", "") if isinstance(u, dict) else "")
+    except ValueError as e:
+        raise HTTPException(404, str(e))
 
 
 @router.delete("/imagen/{entry_id}")

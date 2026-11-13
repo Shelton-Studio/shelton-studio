@@ -281,3 +281,14 @@ def test_valentina_con_sdxl_uses_her_sdxl_version():
     p = privado.parse_request("hazme una foto de Ámbar con sdxl en la playa")
     assert p["subject"]["name"] == "Ámbar · SDXL" and p["preset"] == "sdxl" and "Ámbar" not in p["prompt"]
     assert privado.parse_request("hazme una foto de Ámbar en la playa")["preset"] == "zimage"
+
+
+def test_review_adult_images_privately():
+    """Aprobar / rechazar en la Adult Zone: queda marcado, no publica nada."""
+    privado._append({"id": "rev-0", "batch": "rev", "at": "2099", "status": "done", "file": "rev-0.png"})
+    assert privado.review("rev-0", True, "admin")["review"] == "approved"
+    assert next(x for x in privado.entries() if x["id"] == "rev-0")["review"] == "approved"
+    privado.review("rev-0", False)
+    assert next(x for x in privado.entries() if x["id"] == "rev-0")["review"] == "rejected"
+    privado.review("rev-0", None)
+    assert next(x for x in privado.entries() if x["id"] == "rev-0")["review"] == ""
