@@ -70,10 +70,10 @@ async function paintActiveModel() {
   if (!bar) { bar = document.createElement("div"); bar.id = "active-model"; bar.className = "active-model"; head.after(bar); }
   try {
     const a = await api(`/api/catalogo/activo/ahora?choice=${encodeURIComponent(S.chatEngine || "")}`);
-    bar.innerHTML = `<span class="faint small">Modelo activo</span>
-      <span class="am-chip" title="Generar imágenes">🖼️ ${esc(a.generate || "—")}</span>
-      <span class="am-chip" title="Editar / con referencias (modelos del banco)">✏️ ${esc(a.edit || "—")}</span>
-      <span class="am-chip" title="Video">🎬 ${esc(a.video || "—")}</span>
+    bar.innerHTML = `<span class="faint small" title="Un motor por tarea: fotos nuevas, ediciones y videos">Motor por tarea</span>
+      <span class="am-chip" title="Con este se crean las fotos nuevas"><b>Fotos:</b> ${esc(a.generate || "—")}</span>
+      <span class="am-chip am-sub" title="Solo cuando pides editar una foto, o una modelo que todavía no tiene LoRA"><b>Editar:</b> ${esc(a.edit || "—")}</span>
+      <span class="am-chip am-sub" title="Solo cuando pides un video"><b>Video:</b> ${esc(a.video || "—")}</span>
       <button class="btn sm ghost" id="am-change" title="Cambiar los modelos de cada ecosistema">Cambiar</button>`;
     $("#am-change", bar).onclick = () => openCloudModels();
   } catch { bar.remove(); }

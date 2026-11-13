@@ -296,7 +296,7 @@ def active(choice: str | None) -> dict:
         node = next((n for n in granja.remote_nodes() if n["conn_id"] == cid), None)
         where = node["label"] if node else "RTX"
         img = "Qwen-Image 20B" if preset == "quality" else "Z-Image Turbo + LoRA del Banco"
-        edit_m = "Qwen-Image-Edit 2509" if preset == "quality" else "Z-Image + LoRA / Qwen-Image-Edit"
+        edit_m = "Qwen-Image-Edit 2509"
         return {"label": f"⚡ {where}", "generate": f"{img} · ⚡ {where}", "edit": f"{edit_m} · ⚡ {where}",
                 "video": video_default}
     if choice == "openrouter":
