@@ -834,20 +834,39 @@ async def caption_photos(subject_id: str, trigger: str) -> dict:
         cache = json.loads(cache_f.read_text(encoding="utf-8")) if cache_f.exists() else {}
     except Exception:  # noqa: BLE001
         cache = {}
+    # «Valentina · Qwen» / «· SDXL» usan las mismas fotos que Valentina: se reaprovechan sus descripciones
+    with session() as s:
+        sub = s.get(Subject, subject_id)
+        orig = (sub.lora_info or {}).get("variant_of") if sub else None
+    if orig:
+        try:
+            of = _work(orig) / "descripciones.json"
+            if of.exists():
+                cache = {**json.loads(of.read_text(encoding="utf-8")), **cache}
+        except Exception:  # noqa: BLE001
+            pass
     paths = session_images(subject_id)
     from app import privado
     todo = [p for p in paths if p not in cache and not privado.is_private_path(p)]   # lo privado NUNCA va a la nube
-    for i in range(0, len(todo), 5):
-        batch = todo[i:i + 5]
-        content = []
-        for p in batch:
-            content.append(image_block(p, 768))
-        content.append({"type": "text", "text": f"{len(batch)} photos. Trigger word: {trigger}."})
-        out = await llm.json_call(CAPTION_PROMPT, content, llm.obj({"captions": {"type": "array", "items": {"type": "string"}}}),
-                                  agent="subject_analyst", max_tokens=2000)
-        caps = [str(c).strip().strip(".") for c in (out.get("captions") or [])]
-        for p, c in zip(batch, caps):
-            cache[p] = c[:300]
+    sem = asyncio.Semaphore(4)                       # varios grupos de fotos a la vez: mucho más rápido
+
+    async def describe(batch: list[str]) -> None:
+        async with sem:
+            content = [image_block(p, 768) for p in batch]
+            content.append({"type": "text", "text": f"{len(batch)} photos. Trigger word: {trigger}."})
+            try:
+                out = await llm.json_call(CAPTION_PROMPT, content,
+                                          llm.obj({"captions": {"type": "array", "items": {"type": "string"}}}),
+                                          agent="subject_analyst", max_tokens=2000)
+            except Exception as e:  # noqa: BLE001
+                log.warning("No pude describir %d fotos: %s", len(batch), e)
+                return
+            caps = [str(c).strip().strip(".") for c in (out.get("captions") or [])]
+            for p, c in zip(batch, caps):
+                cache[p] = c[:300]
+    await asyncio.gather(*(describe(todo[i:i + 5]) for i in range(0, len(todo), 5)))
+    if todo:
+        cache_f.parent.mkdir(parents=True, exist_ok=True)
         cache_f.write_text(json.dumps(cache, ensure_ascii=False, indent=1), encoding="utf-8")
     return {p: cache.get(p, "") for p in paths}
 
