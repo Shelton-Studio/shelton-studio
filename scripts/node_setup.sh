@@ -82,7 +82,7 @@ pkill -f shelton_worker.py 2>/dev/null || true
 cat > "$BASE/start_worker.sh" <<RUN
 #!/usr/bin/env bash
 export WORKER_TOKEN="$WORKER_TOKEN" AITK_DIR="$AITK" WORKER_DIR="$BASE/shelton_jobs" HF_HOME="$BASE/hf_cache"
-export COMFY_LORA_DIR="$LORA_DIR" WORKER_GPUS="${WORKER_GPUS:-}"
+export COMFY_LORA_DIR="$LORA_DIR" WORKER_GPUS="${WORKER_GPUS:-}" WORKER_SHARE="${WORKER_SHARE:-1}"
 exec python3 "$SRC/scripts/shelton_worker.py"
 RUN
 chmod 700 "$BASE/start_worker.sh"

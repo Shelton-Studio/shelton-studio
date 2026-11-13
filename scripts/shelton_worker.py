@@ -51,6 +51,16 @@ def _gpus_detected() -> list:
 
 
 SLOTS = [x.strip() for x in os.environ.get("WORKER_GPUS", "").split(",") if x.strip()] or _gpus_detected()
+# Una tarjeta grande (ej. RTX PRO 6000, 96 GB) puede entrenar varias LoRA a la vez sin MIG: WORKER_SHARE=3 divide
+# cada GPU en 3 lugares («0/1», «0/2», «0/3»). Cada entrenamiento usa su parte de la memoria.
+SHARE = max(1, int(os.environ.get("WORKER_SHARE", "1") or 1))
+if SHARE > 1:
+    SLOTS = [f"{g}/{i}" for g in SLOTS for i in range(1, SHARE + 1)]
+
+
+def _device(slot) -> str:
+    """«0/2» → «0» (la GPU de verdad); un UUID de MIG o «1» quedan igual."""
+    return str(slot).split("/")[0]
 
 
 def _gpu_info() -> list:
@@ -104,7 +114,7 @@ def _run_job(jid: str) -> None:
     d = JOBS / jid
     cfg_text = json.dumps(job["config"]).replace("__JOB__", str(d))
     (d / "config.json").write_text(cfg_text, encoding="utf-8")
-    env = {**os.environ, "PYTHONUNBUFFERED": "1", "CUDA_VISIBLE_DEVICES": str(job["slot"])}
+    env = {**os.environ, "PYTHONUNBUFFERED": "1", "CUDA_VISIBLE_DEVICES": _device(job["slot"])}
     job["phase"] = "Cargando el modelo"
     with open(d / "train.log", "a", encoding="utf-8") as log:
         proc = subprocess.Popen([_python(), "-u", "run.py", str(d / "config.json")], cwd=str(AITK), env=env,
