@@ -245,3 +245,21 @@ def test_pending_images_resume_by_themselves_after_restart_and_retry_on_cuts(mon
     asyncio.run(restart())
     e = next(x for x in privado.entries() if x["id"] == "corte-0")
     assert e["status"] == "done" and (settings.DATA_DIR / "privado" / e["file"]).exists()
+
+
+def test_uses_her_bank_lora_engine_by_default():
+    """«Hazme una foto de Valentina…» usa el motor de SU LoRA (Z-Image, aprendida de sus fotos del Banco),
+    también mientras sigue aprendiendo (con la última versión lista)."""
+    init_db()
+    with session() as s:
+        sub = Subject(name="Valeria", kind="person", description="mujer inventada de 28 años",
+                      lora_status="training", lora_name="valeria.safetensors", lora_trigger="vlr")
+        s.add(sub)
+        s.flush()
+        sid = sub.id
+    privado.confirm(sid, "admin", True, True)
+    p = privado.parse_request("hazme una foto de Valeria en un loft")
+    assert p["preset"] == "zimage" and p["subject"]["lora_ready"]
+    assert privado.parse_request("foto de Valeria con sdxl")["preset"] == "sdxl"
+    cfg, _ = privado._engine("zimage", "")
+    assert cfg["preset"] == "fast"

@@ -55,8 +55,14 @@ def best_checkpoint(installed: list[str]) -> str:
     return ""
 
 
+ENGINES = {"sdxl": "SDXL", "flux": "Flux", "zimage": "Z-Image"}
+COMFY_PRESET = {"zimage": "fast"}          # Z-Image Turbo: el mismo motor con el que se entrenaron las LoRA del Banco
+
+
 def enrich(prompt: str, preset: str, ckpt: str) -> str:
     """Agrega solo las etiquetas de calidad que cada modelo necesita para rendir al máximo."""
+    if preset == "zimage":
+        return f"{prompt}, photorealistic, natural skin texture, detailed, sharp focus, professional photography"
     if preset == "flux":
         return f"{prompt}, {QUALITY_FLUX}"
     if "pony" in (ckpt or "").lower():
@@ -113,7 +119,7 @@ def models() -> list[dict]:
             ok, why = subject_ok(sub)
             out.append({"id": sub.id, "name": sub.name, "confirmed": bool((sub.lora_info or {}).get("adult_ok")),
                         "usable": ok, "why": why, "base": base_of(sub.id),
-                        "lora_ready": sub.lora_status == "ready" and bool(sub.lora_name)})
+                        "lora_ready": _has_lora(sub)})
     return out
 
 
@@ -156,14 +162,21 @@ def entries() -> list[dict]:
 SIZES = {"vertical": (896, 1152), "cuadrado": (1024, 1024), "horizontal": (1152, 896), "historia": (768, 1344)}
 
 
+def _has_lora(sub) -> bool:
+    """Tiene una LoRA terminada para usar. Mientras sigue aprendiendo se usa la última versión ya lista."""
+    return bool(sub.lora_name) and (sub.lora_status in ("ready", "training", "queued")
+                                    or bool((sub.lora_info or {}).get("versions")))
+
+
 def _engine(preset: str, ckpt: str):
     """ComfyUI local con el perfil pedido (y la conexión ComfyUI de la placa que corresponda, si hay)."""
     from app.connections import list_enabled
     from app.engines import _build
     conns = [c for c in list_enabled("engine") if c.type == "comfyui"]
+    preset = COMFY_PRESET.get(preset, preset)
     pick = next((c for c in conns if (c.config or {}).get("preset") == preset), None) or (conns[0] if conns else None)
     cfg = {**({k: v for k, v in (pick.config or {}).items() if k in ("url", "token")} if pick else {}), "preset": preset}
-    if ckpt:
+    if ckpt and preset in ("sdxl", "flux"):
         cfg["gen_ckpt"] = ckpt
     return cfg, _build("comfyui", cfg)
 
@@ -175,8 +188,8 @@ async def generate(by: str, prompt: str, subject_id: str = "", preset: str = "sd
     prompt = (prompt or "").strip()
     if not prompt:
         raise ValueError("Escribe qué quieres generar")
-    if preset not in ("sdxl", "flux"):
-        raise ValueError("Elige el motor SDXL o Flux")
+    if preset not in ENGINES:
+        raise ValueError("Elige el motor SDXL, Flux o Z-Image")
     for text in (prompt, negative or "", ckpt or ""):
         why = minor_problem(text)
         if why:
@@ -191,7 +204,7 @@ async def generate(by: str, prompt: str, subject_id: str = "", preset: str = "sd
             ok, why = subject_ok(sub)
             if not ok:
                 raise ValueError(why)
-            if sub.lora_status == "ready" and sub.lora_name and lora.base_of(sub.id) == preset:
+            if _has_lora(sub) and lora.base_of(sub.id) == preset:
                 loras = [(sub.lora_name, float(strength) if strength else lora.strength_of(sub))]
                 trigger = sub.lora_trigger or ""
             name = sub.name
@@ -214,7 +227,8 @@ async def generate(by: str, prompt: str, subject_id: str = "", preset: str = "sd
     asyncio.get_event_loop().create_task(_run(batch, count, engine, cfg, full, neg, w, h, loras))
     return {"batch": batch, "count": count, "with_lora": bool(loras),
             "note": "" if loras or not subject_id else
-            f"{name} todavía no tiene LoRA para {preset.upper()}: sale sin su cara. Créale la versión {preset.upper()} en el Banco y entrénala."}
+            f"{name} todavía no tiene LoRA para {ENGINES[preset]}: sale sin su cara. "
+            f"Pídela sin elegir motor (uso el de su LoRA) o créale la versión {ENGINES[preset]} en el Banco."}
 
 
 def _gpu_reason(url: str) -> str:
@@ -419,16 +433,16 @@ def parse_request(text: str) -> dict:
         count = int(m.group(1)) if m.group(1).isdigit() else NUM_WORDS[m.group(1)]
     size = ("historia" if re.search(r"historia|9:16|story|reel", low) else "horizontal" if "horizontal" in low
             else "cuadrado" if "cuadrad" in low else "vertical")
-    preset = "flux" if "flux" in low else "sdxl"
-    if subject and not re.search(r"\b(flux|sdxl)\b", low) and subject["lora_ready"] and subject["base"] in ("sdxl", "flux"):
-        preset = subject["base"]                       # si su LoRA es de Flux, usa Flux sola
+    preset = "flux" if "flux" in low else "zimage" if re.search(r"z-?image", low) else "sdxl"
+    if subject and not re.search(r"\b(flux|sdxl)\b|z-?image", low) and subject["lora_ready"] and subject["base"] in ENGINES:
+        preset = subject["base"]          # usa el motor de SU LoRA (la que aprendió de sus fotos del Banco): sale con su cara
     prompt = t
     if subject:
         prompt = re.sub(re.escape(subject["name"]), "", prompt, flags=re.IGNORECASE)
     prompt = re.sub(r"\b(hazme|haz|genera|generame|créame|creame|crea|quiero|dame)\b", "", prompt, flags=re.IGNORECASE)
     prompt = re.sub(r"\b(\d|una|un|uno|dos|tres|cuatro)\s*(fotos?|im[aá]genes?|versiones?)\s*(de)?\b", "", prompt,
                     flags=re.IGNORECASE)
-    prompt = re.sub(r"\b(con|en)\s+(flux|sdxl)\b|\bformato\s+\w+\b", "", prompt, flags=re.IGNORECASE)
+    prompt = re.sub(r"\b(con|en)\s+(flux|sdxl|z-?image)\b|\bformato\s+\w+\b", "", prompt, flags=re.IGNORECASE)
     prompt = re.sub(r"\s{2,}", " ", prompt).strip(" ,.;:")
     return {"subject": subject, "count": max(1, min(count, MAX_COUNT)), "size": size, "preset": preset,
             "prompt": prompt or t}
@@ -440,7 +454,7 @@ async def chat(by: str, text: str) -> dict:
     r = await generate(by, p["prompt"], sub["id"] if sub else "", p["preset"], count=p["count"], size=p["size"])
     who = f" de {sub['name']}" if sub else ""
     msg = (f"Listo: genero {p['count']} {'foto' if p['count'] == 1 else 'fotos'}{who} en la placa con "
-           f"{'Flux' if p['preset'] == 'flux' else 'SDXL'}{' y su LoRA' if r['with_lora'] else ''}, formato {p['size']}. "
+           f"{ENGINES[p['preset']]}{' y su LoRA (aprendida de sus fotos del Banco)' if r['with_lora'] else ''}, formato {p['size']}. "
            "Aparecen abajo en unos segundos.")
     if r.get("note"):
         msg += " " + r["note"]
