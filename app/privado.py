@@ -701,7 +701,8 @@ def upload_ai_image(data: bytes, by: str, confirmed: bool) -> dict:
     return {"ok": True, "id": eid}
 
 
-def remake(entry_id: str, subject_id: str, mode: str = "cara", level: str = "suave", by: str = "") -> dict:
+def remake(entry_id: str, subject_id: str, mode: str = "cara", level: str = "suave", by: str = "",
+           ckpt: str = "") -> dict:
     """🔁 La misma imagen con la cara (o la cara y el cuerpo) de una modelo confirmada, desde sus LoRAs."""
     e = next((x for x in entries() if x["id"] == entry_id and x.get("status") == "done" and x.get("file")), None)
     if not e:
@@ -724,7 +725,7 @@ def remake(entry_id: str, subject_id: str, mode: str = "cara", level: str = "sua
              "prompt": f"{'Cara y cuerpo' if body else 'Solo cara'} de {name} sobre otra imagen",
              "source_id": entry_id, "note": "En fila…"})
     asyncio.get_event_loop().create_task(_remake_run(eid, e["file"], subject_id, face, body,
-                                                     REMAKE_LEVELS.get(level, REMAKE_LEVELS["suave"])))
+                                                     REMAKE_LEVELS.get(level, REMAKE_LEVELS["suave"]), ckpt))
     return {"ok": True, "id": eid}
 
 
@@ -739,7 +740,8 @@ def _body_lora(subject_id: str):
     return None
 
 
-async def _remake_run(eid: str, file: str, subject_id: str, face: dict, body: bool, denoise: float) -> None:
+async def _remake_run(eid: str, file: str, subject_id: str, face: dict, body: bool, denoise: float,
+                      ckpt: str = "") -> None:
     import random
     try:
         raw = (_dir() / Path(file).name).read_bytes()
@@ -748,7 +750,7 @@ async def _remake_run(eid: str, file: str, subject_id: str, face: dict, body: bo
             _append({"id": eid, "status": "running", "note": "Redibujando con su cuerpo…"})
             adult = _body_lora(subject_id)
             if adult:
-                ckpt = best_checkpoint(await checkpoints())
+                ckpt = ckpt or best_checkpoint(await checkpoints())
                 _cfg, eng = _engine("sdxl", ckpt)
                 loras = [(adult[1], adult[2])]
                 st = _style_lora("sdxl")
@@ -773,6 +775,7 @@ async def _remake_run(eid: str, file: str, subject_id: str, face: dict, body: bo
 
 
 class RemakeIn(BaseModel):
+    ckpt: str = ""
     subject_id: str
     mode: str = "cara"
     level: str = "suave"
@@ -796,7 +799,7 @@ async def api_upload_ai(request: Request):
 async def api_remake(entry_id: str, body: RemakeIn, request: Request):
     u = _admin(request)
     try:
-        return remake(entry_id, body.subject_id, body.mode, body.level, (u or {}).get("username", ""))
+        return remake(entry_id, body.subject_id, body.mode, body.level, (u or {}).get("username", ""), body.ckpt)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -992,17 +995,19 @@ def _remake_intent(text: str, image_id: str = "") -> dict | None:
     return {"src": src, "subject": sub, "mode": "cuerpo" if "cuerpo" in low else "cara", "level": level}
 
 
-async def chat(by: str, text: str, image_id: str = "") -> dict:
+async def chat(by: str, text: str, image_id: str = "", ckpt: str = "") -> dict:
     hit = _remake_intent(text, image_id)
     if hit:                 # rehacer la imagen subida con la cara (o la cara y el cuerpo) de la modelo
-        remake(hit["src"], hit["subject"]["id"], hit["mode"], hit["level"], by)
+        remake(hit["src"], hit["subject"]["id"], hit["mode"], hit["level"], by, ckpt)
         what = "la cara y el cuerpo" if hit["mode"] == "cuerpo" else "la cara"
         return {"reply": f"Listo: le pongo {what} de {hit['subject']['name']} a la imagen, desde sus LoRAs, en la placa"
                          f"{' (cambio de cuerpo ' + hit['level'] + ')' if hit['mode'] == 'cuerpo' else ''}. Aparece abajo en "
                          "unos segundos.", "batch": "rehacer"}
     p = parse_request(text)
     sub = p["subject"]
-    r = await generate(by, p["prompt"], sub["id"] if sub else "", p["preset"], count=p["count"], size=p["size"])
+    use_ckpt = ckpt if (ckpt and p["preset"] == "sdxl") else ""      # el checkpoint elegido (SDXL, Pony…)
+    r = await generate(by, p["prompt"], sub["id"] if sub else "", p["preset"], ckpt=use_ckpt, count=p["count"],
+                       size=p["size"])
     who = f" de {sub['name']}" if sub else ""
     msg = (f"Listo: genero {p['count']} {'foto' if p['count'] == 1 else 'fotos'}{who} en la placa con "
            f"{ENGINES[p['preset']]}{' y su LoRA (aprendida de sus fotos del Banco)' if r['with_lora'] else ''}, formato {p['size']}. "
@@ -1026,13 +1031,14 @@ def usable_names() -> list[str]:
 class ChatIn(BaseModel):
     text: str
     image_id: str = ""
+    ckpt: str = ""
 
 
 @router.post("/chat")
 async def api_chat(body: ChatIn, request: Request):
     u = _admin(request)
     try:
-        return await chat(u.get("username", ""), body.text, body.image_id)
+        return await chat(u.get("username", ""), body.text, body.image_id, body.ckpt)
     except ValueError as e:
         raise HTTPException(400, str(e))
 

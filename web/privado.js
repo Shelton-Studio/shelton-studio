@@ -23,7 +23,7 @@ VIEWS.privado = async (el) => {
     <div class="card pv-rules"><b>Reglas:</b> solo modelos <b>inventadas</b> (no personas reales) y <b>mayores de 18</b>. Cualquier pedido que mencione menores se bloquea.</div>
     <div class="card pv-chat" style="margin-top:14px">
       <div id="pv-msgs" class="pv-msgs"><div class="pv-msg bot">Hola, soy Shelton en Shelton Hot. Pídeme como siempre, por ejemplo: <i>«3 fotos de ${esc((models.find((m) => m.usable) || {}).name || "Luna")} en un loft, luz de ventana, formato historia»</i>. Si nombras a una modelo confirmada, uso su LoRA.</div></div>
-      <form id="pv-form" class="row" style="gap:8px;margin-top:10px"><label class="btn ghost" title="Subir una imagen hecha con IA para ponerle la cara o el cuerpo de una modelo">📎<input type="file" id="pv-chatup" accept="image/*" hidden></label><select id="pv-chatsub" style="width:auto;max-width:180px" title="Modelo para este pedido (si no la nombras en el mensaje)"><option value="">Modelo: la que nombre</option>${models.filter((m) => m.usable && !m.variant_of && !m.adult_twin).map((m) => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join("")}</select><input id="pv-text" class="grow" placeholder="Escríbele a Shelton… (o sube 📎 una imagen IA y dile «ponle la cara»)" autocomplete="off"><button class="btn primary">Enviar</button></form>
+      <form id="pv-form" class="row" style="gap:8px;margin-top:10px"><label class="btn ghost" title="Subir una imagen hecha con IA para ponerle la cara o el cuerpo de una modelo">📎<input type="file" id="pv-chatup" accept="image/*" hidden></label><select id="pv-chatsub" style="width:auto;max-width:180px" title="Modelo para este pedido (si no la nombras en el mensaje)"><option value="">Modelo: la que nombre</option>${models.filter((m) => m.usable && !m.variant_of && !m.adult_twin).map((m) => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join("")}</select><select id="pv-chatckpt" style="width:auto;max-width:200px" title="Checkpoint SDXL / Pony para este pedido"><option value="">Checkpoint: el mejor</option>${(st.checkpoints || []).map((c) => `<option>${esc(c)}</option>`).join("")}</select><input id="pv-text" class="grow" placeholder="Escríbele a Shelton… (o sube 📎 una imagen IA y dile «ponle la cara»)" autocomplete="off"><button class="btn primary">Enviar</button></form>
     </div>
     <details class="card" style="margin-top:14px"><summary style="cursor:pointer"><b>Opciones avanzadas</b> <span class="faint small">(modelos, motor, checkpoint, cantidad, formato)</span></summary>
     <div class="grid g2" style="margin-top:14px;align-items:start">
@@ -107,14 +107,15 @@ VIEWS.privado = async (el) => {
     const box = modal("🔁 Rehacer con una modelo", `
       <label class="f">Modelo<select id="rh-sub">${usable.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}${m.adult && m.adult.ready ? " · 🔞 LoRA adulta" : ""}</option>`).join("")}</select></label>
       <div class="seg" id="rh-mode" style="margin:8px 0"><button data-m="cara" class="on">Solo la cara (todo lo demás igual)</button><button data-m="cuerpo">Cara y cuerpo</button></div>
+      <label class="f" id="rh-ckpt-l" style="display:none">Checkpoint para el cuerpo (SDXL / Pony…)<select id="rh-ckpt"><option value="">El mejor que hay</option>${(st.checkpoints || []).map((c) => `<option>${esc(c)}</option>`).join("")}</select></label>
       <label class="f" id="rh-lvl-l" style="display:none">Cuánto cambia la imagen al poner su cuerpo<select id="rh-lvl">
         <option value="suave">Suave · la misma imagen, solo su figura</option><option value="medio">Medio</option><option value="fuerte">Fuerte · más ella, puede cambiar detalles</option></select></label>
       <div class="hint">La cara sale de su LoRA de siempre. El cuerpo, de su 🔞 LoRA adulta (si la tiene) o de su LoRA de siempre.</div>`,
       `<button class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn primary" id="rh-go">🔁 Rehacer</button>`);
     let mode = "cara";
-    $$("#rh-mode button", box).forEach((b) => b.onclick = () => { mode = b.dataset.m; $$("#rh-mode button", box).forEach((x) => x.classList.toggle("on", x === b)); $("#rh-lvl-l", box).style.display = mode === "cuerpo" ? "" : "none"; });
+    $$("#rh-mode button", box).forEach((b) => b.onclick = () => { mode = b.dataset.m; $$("#rh-mode button", box).forEach((x) => x.classList.toggle("on", x === b)); $("#rh-lvl-l", box).style.display = mode === "cuerpo" ? "" : "none"; $("#rh-ckpt-l", box).style.display = mode === "cuerpo" ? "" : "none"; });
     $("#rh-go", box).onclick = async () => {
-      try { await api(`/api/privado/imagen/${id}/rehacer`, { method: "POST", body: { subject_id: $("#rh-sub", box).value, mode, level: $("#rh-lvl", box).value } }); closeModal(); toast("Rehaciendo en la placa…", "good", "🔁"); refresh(); }
+      try { await api(`/api/privado/imagen/${id}/rehacer`, { method: "POST", body: { subject_id: $("#rh-sub", box).value, mode, level: $("#rh-lvl", box).value, ckpt: $("#rh-ckpt", box).value } }); closeModal(); toast("Rehaciendo en la placa…", "good", "🔁"); refresh(); }
       catch (e) { toast(esc(e.message), "bad"); }
     };
   };
@@ -228,7 +229,7 @@ VIEWS.privado = async (el) => {
     if (pick && !t.toLowerCase().includes(pick.toLowerCase())) {   // la modelo elegida arriba, si no la nombró
       send = /\b(cara|rostro|cuerpo)\b/i.test(t) ? `${t} de ${pick}` : `${pick}: ${t}`;
     }
-    try { const r = await api("/api/privado/chat", { method: "POST", body: { text: send, image_id: chatImage } }); say("bot", esc(r.reply)); if (r.batch === "rehacer") chatImage = ""; refresh(); }
+    try { const r = await api("/api/privado/chat", { method: "POST", body: { text: send, image_id: chatImage, ckpt: $("#pv-chatckpt", el).value } }); say("bot", esc(r.reply)); if (r.batch === "rehacer") chatImage = ""; refresh(); }
     catch (e) { say("bot err", "⚠ " + esc(e.message)); }
   };
   if (privTimer) clearInterval(privTimer);
