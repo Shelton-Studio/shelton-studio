@@ -381,9 +381,47 @@ def style_subject_id() -> str:
         return sub.id
 
 
+def _style_file() -> Path:
+    return _dir() / "estilo_fotos.json"
+
+
+def style_uploads() -> list[dict]:
+    """Fotos propias subidas para la LoRA de la Adult Zone (con quién confirmó que son inventadas y +18)."""
+    try:
+        rows = json.loads(_style_file().read_text(encoding="utf-8")) if _style_file().exists() else []
+    except ValueError:
+        rows = []
+    return [r for r in rows if (_dir() / Path(r["file"]).name).exists()]
+
+
+def style_upload(data: bytes, by: str, confirmed: bool) -> dict:
+    if not confirmed:
+        raise ValueError("Confirma que son imágenes generadas con IA, de personas inventadas y mayores de 18")
+    from io import BytesIO
+    from PIL import Image, ImageOps
+    try:
+        img = ImageOps.exif_transpose(Image.open(BytesIO(data))).convert("RGB")
+    except Exception:  # noqa: BLE001
+        raise ValueError("Ese archivo no es una imagen")
+    name = f"estilo_{uuid.uuid4().hex[:10]}.png"
+    img.save(_dir() / name, "PNG")
+    rows = style_uploads() + [{"file": name, "by": by, "at": datetime.now().isoformat(timespec="seconds"),
+                               "confirmed": "IA · inventada · +18"}]
+    _style_file().write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
+    return {"ok": True, "file": name, "count": len(rows)}
+
+
+def style_remove(file: str) -> dict:
+    name = Path(file).name
+    rows = [r for r in style_uploads() if r["file"] != name]
+    _style_file().write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
+    (_dir() / name).unlink(missing_ok=True)
+    return {"ok": True, "count": len(rows)}
+
+
 def style_dataset() -> list[str]:
-    """Las fotos aprobadas en la Adult Zone (solo las que pasan el control de menores)."""
-    out = []
+    """Fotos propias subidas + las aprobadas en la Adult Zone (solo las que pasan el control de menores)."""
+    out = [str(_dir() / Path(r["file"]).name) for r in style_uploads()]
     for e in entries():
         if e.get("review") != "approved" or e.get("status") != "done" or not e.get("file"):
             continue
@@ -409,7 +447,8 @@ def style_status() -> dict:
     with session() as s:
         sub = next(iter(s.query(Subject).filter(Subject.name == STYLE_NAME)), None)
         info = dict(sub.lora_info or {}) if sub else {}
-        return {"approved": len(style_dataset()), "min": STYLE_MIN, "status": sub.lora_status if sub else "",
+        ups = style_uploads()
+        return {"approved": len(style_dataset()), "uploads": [r["file"] for r in ups], "n_uploads": len(ups), "min": STYLE_MIN, "status": sub.lora_status if sub else "",
                 "progress": round(sub.lora_progress or 0) if sub else 0, "phase": info.get("phase", ""),
                 "eta_min": info.get("eta_min"), "ready": bool(sub and sub.lora_name), "trained_with": info.get("images")}
 
@@ -483,6 +522,30 @@ class ConfirmIn(BaseModel):
 async def api_style(request: Request):
     _admin(request)
     return style_status()
+
+
+@router.post("/estilo/subir")
+async def api_style_upload(request: Request):
+    u = _admin(request)
+    form = await request.form()
+    confirmed = str(form.get("confirm") or "") == "1"
+    out = None
+    try:
+        for f in form.getlist("files"):
+            out = style_upload(await f.read(), (u or {}).get("username", ""), confirmed)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return out or {"ok": False}
+
+
+class StyleRemoveIn(BaseModel):
+    file: str
+
+
+@router.post("/estilo/quitar")
+async def api_style_remove(body: StyleRemoveIn, request: Request):
+    _admin(request)
+    return style_remove(body.file)
 
 
 @router.post("/estilo/entrenar")

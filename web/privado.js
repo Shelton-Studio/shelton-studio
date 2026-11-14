@@ -103,8 +103,21 @@ VIEWS.privado = async (el) => {
     const busy = ["training", "queued"].includes(s.status);
     c.innerHTML = `<div class="row" style="gap:8px;flex-wrap:wrap"><b class="grow">🎓 LoRA de la Adult Zone</b>
         ${s.ready ? '<span class="chip good">activa en SDXL</span>' : '<span class="chip">todavía sin entrenar</span>'}
-        <button class="btn sm ${busy ? "" : "primary"}" id="pv-style-go" ${busy || s.approved < s.min ? "disabled" : ""}>${busy ? (s.status === "queued" ? "En fila…" : `Aprendiendo… ${s.progress}%`) : `Entrenar con las aprobadas (${s.approved})`}</button></div>
+        <label class="btn sm" title="Tus propias fotos (como el + Foto del Banco)">⬆ Subir mis fotos<input type="file" id="pv-style-up" accept="image/*" multiple hidden></label>
+        <button class="btn sm ${busy ? "" : "primary"}" id="pv-style-go" ${busy || s.approved < s.min ? "disabled" : ""}>${busy ? (s.status === "queued" ? "En fila…" : `Aprendiendo… ${s.progress}%`) : `Entrenar (${s.approved} fotos)`}</button></div>
+      ${s.n_uploads ? `<div class="pv-grid" style="margin-top:8px">${s.uploads.map((f) => `<div class="pv-item"><img src="/api/privado/ref/${esc(f)}" loading="lazy"><button class="btn sm ghost" data-stq="${esc(f)}">Quitar</button></div>`).join("")}</div>` : ""}
+      <div class="faint small" style="margin-top:6px">${s.n_uploads} subidas por ti + ${Math.max(0, s.approved - s.n_uploads)} aprobadas con ✔ = ${s.approved} (mínimo ${s.min}).</div>
       <div class="faint small" style="margin-top:6px">Aprende el estilo y la anatomía de las fotos que aprobaste con ✔ (mínimo ${s.min}). Se suma sola a cada foto con SDXL, junto con la LoRA de la modelo. Todo en la placa: nunca va a la nube. Cada vez que la entrenas sigue sumando sobre lo aprendido.${busy && s.phase ? ` · ${esc(s.phase)}` : ""}</div>`;
+    const up = $("#pv-style-up", c);
+    if (up) up.onchange = async (ev) => {
+      if (!ev.target.files.length) return;
+      if (!confirm("Confirmo que estas fotos son imágenes GENERADAS CON IA, de personas INVENTADAS (no personas reales) y MAYORES DE 18.")) { ev.target.value = ""; return; }
+      const fd = new FormData(); [...ev.target.files].forEach((f) => fd.append("files", f)); fd.append("confirm", "1");
+      try { const r = await api("/api/privado/estilo/subir", { method: "POST", body: fd }); toast(`Subidas: ya hay ${r.count} fotos tuyas`, "good", "⬆"); }
+      catch (e) { toast(esc(e.message), "bad"); }
+      paintStyle();
+    };
+    $$("[data-stq]", c).forEach((q) => q.onclick = async () => { await api("/api/privado/estilo/quitar", { method: "POST", body: { file: q.dataset.stq } }); paintStyle(); });
     const b = $("#pv-style-go", c);
     if (b) b.onclick = async () => { try { await api("/api/privado/estilo/entrenar", { method: "POST" }); toast("Entrenando la LoRA de la Adult Zone", "good", "🎓"); paintStyle(); } catch (e) { toast(esc(e.message), "bad"); } };
     if (busy) setTimeout(() => { if (document.body.contains(c)) paintStyle(); }, 15000);
