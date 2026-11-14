@@ -579,3 +579,11 @@ audio { width: 100%; height: 40px; }
 /* ⚙️ Ajustes de foto */
 .ps-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 14px; }
 .ps-grid .f .faint { display: block; margin-top: 3px; line-height: 1.35; }
+
+/* 🗑 Borrar conversaciones */
+.th-item { position: relative; }
+.th-item .th-del { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); display: none; width: 28px; height: 28px;
+  border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); color: var(--muted); cursor: pointer; place-items: center; }
+.th-item:hover .th-del { display: grid; }
+.th-item .th-del:hover { color: var(--bad); border-color: var(--bad); }
+@media (hover: none) { .th-item .th-del { display: grid; } }
