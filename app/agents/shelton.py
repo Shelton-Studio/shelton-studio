@@ -273,7 +273,7 @@ TOOLS = [
     _tool("swap_face", "🔁 La MISMA foto con la cara de un modelo del banco: el usuario pega una imagen (de TikTok, "
           "Instagram o de donde sea) y pide «igual pero con la cara de Valentina». Copia todo tal cual (pose, ropa, "
           "fondo, luz, encuadre) y solo cambia la cara por la de su LoRA. Usa el post_id de la foto subida. Necesita "
-          "que la modelo tenga su LoRA lista. Si la foto tiene menores o desnudos, no se hace. Espera el resultado.",
+          "que la modelo tenga su LoRA lista. Espera el resultado.",
           {"post_id": {"type": "string", "description": "La foto de referencia (subida o de la galería)"},
            "subject": {"type": "string", "description": "Modelo del banco cuya cara se pone"}}, ["post_id", "subject"]),
     _tool("best_times", "Mejor hora para publicar por red y por modelo del banco (mezcla tu historial con investigación "

@@ -257,6 +257,6 @@ def test_swap_face_copies_the_photo_and_only_changes_the_face(monkeypatch):
     try:
         run()
     except ValueError as e:
-        assert "menor" in str(e)
+        assert "no se puede usar" in str(e)
     else:
         raise AssertionError("con un posible menor no debía hacerlo")

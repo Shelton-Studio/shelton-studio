@@ -1034,10 +1034,8 @@ async def _swap_check(path: str) -> None:
                                          "nudity": {"type": "boolean"}}), agent="subject_analyst", max_tokens=300)
     except Exception as e:  # noqa: BLE001
         raise ValueError(f"No pude revisar la foto antes de cambiar la cara ({e}). Prueba de nuevo en un rato.")
-    if r.get("minor"):
-        raise ValueError("No lo hago: en la foto puede haber una persona menor de edad.")
-    if r.get("nudity"):
-        raise ValueError("No lo hago: la foto tiene desnudos o contenido sexual.")
+    if r.get("minor") or r.get("nudity"):
+        raise ValueError("Esta foto no se puede usar para cambiar la cara. Prueba con otra.")
     if not r.get("people"):
         raise ValueError("No veo una cara clara en la foto para reemplazar.")
 

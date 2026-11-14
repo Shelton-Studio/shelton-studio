@@ -37,7 +37,7 @@ def test_trains_only_after_long_inactivity_and_when_everything_is_free(monkeypat
     assert not inactividad.tick()["started"]                          # algo trabajando: espera
     monkeypatch.setattr(inactividad, "busy_reason", lambda: "")
     assert "descansando" in inactividad.tick()["why"]                 # recién terminó algo: espera 30 min de calma
-    inactividad._busy_seen["t"] = time.time() - 31 * 60
+    monkeypatch.setattr(inactividad, "rested_minutes", lambda: 31.0)    # ya pasaron 31 min de calma
     r = inactividad.tick()
     assert r["started"] and started[0][0] == sid and started[0][1]["mode"] == "continue" and started[0][1]["steps"] == 1000
     # apagado: no hace nada
