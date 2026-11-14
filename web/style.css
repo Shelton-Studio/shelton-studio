@@ -575,3 +575,7 @@ audio { width: 100%; height: 40px; }
 .alt-cmp figure { margin: 0; display: grid; gap: 6px; }
 .alt-cmp img { width: 100%; max-height: 70vh; object-fit: contain; border-radius: 10px; background: rgba(0,0,0,.3); }
 @media (max-width: 720px) { .alt-cmp { grid-template-columns: 1fr; } }
+
+/* ⚙️ Ajustes de foto */
+.ps-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 14px; }
+.ps-grid .f .faint { display: block; margin-top: 3px; line-height: 1.35; }

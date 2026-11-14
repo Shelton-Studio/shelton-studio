@@ -80,6 +80,14 @@ class ComfyEngine:
     def _wf(self, role: str, extra: dict) -> dict:
         wf = load_workflow(self.workflows[role])
         values = {**self.values[role], **extra}
+        if role == "generate":            # ⚙️ Ajustes de foto: lo que la persona fijó a mano gana al automático
+            from app import calidad
+            ov = calidad.overrides()
+            for k in ("steps", "cfg", "guidance", "seed"):
+                if ov.get(k):
+                    values[k] = ov[k]
+            if ov.get("negative_extra"):
+                values["negative"] = ", ".join(x for x in [values.get("negative", ""), ov["negative_extra"]] if x)
         return fill_workflow(wf, {k: v for k, v in values.items() if k in placeholders(wf)})
 
     def _size(self, width: int, height: int) -> tuple[int, int]:
@@ -101,6 +109,10 @@ class ComfyEngine:
             await hook([name for name, _ in loras])        # en una tarjeta alquilada: le copia las LoRA que falten
         w, h = self._size(width, height)
         wf = self._wf("generate", {"prompt": prompt, "width": w, "height": h, "seed": seed})
+        from app import calidad as _cal
+        force = _cal.overrides().get("lora_strength")
+        if force:                          # ⚙️ fuerza de la LoRA fijada a mano
+            loras = [(name, force) for name, _ in loras]
         inject_loras(wf, loras)
         if quality is not False:          # el comparador de versiones genera sin calidad máxima (más rápido y parejo)
             from app import calidad

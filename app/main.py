@@ -522,7 +522,8 @@ class SubjectIn(BaseModel):
 @app.get("/api/subjects")
 async def subjects():
     with session() as s:
-        return [subject_dict(x) for x in s.query(Subject).order_by(Subject.name)]
+        return [subject_dict(x) for x in s.query(Subject).order_by(Subject.name)
+                if not (x.lora_info or {}).get("adult_style")]     # la LoRA de la Adult Zone no va al Banco
 
 
 @app.post("/api/subjects")
