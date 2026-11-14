@@ -18,7 +18,7 @@ VIEWS.privado = async (el) => {
   let st;
   try { st = await api("/api/privado/estado"); } catch (e) { el.innerHTML = `<div class="card">${empty("🔒", esc(e.message))}</div>`; return; }
   const models = st.models || [];
-  const opt = (m) => `<option value="${esc(m.id)}" ${m.usable ? "" : "disabled"}>${esc(m.name)}${m.usable ? (m.lora_ready ? ` · LoRA ${m.base.toUpperCase()}` : " · sin LoRA") : " · falta confirmar"}</option>`;
+  const opt = (m) => `<option value="${esc(m.id)}" ${m.usable ? "" : "disabled"}>${esc(m.name)}${m.usable ? ((m.lora_ready ? ` · cara ${m.base.toUpperCase()}` : " · sin LoRA") + (m.adult && m.adult.ready ? " + 🔞 adulta" : "")) : " · falta confirmar"}</option>`;
   el.innerHTML = pageHead("🔞", "Shelton Studio · Shelton Hot", "Contenido adulto con las modelos del banco. Todo se genera en la placa: no pasa por la nube, no se publica y solo lo ven los administradores.") + `
     <div class="card pv-rules"><b>Reglas:</b> solo modelos <b>inventadas</b> (no personas reales) y <b>mayores de 18</b>. Cualquier pedido que mencione menores se bloquea.</div>
     <div class="card pv-chat" style="margin-top:14px">
@@ -42,7 +42,7 @@ VIEWS.privado = async (el) => {
       </div>
       <div class="card">
         <b>Generar</b>
-        <label class="f">Modelo<select id="pv-sub"><option value="">— Sin modelo del banco —</option>${models.map(opt).join("")}</select></label>
+        <label class="f">Modelo<select id="pv-sub"><option value="">— Sin modelo del banco —</option>${models.filter((m) => !m.adult_twin).map(opt).join("")}</select></label>
         <div class="row" style="gap:8px">
           <label class="f grow">Motor<select id="pv-pre"><option value="sdxl">SDXL</option><option value="flux">Flux.1 Dev</option><option value="zimage">Z-Image (LoRA del Banco)</option></select></label>
           <label class="f grow">Checkpoint (SDXL)<select id="pv-ckpt"><option value="">Por defecto</option>${(st.checkpoints || []).map((c) => `<option>${esc(c)}</option>`).join("")}</select></label>
