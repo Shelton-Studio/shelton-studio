@@ -489,3 +489,55 @@ def test_shelton_hot_is_fast_cached_registry_thumbnails_and_checkpoints(monkeypa
     assert asyncio.run(privado.checkpoints()) == ["a.safetensors"] and len(calls) == 1      # guardada
     privado.delete("fast-0")
     assert not t.exists()
+
+
+def test_upload_ai_image_and_remake_with_a_model(monkeypatch):
+    """⬆ Subir una imagen IA (solo con la confirmación) y 🔁 rehacerla con la cara, o la cara y el cuerpo, de la modelo."""
+    import asyncio
+    from app import lora
+    try:
+        privado.upload_ai_image(_png("red"), "admin", confirmed=False)
+    except ValueError as e:
+        assert "IA" in str(e)
+    else:
+        raise AssertionError("sin confirmar no debía dejar")
+    up = privado.upload_ai_image(_png("red"), "admin", confirmed=True)
+    e = next(x for x in privado.entries() if x["id"] == up["id"])
+    assert e["status"] == "done" and e["confirmed"] == "IA · inventada · +18"
+    sid = _subject("Remake")
+    lora._update(sid, lora_status="ready", lora_name="remake.safetensors", lora_trigger="rmk")
+    privado.confirm(sid, "admin", True, True)
+    calls = []
+
+    class Eng:
+        async def img2img(self, image, loras, prompt, seed, denoise=0.5):
+            calls.append(("cuerpo", loras[0][0], denoise))
+            return image
+
+        async def face_pass(self, image, loras, prompt, seed, denoise=0.45):
+            calls.append(("cara", loras[0][0], denoise))
+            return image
+    monkeypatch.setattr(privado, "_engine", lambda p, c: ({}, Eng()))
+
+    async def go(mode):
+        r = privado.remake(up["id"], sid, mode, "suave", "admin")
+        for _ in range(30):
+            await asyncio.sleep(0.01)
+        return next(x for x in privado.entries() if x["id"] == r["id"])
+    out = asyncio.run(go("cara"))
+    assert out["status"] == "done" and calls == [("cara", "remake.safetensors", privado.REMAKE_FACE)]
+    calls.clear()
+    out = asyncio.run(go("cuerpo"))
+    assert [c[0] for c in calls] == ["cuerpo", "cara"] and calls[0][2] == privado.REMAKE_LEVELS["suave"]
+
+
+def test_hot_chat_understands_put_her_face_on_the_uploaded_image(monkeypatch):
+    from app import lora
+    sid = _subject("Chatcara")
+    lora._update(sid, lora_status="ready", lora_name="chatcara.safetensors")
+    privado.confirm(sid, "admin", True, True)
+    up = privado.upload_ai_image(_png("red"), "admin", confirmed=True)
+    hit = privado._remake_intent("ponle el cuerpo y la cara de Chatcara, medio", up["id"])
+    assert hit["mode"] == "cuerpo" and hit["level"] == "medio" and hit["subject"]["id"] == sid
+    assert privado._remake_intent("ponle la cara de Chatcara")["mode"] == "cara"          # usa la última subida
+    assert privado._remake_intent("3 fotos de Chatcara en la playa, cara sonriente") is None   # pedido normal

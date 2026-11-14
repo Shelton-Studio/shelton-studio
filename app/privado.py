@@ -675,6 +675,135 @@ async def api_style(request: Request):
     return style_status()
 
 
+# ------------------------------------------------------------------ 🔁 Rehacer una imagen con una modelo
+REMAKE_LEVELS = {"suave": 0.38, "medio": 0.5, "fuerte": 0.62}
+REMAKE_FACE = 0.70
+AI_ONLY = "Confirma que la imagen está hecha con IA, que es una persona inventada (no real) y mayor de 18"
+
+
+def upload_ai_image(data: bytes, by: str, confirmed: bool) -> dict:
+    """⬆ Subir una imagen hecha con IA (de otra herramienta) para rehacerla con una modelo. Solo con la confirmación
+    de quien la sube: IA, persona inventada, mayor de 18. Queda privada (nunca a la nube ni a /media)."""
+    if not confirmed:
+        raise ValueError(AI_ONLY)
+    from io import BytesIO
+    from PIL import Image, ImageOps
+    try:
+        img = ImageOps.exif_transpose(Image.open(BytesIO(data))).convert("RGB")
+    except Exception:  # noqa: BLE001
+        raise ValueError("Ese archivo no es una imagen")
+    eid = f"sub-{uuid.uuid4().hex[:10]}"
+    name = f"{eid}.png"
+    img.save(_dir() / name, "PNG")
+    _append({"id": eid, "batch": "subidas", "at": datetime.now().isoformat(timespec="seconds"), "by": by,
+             "status": "done", "file": name, "preset": "subida", "subject": "", "subject_id": "",
+             "source": "upload", "confirmed": "IA · inventada · +18", "prompt": "Imagen subida (IA)"})
+    return {"ok": True, "id": eid}
+
+
+def remake(entry_id: str, subject_id: str, mode: str = "cara", level: str = "suave", by: str = "",
+           ckpt: str = "") -> dict:
+    """🔁 La misma imagen con la cara (o la cara y el cuerpo) de una modelo confirmada, desde sus LoRAs."""
+    e = next((x for x in entries() if x["id"] == entry_id and x.get("status") == "done" and x.get("file")), None)
+    if not e:
+        raise ValueError("Esa imagen no existe")
+    with session() as s:
+        sub = s.get(Subject, subject_id)
+        if not sub:
+            raise ValueError("Esa modelo no existe")
+        ok, why = subject_ok(sub)
+        if not ok:
+            raise ValueError(why)
+        name = sub.name
+        face = _face_lora(sub)
+    if not face:
+        raise ValueError(f"{name} necesita su LoRA de Z-Image (la de su cara) lista: entrénala en el Banco")
+    body = mode == "cuerpo"
+    eid = f"rh-{uuid.uuid4().hex[:10]}"
+    _append({"id": eid, "batch": "rehacer", "at": datetime.now().isoformat(timespec="seconds"), "by": by,
+             "status": "queued", "file": "", "preset": "rehacer", "subject": name, "subject_id": subject_id,
+             "prompt": f"{'Cara y cuerpo' if body else 'Solo cara'} de {name} sobre otra imagen",
+             "source_id": entry_id, "note": "En fila…"})
+    asyncio.get_event_loop().create_task(_remake_run(eid, e["file"], subject_id, face, body,
+                                                     REMAKE_LEVELS.get(level, REMAKE_LEVELS["suave"]), ckpt))
+    return {"ok": True, "id": eid}
+
+
+def _body_lora(subject_id: str):
+    """Para el cuerpo: su 🔞 LoRA adulta (SDXL) si está lista; si no, su LoRA de Z-Image."""
+    from app import lora
+    with session() as s:
+        for x in s.query(Subject).filter(Subject.kind == "person"):
+            info = x.lora_info or {}
+            if info.get("adult_twin") and info.get("variant_of") == subject_id and _has_lora(x):
+                return "sdxl", x.lora_name, lora.strength_of(x), x.lora_trigger or ""
+    return None
+
+
+async def _remake_run(eid: str, file: str, subject_id: str, face: dict, body: bool, denoise: float,
+                      ckpt: str = "") -> None:
+    import random
+    try:
+        raw = (_dir() / Path(file).name).read_bytes()
+        seed = random.randint(1, 2**31 - 1)
+        if body:
+            _append({"id": eid, "status": "running", "note": "Redibujando con su cuerpo…"})
+            adult = _body_lora(subject_id)
+            if adult:
+                ckpt = ckpt or best_checkpoint(await checkpoints())
+                _cfg, eng = _engine("sdxl", ckpt)
+                loras = [(adult[1], adult[2])]
+                st = _style_lora("sdxl")
+                if st:
+                    loras.append((st[0], STYLE_STRENGTH))
+                prompt = ", ".join(x for x in [adult[3], "same pose, same scene, same framing and light", "adult"] if x)
+            else:
+                _cfg, eng = _engine("zimage", "")
+                loras = [(face["lora"], float(face.get("strength") or 1.0))]
+                prompt = ", ".join(x for x in [face.get("trigger"), "same pose, same scene, same framing and light"] if x)
+            raw = await eng.img2img(raw, loras, prompt, seed, denoise)
+        _append({"id": eid, "status": "running", "note": "Poniéndole su cara…"})
+        _cfg, zeng = _engine("zimage", "")
+        p = ", ".join(x for x in [face.get("trigger"), "photo of a woman, natural skin texture, detailed face"] if x)
+        raw = await zeng.face_pass(raw, [(face["lora"], float(face.get("strength") or 1.0))], p, seed, REMAKE_FACE)
+        f = _dir() / f"{eid}.png"
+        f.write_bytes(raw)
+        _append({"id": eid, "status": "done", "file": f.name, "seed": seed, "note": ""})
+    except Exception as e:  # noqa: BLE001
+        log.warning("Shelton Hot: no pude rehacer %s: %s", eid, e)
+        _append({"id": eid, "status": "failed", "error": str(e)[:300], "note": ""})
+
+
+class RemakeIn(BaseModel):
+    ckpt: str = ""
+    subject_id: str
+    mode: str = "cara"
+    level: str = "suave"
+
+
+@router.post("/rehacer/subir")
+async def api_upload_ai(request: Request):
+    u = _admin(request)
+    form = await request.form()
+    confirmed = str(form.get("confirm") or "") == "1"
+    out = []
+    try:
+        for f in form.getlist("files"):
+            out.append(upload_ai_image(await f.read(), (u or {}).get("username", ""), confirmed))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "ids": [x["id"] for x in out]}
+
+
+@router.post("/imagen/{entry_id}/rehacer")
+async def api_remake(entry_id: str, body: RemakeIn, request: Request):
+    u = _admin(request)
+    try:
+        return remake(entry_id, body.subject_id, body.mode, body.level, (u or {}).get("username", ""), body.ckpt)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @router.post("/estilo/subir")
 async def api_style_upload(request: Request):
     u = _admin(request)
@@ -848,10 +977,37 @@ def parse_request(text: str) -> dict:
             "prompt": prompt or t}
 
 
-async def chat(by: str, text: str) -> dict:
+def _remake_intent(text: str, image_id: str = "") -> dict | None:
+    """«Ponle la cara de Valentina» / «el cuerpo y la cara de Valentina» sobre una imagen subida (o la elegida)."""
+    low = (text or "").lower()
+    if not re.search(r"\b(cara|rostro|cuerpo)\b", low):
+        return None
+    usable = [m for m in models() if m["usable"] and not m["variant_of"] and not m.get("adult_twin")]
+    sub = next((m for m in sorted(usable, key=lambda m: -len(m["name"])) if m["name"].lower() in low), None)
+    if not sub:
+        return None
+    if not image_id and not re.search(r"\b(ponle|ponerle|pon|p[oó]nle|c[aá]mbiale|cambia|reemplaza|usa)\b", low):
+        return None          # «foto de Valentina sonriendo, cara feliz» es un pedido normal, no rehacer
+    src = image_id or next((e["id"] for e in entries() if e.get("source") == "upload" and e.get("status") == "done"), "")
+    if not src:
+        return None
+    level = "fuerte" if "fuerte" in low else "medio" if "medio" in low else "suave"
+    return {"src": src, "subject": sub, "mode": "cuerpo" if "cuerpo" in low else "cara", "level": level}
+
+
+async def chat(by: str, text: str, image_id: str = "", ckpt: str = "") -> dict:
+    hit = _remake_intent(text, image_id)
+    if hit:                 # rehacer la imagen subida con la cara (o la cara y el cuerpo) de la modelo
+        remake(hit["src"], hit["subject"]["id"], hit["mode"], hit["level"], by, ckpt)
+        what = "la cara y el cuerpo" if hit["mode"] == "cuerpo" else "la cara"
+        return {"reply": f"Listo: le pongo {what} de {hit['subject']['name']} a la imagen, desde sus LoRAs, en la placa"
+                         f"{' (cambio de cuerpo ' + hit['level'] + ')' if hit['mode'] == 'cuerpo' else ''}. Aparece abajo en "
+                         "unos segundos.", "batch": "rehacer"}
     p = parse_request(text)
     sub = p["subject"]
-    r = await generate(by, p["prompt"], sub["id"] if sub else "", p["preset"], count=p["count"], size=p["size"])
+    use_ckpt = ckpt if (ckpt and p["preset"] == "sdxl") else ""      # el checkpoint elegido (SDXL, Pony…)
+    r = await generate(by, p["prompt"], sub["id"] if sub else "", p["preset"], ckpt=use_ckpt, count=p["count"],
+                       size=p["size"])
     who = f" de {sub['name']}" if sub else ""
     msg = (f"Listo: genero {p['count']} {'foto' if p['count'] == 1 else 'fotos'}{who} en la placa con "
            f"{ENGINES[p['preset']]}{' y su LoRA (aprendida de sus fotos del Banco)' if r['with_lora'] else ''}, formato {p['size']}. "
@@ -874,13 +1030,15 @@ def usable_names() -> list[str]:
 
 class ChatIn(BaseModel):
     text: str
+    image_id: str = ""
+    ckpt: str = ""
 
 
 @router.post("/chat")
 async def api_chat(body: ChatIn, request: Request):
     u = _admin(request)
     try:
-        return await chat(u.get("username", ""), body.text)
+        return await chat(u.get("username", ""), body.text, body.image_id, body.ckpt)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
