@@ -439,3 +439,34 @@ def test_photo_settings_override_the_workflow(monkeypatch, tmp_path):
     assert ks and all(k["steps"] == 17 and k["seed"] == 1234 for k in ks) and steps_auto != [17]
     calidad.save(steps=0, seed=0, lora_strength=0)
     assert calidad.overrides() == {}
+
+
+def test_rtx_play_keeps_trying_when_runpod_has_no_free_card(monkeypatch):
+    """▶ Prender: si RunPod no tiene la tarjeta libre, Shelton sigue intentando solo hasta que se prende."""
+    import asyncio
+    from app import granja
+    calls = []
+
+    async def fake_runpod(cid, q):
+        calls.append(q)
+        if len(calls) < 3:
+            raise ValueError("RunPod no tiene esa tarjeta libre ahora mismo en su datacenter. Prueba en unos minutos.")
+        return {"podResume": {"desiredStatus": "RUNNING"}}
+    monkeypatch.setattr(granja, "runpod", fake_runpod)
+    monkeypatch.setattr(granja, "RESUME_EVERY", 0)
+
+    async def go():
+        r = await granja.rtx_power("c1", "prender")
+        assert r["waiting"] and granja.resuming("c1")["try"] == 0
+        again = await granja.rtx_power("c1", "prender")          # no lanza otro intento paralelo
+        assert again["waiting"]
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if not granja.resuming("c1"):
+                break
+        return r
+    asyncio.run(go())
+    assert len(calls) == 3 and granja.resuming("c1") is None
+    # «Dejar de intentar»
+    granja._resuming["c2"] = {"try": 1, "since": 0, "error": ""}
+    assert asyncio.run(granja.rtx_power("c2", "dejar"))["stopped"] and granja.resuming("c2") is None

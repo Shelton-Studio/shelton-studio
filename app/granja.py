@@ -51,7 +51,8 @@ def remote_nodes() -> list[dict]:
                     "url": cfg["url"].rstrip("/"), "token": cfg.get("token", ""), "slots": slots,
                     "profile": "pro" if str(cfg.get("profile", "pro")).lower().startswith("pro") else "estandar",
                     "cost_hour": cost, "comfy_url": (cfg.get("comfy_url") or "").rstrip("/"),
-                    "runpod": bool(cfg.get("runpod_api_key") and cfg.get("runpod_pod_id"))})
+                    "runpod": bool(cfg.get("runpod_api_key") and cfg.get("runpod_pod_id")),
+                    "resuming": resuming(c.id)})
     return out
 
 
@@ -391,16 +392,68 @@ async def rtx_status(cid: str):
     return {"status": p.get("desiredStatus", ""), "name": p.get("name", ""), "cost_hour": p.get("costPerHr")}
 
 
+RESUME_EVERY = 60        # segundos entre intentos cuando RunPod no tiene la tarjeta libre
+RESUME_TRIES = 45        # ~45 minutos intentando solo
+_resuming: dict[str, dict] = {}     # cid → {"try": n, "since": t, "error": ""}
+
+
+def _no_free_gpu(msg: str) -> bool:
+    return "no tiene esa tarjeta libre" in msg
+
+
+async def _keep_resuming(cid: str) -> None:
+    """RunPod no tenía la tarjeta libre: sigue intentando prenderla sola cada minuto (hasta ~45 min)."""
+    q = 'mutation { podResume(input: {podId: "POD_ID", gpuCount: 1}) { id desiredStatus costPerHr } }'
+    st = _resuming[cid]
+    try:
+        while st["try"] < RESUME_TRIES and not st.get("stop"):
+            await asyncio.sleep(RESUME_EVERY)
+            if st.get("stop"):
+                break
+            st["try"] += 1
+            try:
+                await runpod(cid, q)
+                _health.pop(f"node:{cid}", None)
+                log.info("RunPod: tarjeta %s prendida al intento %d", cid, st["try"])
+                return
+            except ValueError as e:
+                st["error"] = str(e)
+                if not _no_free_gpu(str(e)):
+                    return
+            except Exception as e:  # noqa: BLE001
+                st["error"] = str(e)[:200]
+    finally:
+        _resuming.pop(cid, None)
+
+
+def resuming(cid: str) -> dict | None:
+    st = _resuming.get(cid)
+    return {"try": st["try"], "max": RESUME_TRIES} if st else None
+
+
 @router.post("/granja/rtx/{cid}/{action}")
 async def rtx_power(cid: str, action: str):
     """▶ prender o ⏸ pausar la tarjeta alquilada. Al prender, se conecta sola en 2-4 minutos (arranque automático)."""
+    if action == "dejar":                                  # ✕ dejar de intentar prenderla
+        if cid in _resuming:
+            _resuming[cid]["stop"] = True
+            _resuming.pop(cid, None)
+        return {"ok": True, "stopped": True}
     if action not in ("prender", "pausar"):
         raise HTTPException(400, "Acción desconocida")
     q = ('mutation { podResume(input: {podId: "POD_ID", gpuCount: 1}) { id desiredStatus costPerHr } }' if action == "prender"
          else 'mutation { podStop(input: {podId: "POD_ID"}) { id desiredStatus } }')
+    if action == "pausar" and cid in _resuming:          # estaba esperando una libre: deja de intentar
+        _resuming[cid]["stop"] = True
+    if action == "prender" and cid in _resuming:
+        return {"ok": True, "waiting": True, **resuming(cid)}
     try:
         d = await runpod(cid, q)
     except ValueError as e:
+        if action == "prender" and _no_free_gpu(str(e)):
+            _resuming[cid] = {"try": 0, "since": time.time(), "error": str(e)}
+            asyncio.get_event_loop().create_task(_keep_resuming(cid))
+            return {"ok": True, "waiting": True, **resuming(cid)}
         raise HTTPException(400, str(e))
     _health.pop(f"node:{cid}", None)
     p = d.get("podResume") or d.get("podStop") or {}
