@@ -210,3 +210,53 @@ def test_banner_for_every_needed_agent_that_is_off_and_silence_when_on():
         assert {e["key"] for e in evs} == {"judge", "copywriter"} and all(e["optional"] for e in evs)
     finally:
         _on("judge", "copywriter")
+
+
+def test_swap_face_copies_the_photo_and_only_changes_the_face(monkeypatch):
+    """🔁 Foto de referencia → la misma foto con la cara de la modelo entrenada. Nunca con menores ni desnudos."""
+    import io
+    from PIL import Image
+    from app import llm, privado
+    from app.db import Subject
+    from app.media import save_bytes
+    init_db()
+    b = io.BytesIO()
+    Image.new("RGB", (64, 80), "blue").save(b, "PNG")
+    ref = save_bytes(b.getvalue(), "ref_swap.png")
+    with session() as s:
+        sub = Subject(name="Cara Swap", kind="person", lora_status="ready", lora_name="cara.safetensors",
+                      lora_trigger="cara_tk")
+        parent = Post(idea="foto de tiktok", platform="original", image_path=str(ref), raw_path=str(ref), status="ready")
+        s.add_all([sub, parent])
+        s.flush()
+        sid, pid = sub.id, parent.id
+    seen = {}
+
+    class FakeEngine:
+        async def face_pass(self, image, loras, prompt, seed, denoise=0.45):
+            seen.update(loras=loras, prompt=prompt, denoise=denoise)
+            out = io.BytesIO()
+            Image.new("RGB", (64, 80), "red").save(out, "PNG")
+            return out.getvalue()
+    monkeypatch.setattr(privado, "_engine", lambda p, c: ({}, FakeEngine()))
+    verdict = {"people": True, "minor": False, "nudity": False}
+
+    async def fake_check(system, content, schema, **k):
+        return dict(verdict)
+    monkeypatch.setattr(llm, "json_call", fake_check)
+
+    def run():
+        new = pipeline.new_swap(pid, sid)
+        asyncio.run(pipeline._swap_face(new, {"subject_id": sid}))
+        with session() as s:
+            return s.get(Post, new)
+    p = run()
+    assert p.status == "ready" and seen["loras"][0][0] == "cara.safetensors" and "cara_tk" in seen["prompt"]
+    assert (p.width, p.height) == (64, 80)                     # mismo tamaño que la original
+    verdict["minor"] = True
+    try:
+        run()
+    except ValueError as e:
+        assert "menor" in str(e)
+    else:
+        raise AssertionError("con un posible menor no debía hacerlo")

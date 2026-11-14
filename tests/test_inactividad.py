@@ -36,6 +36,8 @@ def test_trains_only_after_long_inactivity_and_when_everything_is_free(monkeypat
     monkeypatch.setattr(inactividad, "busy_reason", lambda: "hay fotos o videos en cola")
     assert not inactividad.tick()["started"]                          # algo trabajando: espera
     monkeypatch.setattr(inactividad, "busy_reason", lambda: "")
+    assert "descansando" in inactividad.tick()["why"]                 # recién terminó algo: espera 30 min de calma
+    inactividad._busy_seen["t"] = time.time() - 31 * 60
     r = inactividad.tick()
     assert r["started"] and started[0][0] == sid and started[0][1]["mode"] == "continue" and started[0][1]["steps"] == 1000
     # apagado: no hace nada
@@ -64,3 +66,22 @@ def test_clicks_and_requests_count_as_activity():
     with TestClient(app) as c:
         c.post("/api/actividad")
     assert inactividad.idle_minutes() < 1
+
+
+def test_after_a_training_ends_it_rests_30_minutes_before_the_next(monkeypatch):
+    from datetime import datetime, timedelta
+    init_db()
+    with session() as s:
+        sub = Subject(name="Recien Terminada", kind="person", description="mujer inventada", lora_status="ready",
+                      lora_name="r.safetensors",
+                      lora_info={"finished": (datetime.now() - timedelta(minutes=10)).isoformat(timespec="seconds")})
+        s.add(sub)
+        s.flush()
+        sid = sub.id
+    monkeypatch.setattr(inactividad, "busy_reason", lambda: "")
+    inactividad._busy_seen["t"] = time.time() - 5 * 3600
+    inactividad._last["t"] = time.time() - 5 * 3600
+    inactividad.save(on=True, hours=2)
+    assert "descansando" in inactividad.tick()["why"]
+    with session() as s:
+        s.delete(s.get(Subject, sid))

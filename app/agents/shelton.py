@@ -56,6 +56,10 @@ Cómo trabajas:
 - Si el usuario nombra a un personaje, auto, lugar, producto o estilo, búscalo en el banco (list_subjects) y pásalo
   en `subjects`. Si no existe y lo quiere recurrente, créalo con create_subject.
 - Para cambiar una imagen existente usa edit_post (crea una versión nueva; la original se conserva).
+- Si el usuario pega una foto (de TikTok, Instagram o de quien sea) y pide «igual / tal cual / replícala con la cara de
+  X», usa swap_face: copia la foto exacta y solo cambia la cara por la de la modelo entrenada. Si pide algo «parecido»
+  o con cambios (otra ropa, otro lugar), usa create_posts describiendo esa foto. Avisa en una línea que revise los
+  derechos de la foto original antes de publicar.
 - Motor de imagen: si el usuario pide cambiar de modelo/motor o pregunta cuáles hay, usa image_engines y
   set_image_engine, y explícale en 1-2 líneas la diferencia (velocidad, calidad, costo) y que también puede
   cambiarlo con el selector "Motor" arriba del chat.
@@ -266,6 +270,12 @@ TOOLS = [
            "scenes": {"type": "array", "items": {"type": "integer"}, "description": "Solo estas escenas (0, 1, 2...). Vacío = todas"},
            "platform": {"type": "string", "enum": ["tiktok", "instagram_story", "instagram_feed", "square", "x"]},
            **_MODEL_PICK}, ["reference_id"]),
+    _tool("swap_face", "🔁 La MISMA foto con la cara de un modelo del banco: el usuario pega una imagen (de TikTok, "
+          "Instagram o de donde sea) y pide «igual pero con la cara de Valentina». Copia todo tal cual (pose, ropa, "
+          "fondo, luz, encuadre) y solo cambia la cara por la de su LoRA. Usa el post_id de la foto subida. Necesita "
+          "que la modelo tenga su LoRA lista. Si la foto tiene menores o desnudos, no se hace. Espera el resultado.",
+          {"post_id": {"type": "string", "description": "La foto de referencia (subida o de la galería)"},
+           "subject": {"type": "string", "description": "Modelo del banco cuya cara se pone"}}, ["post_id", "subject"]),
     _tool("best_times", "Mejor hora para publicar por red y por modelo del banco (mezcla tu historial con investigación "
           "web; se actualiza cada 2 h). refresh=true la recalcula ahora.",
           {"refresh": {"type": "boolean"}, "model": {"type": "string", "description": "Solo este modelo del banco"}}, []),
@@ -494,6 +504,13 @@ async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
                            "note": (f"Ya hay {st['posts']} en cola; el resto se sigue planificando. "
                                     if st["posts"] else "Se está planificando. ") +
                                    "Aparecen en la galería a medida que se terminan."}, ensure_ascii=False)
+
+    if name == "swap_face":
+        sids, missing = pipeline.find_subjects([args["subject"]])
+        if not sids:
+            return f"No encontré a «{args['subject']}» en el banco."
+        pid = pipeline.new_swap(args["post_id"], sids[0], conv_id)
+        return await _wait_and_report([pid], emit, f"Poniéndole la cara de {args['subject']}…")
 
     if name == "edit_post":
         pid = pipeline.new_edit(args["post_id"], args["instruction"], bool(args.get("rewrite_caption")), conv_id, engine)

@@ -63,9 +63,9 @@ def queue_stats() -> dict:
     return {"pending": pending, "running": running, "ready_today": ready_today, "workers": len(_workers)}
 
 
-JOB_NAMES = {"create": "imagen", "edit": "edición", "subject": "modelo del banco", "video": "video", "reel": "montaje de reel",
+JOB_NAMES = {"swap": "cambio de cara", "create": "imagen", "edit": "edición", "subject": "modelo del banco", "video": "video", "reel": "montaje de reel",
              "audio": "voz/sonido", "track": "audio de biblioteca"}
-DEFAULT_SECONDS = {"create": 60, "edit": 45, "subject": 90, "video": 180, "reel": 40, "audio": 40, "track": 15}
+DEFAULT_SECONDS = {"swap": 45, "create": 60, "edit": 45, "subject": 90, "video": 180, "reel": 40, "audio": 40, "track": 15}
 
 
 def capacity() -> dict:
@@ -195,7 +195,7 @@ async def _run_job(job_id: str) -> None:
         job.started_at = now()
         kind, target, payload = job.kind, job.post_id, dict(job.payload or {})
 
-    handler = {"create": _create_post, "edit": _edit_post, "subject": _create_subject,
+    handler = {"swap": _swap_face, "create": _create_post, "edit": _edit_post, "subject": _create_subject,
                "video": _video_post, "reel": _reel_post, "audio": _audio_post, "track": _track_post}[kind]
     if target in _user_canceled:
         status, error = "canceled", "Cancelado"
@@ -995,6 +995,90 @@ def new_edit(parent_id: str, instruction: str, rewrite_caption: bool = False, co
     from app.db import record_feedback
     record_feedback(parent_id, "requested_edit", instruction=instruction)
     return pid
+
+
+def new_swap(parent_id: str, subject_id: str, conversation_id=None) -> str:
+    """🔁 Foto de referencia (TikTok, Instagram…) → la misma foto, tal cual, con la cara de la modelo entrenada."""
+    with session() as s:
+        parent = s.get(Post, parent_id)
+        if not parent or not parent.image_path:
+            raise ValueError(f"El post {parent_id} no existe o no tiene imagen")
+        sub = s.get(Subject, subject_id)
+        if not sub:
+            raise ValueError("Ese modelo no existe")
+        p = Post(idea=f"Misma foto con la cara de {sub.name}", platform=parent.platform, brand_id=parent.brand_id,
+                 parent_id=parent.id, conversation_id=conversation_id or parent.conversation_id,
+                 subject_ids=[subject_id], status="queued")
+        s.add(p)
+        s.flush()
+        pid, data = p.id, post_dict(p)
+    events.publish({"type": "post", "post": data})
+    enqueue("swap", pid, {"subject_id": subject_id})
+    return pid
+
+
+SWAP_DENOISE = 0.62      # cuánto se redibuja la cara: lo justo para que sea ella, con el mismo gesto y la misma luz
+
+SWAP_CHECK = ("You check a reference photo before a face replacement. Answer with JSON. people: true if there is at "
+              "least one clearly visible human face. minor: true if ANY person could be under 18 (when in doubt, true). "
+              "nudity: true if there is nudity or sexual content. Be strict.")
+
+
+async def _swap_check(path: str) -> None:
+    """Antes de cambiar la cara: nunca con menores ni con desnudos. Si no se puede revisar, no se hace."""
+    from app import llm
+    from app.media import image_block
+    try:
+        r = await llm.json_call(SWAP_CHECK, [image_block(path, 768), {"type": "text", "text": "Check this photo."}],
+                                llm.obj({"people": {"type": "boolean"}, "minor": {"type": "boolean"},
+                                         "nudity": {"type": "boolean"}}), agent="subject_analyst", max_tokens=300)
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"No pude revisar la foto antes de cambiar la cara ({e}). Prueba de nuevo en un rato.")
+    if r.get("minor"):
+        raise ValueError("No lo hago: en la foto puede haber una persona menor de edad.")
+    if r.get("nudity"):
+        raise ValueError("No lo hago: la foto tiene desnudos o contenido sexual.")
+    if not r.get("people"):
+        raise ValueError("No veo una cara clara en la foto para reemplazar.")
+
+
+async def _swap_face(post_id: str, payload: dict) -> None:
+    from app import lora as lora_mod
+    post, brand, _subjects = _load(post_id)
+    with session() as s:
+        parent = s.get(Post, post.parent_id)
+        sub = s.get(Subject, payload["subject_id"])
+        src_path = parent.raw_path or parent.image_path
+        caption, hashtags, alt = parent.caption, parent.hashtags, parent.alt_text
+        name, lora_name, trigger = sub.name, sub.lora_name, sub.lora_trigger or ""
+        ok = bool(sub.lora_name) and sub.lora_status in ("ready", "training", "queued") and \
+            lora_mod.base_of(sub.id) == "zimage"
+        strength = lora_mod.strength_of(sub)
+        step_used = lora_mod.used_step(sub)
+    if not ok:
+        raise ValueError(f"{name} todavía no tiene su LoRA de Z-Image lista: entrénala en el Banco y vuelve a pedirlo.")
+    _update_post(post_id, status="generating", attempts=1)
+    events.publish({"type": "progress", "id": post_id, "text": "Revisando la foto de referencia"})
+    await _swap_check(src_path)
+    from app.privado import _engine as local_engine
+    _cfg, engine = local_engine("zimage", "")
+    if not hasattr(engine, "face_pass"):
+        raise ValueError("Para cambiar la cara hace falta el motor local (ComfyUI de la placa)")
+    _mark(post_id, "image", "Cambio de cara · Z-Image + LoRA " + name)
+    if step_used:
+        _mark(post_id, "lora", f"{name} · {lora_mod.fmt_steps(step_used)} pasos")
+    events.publish({"type": "progress", "id": post_id, "text": f"Poniéndole la cara de {name}"})
+    from app import working
+    with working.track("motor_imagen", f"Cambio de cara: {name}", "Z-Image + LoRA", post_id, log=True):
+        out = await engine.face_pass(Path(src_path).read_bytes(), [(lora_name, strength)],
+                                     f"{trigger}, photo of a person, natural skin texture, detailed face",
+                                     random.randint(1, 2**31 - 1), SWAP_DENOISE)
+    raw = save_bytes(out, f"{post_id}_raw.png")
+    from app.media import resize_to, size_of
+    final = resize_to(raw, size_of(parent.image_path), f"{post_id}.jpg")
+    fw, fh = size_of(str(final))
+    _update_post(post_id, prompt=f"[CAMBIO DE CARA] {name}", raw_path=str(raw), image_path=str(final), width=fw,
+                 height=fh, caption=caption, hashtags=hashtags, alt_text=alt, status="ready")
 
 
 def new_subject(name: str, kind: str, request: str, generate: bool = True, engine: str | None = None) -> str:
