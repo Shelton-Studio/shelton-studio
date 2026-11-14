@@ -491,32 +491,22 @@ def test_shelton_hot_is_fast_cached_registry_thumbnails_and_checkpoints(monkeypa
     assert not t.exists()
 
 
-def test_outside_images_cannot_be_uploaded_and_remake_works_on_generated_ones(monkeypatch):
-    """En Shelton Hot no se suben imágenes de afuera (no hay forma de comprobar que no sean fotos reales).
-    🔁 rehace con la cara, o la cara y el cuerpo, de la modelo solo imágenes generadas aquí."""
+def test_upload_ai_image_and_remake_with_a_model(monkeypatch):
+    """⬆ Subir una imagen IA (solo con la confirmación) y 🔁 rehacerla con la cara, o la cara y el cuerpo, de la modelo."""
     import asyncio
     from app import lora
-    for ok in (False, True):
-        try:
-            privado.upload_ai_image(_png("red"), "admin", confirmed=ok)
-        except ValueError as e:
-            assert "no se suben" in str(e)
-        else:
-            raise AssertionError("no debía dejar subir imágenes de afuera")
-    privado._append({"id": "old-up", "batch": "subidas", "at": "2099", "status": "done", "file": "old-up.png",
-                     "source": "upload"})
-    (settings.DATA_DIR / "privado" / "old-up.png").write_bytes(_png("red"))
+    try:
+        privado.upload_ai_image(_png("red"), "admin", confirmed=False)
+    except ValueError as e:
+        assert "IA" in str(e)
+    else:
+        raise AssertionError("sin confirmar no debía dejar")
+    up = privado.upload_ai_image(_png("red"), "admin", confirmed=True)
+    e = next(x for x in privado.entries() if x["id"] == up["id"])
+    assert e["status"] == "done" and e["confirmed"] == "IA · inventada · +18"
     sid = _subject("Remake")
     lora._update(sid, lora_status="ready", lora_name="remake.safetensors", lora_trigger="rmk")
     privado.confirm(sid, "admin", True, True)
-    try:
-        privado.remake("old-up", sid)
-    except ValueError as e:
-        assert "no se suben" in str(e)
-    else:
-        raise AssertionError("una subida vieja no se puede rehacer")
-    privado._append({"id": "gen-0", "batch": "g", "at": "2099", "status": "done", "file": "gen-0.png"})
-    (settings.DATA_DIR / "privado" / "gen-0.png").write_bytes(_png("blue"))
     calls = []
 
     class Eng:
@@ -530,19 +520,27 @@ def test_outside_images_cannot_be_uploaded_and_remake_works_on_generated_ones(mo
     monkeypatch.setattr(privado, "_engine", lambda p, c: ({}, Eng()))
 
     async def go(mode):
-        r = privado.remake("gen-0", sid, mode, "suave", "admin")
+        r = privado.remake(up["id"], sid, mode, "suave", "admin")
         for _ in range(30):
             await asyncio.sleep(0.01)
         return next(x for x in privado.entries() if x["id"] == r["id"])
     out = asyncio.run(go("cara"))
     assert out["status"] == "done" and calls == [("cara", "remake.safetensors", privado.REMAKE_FACE)]
     calls.clear()
-    asyncio.run(go("cuerpo"))
+    out = asyncio.run(go("cuerpo"))
     assert [c[0] for c in calls] == ["cuerpo", "cara"] and calls[0][2] == privado.REMAKE_LEVELS["suave"]
-    # por chat, sobre la imagen elegida
-    hit = privado._remake_intent("ponle el cuerpo y la cara de Remake, medio", "gen-0")
+
+
+def test_hot_chat_understands_put_her_face_on_the_uploaded_image(monkeypatch):
+    from app import lora
+    sid = _subject("Chatcara")
+    lora._update(sid, lora_status="ready", lora_name="chatcara.safetensors")
+    privado.confirm(sid, "admin", True, True)
+    up = privado.upload_ai_image(_png("red"), "admin", confirmed=True)
+    hit = privado._remake_intent("ponle el cuerpo y la cara de Chatcara, medio", up["id"])
     assert hit["mode"] == "cuerpo" and hit["level"] == "medio" and hit["subject"]["id"] == sid
-    assert privado._remake_intent("ponle la cara de Remake") is None            # sin imagen elegida, nada
+    assert privado._remake_intent("ponle la cara de Chatcara")["mode"] == "cara"          # usa la última subida
+    assert privado._remake_intent("3 fotos de Chatcara en la playa, cara sonriente") is None   # pedido normal
 
 
 def test_choosing_a_checkpoint_in_hot_chat_forces_sdxl_with_her_face(monkeypatch):

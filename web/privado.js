@@ -23,7 +23,7 @@ VIEWS.privado = async (el) => {
     <div class="card pv-rules"><b>Reglas:</b> solo modelos <b>inventadas</b> (no personas reales) y <b>mayores de 18</b>. Cualquier pedido que mencione menores se bloquea.</div>
     <div class="card pv-chat" style="margin-top:14px">
       <div id="pv-msgs" class="pv-msgs"><div class="pv-msg bot">Hola, soy Shelton en Shelton Hot. Pídeme como siempre, por ejemplo: <i>«3 fotos de ${esc((models.find((m) => m.usable) || {}).name || "Luna")} en un loft, luz de ventana, formato historia»</i>. Si nombras a una modelo confirmada, uso su LoRA.</div></div>
-      <form id="pv-form" class="row" style="gap:8px;margin-top:10px"><select id="pv-chatsub" style="width:auto;max-width:180px" title="Modelo para este pedido (si no la nombras en el mensaje)"><option value="">Modelo: la que nombre</option>${models.filter((m) => m.usable && !m.variant_of && !m.adult_twin).map((m) => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join("")}</select><select id="pv-chatckpt" style="width:auto;max-width:200px" title="Checkpoint SDXL / Pony para este pedido"><option value="">Checkpoint: el mejor</option>${(st.checkpoints || []).map((c) => `<option>${esc(c)}</option>`).join("")}</select><input id="pv-text" class="grow" placeholder="Escríbele a Shelton…" autocomplete="off"><button class="btn primary">Enviar</button></form>
+      <form id="pv-form" class="row" style="gap:8px;margin-top:10px"><label class="btn" title="Subir una imagen hecha con IA para ponerle la cara o el cuerpo de una modelo (también Ctrl+V o arrastrar)">📎 Subir imagen<input type="file" id="pv-chatup" accept="image/*" hidden></label><select id="pv-chatsub" style="width:auto;max-width:180px" title="Modelo para este pedido (si no la nombras en el mensaje)"><option value="">Modelo: la que nombre</option>${models.filter((m) => m.usable && !m.variant_of && !m.adult_twin).map((m) => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join("")}</select><select id="pv-chatckpt" style="width:auto;max-width:200px" title="Checkpoint SDXL / Pony para este pedido"><option value="">Checkpoint: el mejor</option>${(st.checkpoints || []).map((c) => `<option>${esc(c)}</option>`).join("")}</select><input id="pv-text" class="grow" placeholder="Escríbele a Shelton… (o sube 📎 una imagen IA y dile «ponle la cara»)" autocomplete="off"><button class="btn primary">Enviar</button></form>
     </div>
     <details class="card" style="margin-top:14px"><summary style="cursor:pointer"><b>Opciones avanzadas</b> <span class="faint small">(modelos, motor, checkpoint, cantidad, formato)</span></summary>
     <div class="grid g2" style="margin-top:14px;align-items:start">
@@ -43,6 +43,15 @@ VIEWS.privado = async (el) => {
       <div class="card">
         <b>Generar</b>
         <label class="f">Modelo<select id="pv-sub"><option value="">— Sin modelo del banco —</option>${models.filter((m) => !m.adult_twin).map(opt).join("")}</select></label>
+        <div class="card" style="padding:10px;margin:6px 0">
+          <div class="row" style="gap:8px"><b class="small grow">Imagen base (opcional · hecha con IA)</b>
+            <label class="btn sm">📎 Subir imagen<input type="file" id="pv-base" accept="image/*" hidden></label>
+            <button class="btn sm ghost" id="pv-base-x" style="display:none">Quitar</button></div>
+          <div id="pv-base-show" class="faint small" style="margin-top:6px">Si subes una, «Generar» le pone a esa imagen la cara (o la cara y el cuerpo) de la modelo elegida.</div>
+          <div class="row" id="pv-base-opts" style="gap:8px;margin-top:6px;display:none">
+            <label class="f grow">Qué hacer<select id="pv-base-mode"><option value="cara">Solo la cara (todo lo demás igual)</option><option value="cuerpo">Cara y cuerpo</option></select></label>
+            <label class="f grow">Cambio de cuerpo<select id="pv-base-lvl"><option value="suave">Suave</option><option value="medio">Medio</option><option value="fuerte">Fuerte</option></select></label></div>
+        </div>
         <div class="row" style="gap:8px">
           <label class="f grow">Motor<select id="pv-pre"><option value="sdxl">SDXL</option><option value="flux">Flux.1 Dev</option><option value="zimage">Z-Image (LoRA del Banco)</option></select></label>
           <label class="f grow">Checkpoint (SDXL)<select id="pv-ckpt"><option value="">Por defecto</option>${(st.checkpoints || []).map((c) => `<option>${esc(c)}</option>`).join("")}</select></label>
@@ -63,6 +72,7 @@ VIEWS.privado = async (el) => {
     </div></details>
     <div class="card" id="pv-style" style="margin-top:16px"></div>
     <div class="card" style="margin-top:16px"><div class="row" style="gap:8px;flex-wrap:wrap"><b>Galería privada</b> <span class="faint small grow">(solo administradores · no se publica)</span>
+      <label class="btn sm" title="Solo imágenes hechas con IA, de personas inventadas y mayores de 18">⬆ Subir imagen IA<input type="file" id="pv-aiup" accept="image/*" multiple hidden></label>
       <select id="pv-filter" style="width:auto"><option value="">Todas</option><option value="pending">Por revisar</option><option value="approved">✔ Aprobadas</option><option value="rejected">✖ Rechazadas</option></select></div>
       <div class="pv-grid" id="pv-grid"></div></div>`;
   let lastList = st.entries || [];
@@ -118,7 +128,7 @@ VIEWS.privado = async (el) => {
       catch (e) { toast(esc(e.message), "bad"); }
     };
   };
-  if ($("#pv-aiup", el)) $("#pv-aiup", el).onchange = async (ev) => {
+  $("#pv-aiup", el).onchange = async (ev) => {
     const files = [...ev.target.files]; ev.target.value = "";
     if (!files.length) return;
     if (!confirm("Solo se admiten imágenes HECHAS CON IA.\n\nConfirmo que estas imágenes están generadas con IA, que muestran personas INVENTADAS (no reales) y MAYORES DE 18.\n\n¿Aceptas?")) return;
@@ -213,7 +223,7 @@ VIEWS.privado = async (el) => {
     $("#pv-base-show", el).innerHTML = baseId ? `<img src="/api/privado/imagen/${esc(baseId)}?t=1" style="max-width:140px;border-radius:10px">`
       : "Si subes una, «Generar» le pone a esa imagen la cara (o la cara y el cuerpo) de la modelo elegida.";
   };
-  if ($("#pv-base", el)) $("#pv-base", el).onchange = async (ev) => {
+  $("#pv-base", el).onchange = async (ev) => {
     const f = ev.target.files[0]; ev.target.value = "";
     if (!f) return;
     if (!confirm("Solo se admiten imágenes HECHAS CON IA.\n\nConfirmo que esta imagen está generada con IA, que muestra una persona INVENTADA (no real) y MAYOR DE 18.\n\n¿Aceptas?")) return;
@@ -221,7 +231,7 @@ VIEWS.privado = async (el) => {
     try { const r = await api("/api/privado/rehacer/subir", { method: "POST", body: fd }); baseId = r.ids[0]; showBase(); refresh(); }
     catch (e) { toast(esc(e.message), "bad"); }
   };
-  if ($("#pv-base-x", el)) $("#pv-base-x", el).onclick = () => { baseId = ""; showBase(); };
+  $("#pv-base-x", el).onclick = () => { baseId = ""; showBase(); };
   $("#pv-go", el).onclick = async () => {
     if (baseId) {                        // con imagen base: su cara (o cara y cuerpo) sobre esa imagen
       const sid = $("#pv-sub", el).value;
@@ -253,8 +263,15 @@ VIEWS.privado = async (el) => {
       refresh();
     } catch (e) { say("bot err", "⚠ " + esc(e.message)); }
   };
-  if ($("#pv-chatup", el)) $("#pv-chatup", el).onchange = (ev) => { const f = ev.target.files[0]; ev.target.value = ""; chatUpload(f); };
-
+  $("#pv-chatup", el).onchange = (ev) => { const f = ev.target.files[0]; ev.target.value = ""; chatUpload(f); };
+  $("#pv-text", el).addEventListener("paste", (ev) => {           // pegar con Ctrl+V
+    const it = [...(ev.clipboardData?.items || [])].find((x) => x.type.startsWith("image/"));
+    if (it) { ev.preventDefault(); chatUpload(it.getAsFile()); }
+  });
+  const chatBox = $(".pv-chat", el);                                 // arrastrar y soltar sobre el chat
+  chatBox.addEventListener("dragover", (ev) => { ev.preventDefault(); chatBox.style.outline = "2px dashed var(--accent)"; });
+  chatBox.addEventListener("dragleave", () => { chatBox.style.outline = ""; });
+  chatBox.addEventListener("drop", (ev) => { ev.preventDefault(); chatBox.style.outline = ""; chatUpload(ev.dataTransfer.files[0]); });
   $("#pv-form", el).onsubmit = async (ev) => {
     ev.preventDefault();
     const t = $("#pv-text", el).value.trim(); if (!t) return;
