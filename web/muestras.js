@@ -29,18 +29,38 @@ VIEWS.muestras = async (el) => {
       return;
     }
     const cur = models.find((m) => m.id === (localStorage.getItem("mu-model") || pick)) || models[0];
+    const showArch = localStorage.getItem("mu-arch") === "1";
+    const list = cur.samples.filter((x) => showArch ? x.archived : !x.archived);
     body.innerHTML = `<div class="seg" style="margin-bottom:12px">${models.map((m) => `<button data-mu="${esc(m.id)}" class="${m.id === cur.id ? "on" : ""}">${esc(m.name)}${m.training ? " · 🎓 entrenando" : ""} (${m.count})</button>`).join("")}</div>
-      <div class="hint">Toca una foto para verla grande. <b>⭐ Usar esta</b> deja activa la LoRA exacta de ese paso (y el próximo entrenamiento sigue desde ahí). También puedes decirle a Shelton: «usa la foto ${cur.samples[0]?.n || 12} de ${esc(cur.name.replace("🔒 ", ""))}».</div>
+      <div class="row" style="gap:8px;margin-bottom:8px"><div class="seg"><button data-muarch="0" class="${showArch ? "" : "on"}">Muestras (${cur.count})</button><button data-muarch="1" class="${showArch ? "on" : ""}">📦 Archivadas (${cur.archived || 0})</button></div></div>
+      <div class="hint">Toca una foto para verla grande. Las que no te gusten: <b>📦</b> archívala (se esconde y la puedes recuperar) o <b>🗑</b> elimínala. <b>⭐ Usar esta</b> deja activa la LoRA exacta de ese paso (y el próximo entrenamiento sigue desde ahí). También puedes decirle a Shelton: «usa la foto ${cur.samples[0]?.n || 12} de ${esc(cur.name.replace("🔒 ", ""))}».</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px;margin-top:12px">
-        ${cur.samples.map((x) => `<div class="card" style="padding:8px">
+        ${list.length ? "" : `<div class="faint small">${showArch ? "No hay fotos archivadas." : "No hay fotos para mostrar."}</div>`}
+        ${list.map((x) => `<div class="card" style="padding:8px">
           <div style="position:relative"><img src="${esc(x.url)}" loading="lazy" decoding="async" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;cursor:zoom-in;display:block" data-muzoom="${esc(x.url)}">
-            <span style="position:absolute;left:6px;top:6px;padding:3px 8px;border-radius:99px;background:rgba(0,0,0,.65);color:#fff;font-size:12px;font-weight:700">#${String(x.n).padStart(4, "0")} · ${fmtSteps(x.step)} pasos</span></div>
+            <span style="position:absolute;left:6px;bottom:6px;padding:3px 8px;border-radius:99px;background:rgba(0,0,0,.65);color:#fff;font-size:12px;font-weight:700">#${String(x.n).padStart(4, "0")} · ${fmtSteps(x.step)} pasos</span>
+            <span style="position:absolute;right:6px;top:6px;display:flex;gap:6px">
+              <button class="icon-btn" data-muarc="${x.n}" data-on="${x.archived ? 0 : 1}" title="${x.archived ? "Sacar de archivadas" : "Archivar (se esconde, se puede recuperar)"}" style="width:34px;height:34px;background:rgba(0,0,0,.65);color:#fff">${x.archived ? "↩" : "📦"}</button>
+              <button class="icon-btn" data-mudel="${x.n}" title="Eliminar esta foto" style="width:34px;height:34px;background:rgba(0,0,0,.65);color:#fff">🗑</button></span></div>
           <div class="row" style="gap:6px;margin-top:6px;flex-wrap:nowrap"><b style="font-size:16px">#${String(x.n).padStart(4, "0")}</b>
             <span class="chip accent" title="Pasos de entrenamiento con los que se hizo">${fmtSteps(x.step)} pasos</span></div>
           <div class="faint small" style="margin:4px 0 6px">${esc((x.at || "").replace("T", " ").slice(0, 16))}</div>
           <button class="btn sm" data-muuse="${x.n}" style="width:100%">⭐ Usar esta</button></div>`).join("")}
       </div>`;
     $$("[data-mu]", body).forEach((b) => b.onclick = () => { localStorage.setItem("mu-model", b.dataset.mu); load(); });
+    $$("[data-muarch]", body).forEach((b) => b.onclick = () => { localStorage.setItem("mu-arch", b.dataset.muarch); load(); });
+    $$("[data-muarc]", body).forEach((b) => b.onclick = async (e) => {
+      e.stopPropagation(); b.disabled = true;
+      try { await api(`/api/subjects/${cur.id}/lora/muestras/${b.dataset.muarc}/archivar?on=${b.dataset.on}`, { method: "POST" }); toast(b.dataset.on === "1" ? "Archivada" : "Recuperada", "good", "📦"); load(); }
+      catch (err) { toast(esc(err.message), "bad"); b.disabled = false; }
+    });
+    $$("[data-mudel]", body).forEach((b) => b.onclick = async (e) => {
+      e.stopPropagation();
+      if (!confirm(`¿Eliminar la foto #${String(b.dataset.mudel).padStart(4, "0")}? No se puede deshacer (el número no se vuelve a usar).`)) return;
+      b.disabled = true;
+      try { await api(`/api/subjects/${cur.id}/lora/muestras/${b.dataset.mudel}`, { method: "DELETE" }); toast("Eliminada", "good", "🗑"); load(); }
+      catch (err) { toast(esc(err.message), "bad"); b.disabled = false; }
+    });
     $$("[data-muzoom]", body).forEach((im) => im.onclick = () => window.open(im.dataset.muzoom, "_blank"));
     $$("[data-muuse]", body).forEach((b) => b.onclick = async () => {
       b.disabled = true;

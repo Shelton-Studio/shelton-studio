@@ -147,3 +147,30 @@ def test_training_instructions_shape_captions_and_samples(monkeypatch):
     monkeypatch.setattr("app.media.image_block", lambda p, s=0: {"type": "image"})
     asyncio.run(lora.caption_photos(sid, "tok_x"))
     assert seen and "lunar en la mejilla izquierda" in seen[0]
+
+
+def test_archive_and_delete_samples_keep_numbers():
+    """📦 Archivar esconde (se puede recuperar) y 🗑 eliminar borra la foto; los números nunca se reusan."""
+    sid = _subject("Archivo")
+    job = lora.job_for(sid)
+    out = settings.DATA_DIR / "lora" / sid / "output" / job / "samples"
+    out.mkdir(parents=True, exist_ok=True)
+    for st in (100, 200, 300):
+        (out / f"17{st}__{st:09d}_0.jpg").write_bytes(b"jpg")
+    lora_muestras.collect(sid)
+    lora_muestras.set_state(sid, 1, archived=True)
+    lora_muestras.set_state(sid, 2, deleted=True)
+    m = next(x for x in lora_muestras.overview() if x["id"] == sid)
+    assert m["count"] == 1 and m["archived"] == 1 and {x["n"] for x in m["samples"]} == {1, 3}
+    assert [x["n"] for x in lora_muestras.listing(sid)["samples"]] == [3]
+    assert not any((settings.DATA_DIR / "lora" / sid / "muestras").glob("0002_*"))
+    lora_muestras.set_state(sid, 1, archived=False)
+    assert len(lora_muestras.listing(sid)["samples"]) == 2
+    (out / f"17400__{400:09d}_0.jpg").write_bytes(b"jpg")
+    assert lora_muestras.collect(sid)[0]["n"] == 4                 # el 2 eliminado no se reusa
+    try:
+        lora_muestras.use(sid, 2)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("una eliminada no se puede usar")

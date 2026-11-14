@@ -136,7 +136,7 @@ def label(sid: str, row: dict) -> str:
 
 
 def find(sid: str, n: int) -> dict:
-    row = next((x for x in index(sid) if x["n"] == int(n)), None)
+    row = next((x for x in index(sid) if x["n"] == int(n) and not x.get("deleted")), None)
     if not row:
         raise ValueError(f"No existe la foto #{int(n):04d} de {_name(sid)}")
     return row
@@ -159,19 +159,40 @@ def use(sid: str, n: int, strength: float | None = None) -> dict:
     return {**r, "n": row["n"], "step": row["step"], "label": label(sid, row)}
 
 
+def _visible(sid: str, archived: bool = True) -> list[dict]:
+    """Muestras que se ven: nunca las eliminadas; las archivadas solo si se piden."""
+    return [x for x in index(sid) if not x.get("deleted") and (archived or not x.get("archived"))]
+
+
+def set_state(sid: str, n: int, archived: bool | None = None, deleted: bool = False) -> dict:
+    """📦 Archivar (se esconde, se puede volver a ver) o 🗑 eliminar (se borra la foto). El número nunca se reusa."""
+    with _lock:
+        idx = index(sid)
+        row = next((x for x in idx if x["n"] == int(n) and not x.get("deleted")), None)
+        if not row:
+            raise ValueError(f"No existe la foto #{int(n):04d}")
+        if deleted:
+            (_dir(sid) / row["file"]).unlink(missing_ok=True)
+            row["deleted"] = True
+        elif archived is not None:
+            row["archived"] = bool(archived)
+        _index_file(sid).write_text(json.dumps(idx, ensure_ascii=False, indent=1), encoding="utf-8")
+    return {"ok": True, "n": row["n"], "archived": bool(row.get("archived")), "deleted": bool(row.get("deleted"))}
+
+
 def listing(sid: str, limit: int = 300) -> dict:
     with session() as s:
         sub = s.get(Subject, sid)
         if not sub:
             raise ValueError("Ese modelo no existe")
         pinned = (sub.lora_info or {}).get("pinned_sample")
-    rows = index(sid)[-limit:]
+    rows = _visible(sid, archived=False)[-limit:]
     return {"every": every(), "pinned": pinned, "name": _name(sid),
             "samples": [{**x, "url": url(sid, x["file"]), "label": label(sid, x)} for x in reversed(rows)]}
 
 
 def last(sid: str) -> dict | None:
-    idx = index(sid)
+    idx = _visible(sid, archived=False)
     if not idx:
         return None
     x = idx[-1]
@@ -187,11 +208,12 @@ def overview(include_private: bool = False) -> list[dict]:
     for sid, name, status, private in subs:
         if private and not include_private:
             continue
-        rows = index(sid)
+        rows = _visible(sid)
         if not rows:
             continue
         out.append({"id": sid, "name": "🔒 " + name if private else name, "training": status == "training",
-                    "count": len(rows), "last_at": rows[-1].get("at", ""),
+                    "count": sum(1 for x in rows if not x.get("archived")),
+                    "archived": sum(1 for x in rows if x.get("archived")), "last_at": rows[-1].get("at", ""),
                     "samples": [{**x, "url": url(sid, x["file"]), "label": label(sid, x)} for x in reversed(rows[-60:])]})
     out.sort(key=lambda m: (not m["training"], m["last_at"]), reverse=False)
     out.sort(key=lambda m: m["training"], reverse=True)
@@ -295,6 +317,24 @@ async def api_file(sid: str, file: str, request: Request):
     if not f.exists() or f.suffix.lower() not in EXTS:
         raise HTTPException(404, "No existe")
     return FileResponse(f, headers={"Cache-Control": "private, max-age=86400"})
+
+
+@router.post("/subjects/{sid}/lora/muestras/{n}/archivar")
+async def api_archive(sid: str, n: int, request: Request, on: int = 1):
+    _guard(sid, request)
+    try:
+        return set_state(sid, n, archived=bool(on))
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@router.delete("/subjects/{sid}/lora/muestras/{n}")
+async def api_delete(sid: str, n: int, request: Request):
+    _guard(sid, request)
+    try:
+        return set_state(sid, n, deleted=True)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
 
 
 @router.post("/subjects/{sid}/lora/muestras/{n}/usar")
