@@ -57,7 +57,8 @@ Cómo trabajas:
   en `subjects`. Si no existe y lo quiere recurrente, créalo con create_subject.
 - Para cambiar una imagen existente usa edit_post (crea una versión nueva; la original se conserva).
 - NUNCA uses edit_post para poner la cara o el cuerpo de un modelo del banco: edit_post no usa su LoRA e inventa una
-  cara. Para eso siempre swap_face (con body=true si pide también su cuerpo).
+  cara. Para eso siempre swap_face (con body=true si pide también su cuerpo). Si swap_face falla, di el error y que
+  se está corrigiendo; NUNCA ofrezcas edit_post como alternativa para caras o cuerpos de modelos del banco.
 - Si el usuario pega una foto (de TikTok, Instagram o de quien sea) y pide «igual / tal cual / replícala con la cara de
   X», usa swap_face: copia la foto exacta y solo cambia la cara por la de la modelo entrenada. Si pide algo «parecido»
   o con cambios (otra ropa, otro lugar), usa create_posts describiendo esa foto. Avisa en una línea que revise los
@@ -531,6 +532,9 @@ async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
         sids, missing = pipeline.find_subjects([args["subject"]])
         if not sids:
             return f"No encontré a «{args['subject']}» en el banco."
+        import re as _re
+        if not args.get("body") and _re.search(r"\b(cuerpo|body|que sea [a-záéíóúñ]+)", (ctx.get("user_text") or "").lower()):
+            args["body"] = True        # pidió su cuerpo: se hace aunque Shelton se haya olvidado de marcarlo
         pid = pipeline.new_swap(args["post_id"], sids[0], conv_id, bool(args.get("body")))
         return await _wait_and_report([pid], emit, f"Poniéndole {'el cuerpo y ' if args.get('body') else ''}la cara de "
                                                    f"{args['subject']}…")
@@ -962,7 +966,7 @@ async def _turn(conv_id, user_text, upload_post_ids, emit, agent, engine, attach
         conv_id, agent = conv.id, conv.agent or "shelton"
         messages, display = list(conv.api_messages or []), list(conv.display or [])
         ctx = {"conv_id": conv_id, "engine": conv.engine or "", "agent": conv.agent or "shelton",
-               "asked": asked_count(user_text)}
+               "asked": asked_count(user_text), "user_text": user_text or ""}
     await emit({"type": "conversation", "id": conv_id, "agent": agent})
 
     content: list = [{"type": "text", "text": studio_context(ctx["engine"])}]

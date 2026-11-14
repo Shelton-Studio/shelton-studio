@@ -279,6 +279,12 @@ def test_putting_a_bank_models_face_or_body_always_uses_her_lora(monkeypatch):
     ks = next(v for v in wf.values() if isinstance(v, dict) and v.get("class_type") == "KSampler")
     assert ks["inputs"]["latent_image"] == ["shl_enc", 0] and ks["inputs"]["denoise"] == 0.55
     assert not any(isinstance(v, dict) and v.get("class_type") == "EmptySD3LatentImage" for v in wf.values())
+    assert wf["shl_scale"]["class_type"] == "ImageScale"           # nodo que existe en todas las versiones
+    from app.engines.comfy import _i2i_size
+    b0 = io.BytesIO()
+    Image.new("RGB", (638, 643)).save(b0, "PNG")
+    w, h = _i2i_size(b0.getvalue())
+    assert w % 16 == 0 and h % 16 == 0 and 900 * 900 < w * h <= 1024 * 1024
     with session() as s:
         sub = Subject(name="Valeria Lora", kind="person", lora_status="ready", lora_name="val.safetensors",
                       lora_trigger="val_tk")
@@ -315,3 +321,28 @@ def test_putting_a_bank_models_face_or_body_always_uses_her_lora(monkeypatch):
     new = pipeline.new_swap(pid, sid, body=True)
     asyncio.run(pipeline._swap_face(new, {"subject_id": sid, "body": True}))
     assert [c[0] for c in calls] == ["cuerpo", "cara"] and all(c[1] == "val.safetensors" for c in calls)
+
+
+def test_swap_turns_on_body_when_the_user_asked_for_her_body(monkeypatch):
+    """Si en el mensaje dijo «cuerpo», el modo cuerpo se activa aunque Shelton no lo haya marcado."""
+    from app.agents import shelton
+    from app.db import Subject
+    init_db()
+    with session() as s:
+        sub = Subject(name="Cuerpo Lora", kind="person", lora_status="ready", lora_name="c.safetensors")
+        parent = Post(idea="x", platform="original", image_path="/tmp/x.png", status="ready")
+        s.add_all([sub, parent])
+        s.flush()
+        pid = parent.id
+    got = {}
+    monkeypatch.setattr(pipeline, "new_swap", lambda p, sid, conv, body=False: got.update(body=body) or "np")
+
+    async def fake_wait(ids, emit, text):
+        return "OK"
+    monkeypatch.setattr(shelton, "_wait_and_report", fake_wait)
+
+    async def emit(ev):
+        pass
+    ctx = {"conv_id": None, "engine": None, "user_text": "ponele la cara y el cuerpo de Cuerpo Lora"}
+    asyncio.run(shelton._run_tool("swap_face", {"post_id": pid, "subject": "Cuerpo Lora"}, ctx, emit))
+    assert got["body"] is True
