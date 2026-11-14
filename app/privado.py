@@ -679,19 +679,16 @@ async def api_style(request: Request):
 REMAKE_LEVELS = {"suave": 0.38, "medio": 0.5, "fuerte": 0.62}
 REMAKE_FACE = 0.70
 AI_ONLY = "Confirma que la imagen está hecha con IA, que es una persona inventada (no real) y mayor de 18"
+UPLOADS_OFF = ("En Shelton Hot no se suben imágenes de afuera. Genera la escena aquí (con su LoRA y el checkpoint que "
+               "quieras) y usa 🔁 para rehacerla con otra modelo.")
 
 
 def upload_ai_image(data: bytes, by: str, confirmed: bool) -> dict:
     """⬆ Subir una imagen hecha con IA (de otra herramienta) para rehacerla con una modelo. Solo con la confirmación
     de quien la sube: IA, persona inventada, mayor de 18. Queda privada (nunca a la nube ni a /media)."""
-    if not confirmed:
-        raise ValueError(AI_ONLY)
-    from io import BytesIO
-    from PIL import Image, ImageOps
-    try:
-        img = ImageOps.exif_transpose(Image.open(BytesIO(data))).convert("RGB")
-    except Exception:  # noqa: BLE001
-        raise ValueError("Ese archivo no es una imagen")
+    # Desactivado: no hay forma de comprobar que una imagen de afuera sea de IA y no la foto de una persona real.
+    # En Shelton Hot se rehacen solo imágenes generadas aquí (🔁).
+    raise ValueError(UPLOADS_OFF)
     eid = f"sub-{uuid.uuid4().hex[:10]}"
     name = f"{eid}.png"
     img.save(_dir() / name, "PNG")
@@ -707,6 +704,8 @@ def remake(entry_id: str, subject_id: str, mode: str = "cara", level: str = "sua
     e = next((x for x in entries() if x["id"] == entry_id and x.get("status") == "done" and x.get("file")), None)
     if not e:
         raise ValueError("Esa imagen no existe")
+    if e.get("source") == "upload":          # solo imágenes generadas en Shelton Hot
+        raise ValueError(UPLOADS_OFF)
     with session() as s:
         sub = s.get(Subject, subject_id)
         if not sub:
@@ -1002,7 +1001,7 @@ def _remake_intent(text: str, image_id: str = "") -> dict | None:
         return None
     if not image_id and not re.search(r"\b(ponle|ponerle|pon|p[oó]nle|c[aá]mbiale|cambia|reemplaza|usa)\b", low):
         return None          # «foto de Valentina sonriendo, cara feliz» es un pedido normal, no rehacer
-    src = image_id or next((e["id"] for e in entries() if e.get("source") == "upload" and e.get("status") == "done"), "")
+    src = image_id
     if not src:
         return None
     level = "fuerte" if "fuerte" in low else "medio" if "medio" in low else "suave"
