@@ -214,6 +214,10 @@ async def generate(by: str, prompt: str, subject_id: str = "", preset: str = "sd
                 loras = [(sub.lora_name, float(strength) if strength else lora.strength_of(sub))]
                 trigger = sub.lora_trigger or ""
             name = sub.name
+    st = _style_lora(preset)                  # 🎓 la LoRA propia de la Adult Zone (aprende de las aprobadas)
+    if st:
+        loras = [*loras, (st[0], STYLE_STRENGTH)]
+        trigger = ", ".join(x for x in [trigger, st[1]] if x)
     count = max(1, min(int(count or 1), MAX_COUNT))
     w, h = SIZES.get(size, SIZES["vertical"])
     if preset == "sdxl" and not ckpt:
@@ -358,6 +362,70 @@ def review(entry_id: str, ok: bool | None, by: str = "") -> dict:
     return {"ok": True, "review": state}
 
 
+# ------------------------------------------------------------------ 🎓 LoRA propia de la Adult Zone
+STYLE_NAME = "Adult Zone · Estilo"
+STYLE_STRENGTH = 0.6          # se suma a la LoRA de la modelo sin taparle la cara
+STYLE_MIN = 8
+
+
+def style_subject_id() -> str:
+    """La «modelo» interna que guarda la LoRA de estilo de la Adult Zone (no aparece en el Banco)."""
+    with session() as s:
+        for x in s.query(Subject).filter(Subject.name == STYLE_NAME):
+            return x.id
+        sub = Subject(name=STYLE_NAME, kind="style", description="Estilo aprendido de las fotos aprobadas de la Adult Zone",
+                      lora_info={"base": "sdxl", "adult_style": True,
+                                 "adult_ok": {"by": "sistema", "at": datetime.now().isoformat(timespec="seconds")}})
+        s.add(sub)
+        s.flush()
+        return sub.id
+
+
+def style_dataset() -> list[str]:
+    """Las fotos aprobadas en la Adult Zone (solo las que pasan el control de menores)."""
+    out = []
+    for e in entries():
+        if e.get("review") != "approved" or e.get("status") != "done" or not e.get("file"):
+            continue
+        if minor_problem(" ".join([e.get("prompt") or "", e.get("subject") or ""])):
+            continue
+        f = _dir() / Path(e["file"]).name
+        if f.exists():
+            out.append(str(f))
+    return out
+
+
+def _style_lora(preset: str) -> tuple[str, str] | None:
+    with session() as s:
+        sub = next(iter(s.query(Subject).filter(Subject.name == STYLE_NAME)), None)
+        if not sub or not sub.lora_name or sub.lora_status not in ("ready", "training", "queued"):
+            return None
+        if ((sub.lora_info or {}).get("base") or "sdxl") != preset:
+            return None
+        return sub.lora_name, sub.lora_trigger or ""
+
+
+def style_status() -> dict:
+    with session() as s:
+        sub = next(iter(s.query(Subject).filter(Subject.name == STYLE_NAME)), None)
+        info = dict(sub.lora_info or {}) if sub else {}
+        return {"approved": len(style_dataset()), "min": STYLE_MIN, "status": sub.lora_status if sub else "",
+                "progress": round(sub.lora_progress or 0) if sub else 0, "phase": info.get("phase", ""),
+                "eta_min": info.get("eta_min"), "ready": bool(sub and sub.lora_name), "trained_with": info.get("images")}
+
+
+def style_train() -> dict:
+    from app import lora
+    paths = style_dataset()
+    if len(paths) < STYLE_MIN:
+        raise ValueError(f"Hay {len(paths)} fotos aprobadas y hacen falta al menos {STYLE_MIN}. "
+                         "Aprueba con ✔ las mejores en la galería privada.")
+    sid = style_subject_id()
+    with session() as s:
+        s.get(Subject, sid).references = paths          # aprende de las aprobadas (nunca van a la nube)
+    return lora.start(sid)
+
+
 def delete(entry_id: str) -> None:
     e = next((x for x in entries() if x["id"] == entry_id), None)
     if not e:
@@ -409,6 +477,21 @@ async def api_translate(body: TranslateIn, request: Request):
 class ConfirmIn(BaseModel):
     inventada: bool
     mayor: bool
+
+
+@router.get("/estilo")
+async def api_style(request: Request):
+    _admin(request)
+    return style_status()
+
+
+@router.post("/estilo/entrenar")
+async def api_style_train(request: Request):
+    _admin(request)
+    try:
+        return style_train()
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @router.get("/estado")

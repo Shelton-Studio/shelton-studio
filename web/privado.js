@@ -57,6 +57,7 @@ VIEWS.privado = async (el) => {
         <div class="faint small" style="margin-top:6px">Si la GPU está entrenando, espera su turno. Para desnudos rinden mejor checkpoints SDXL como Pony o CyberRealistic.</div>
       </div>
     </div></details>
+    <div class="card" id="pv-style" style="margin-top:16px"></div>
     <div class="card" style="margin-top:16px"><div class="row" style="gap:8px;flex-wrap:wrap"><b>Galería privada</b> <span class="faint small grow">(solo administradores · no se publica)</span>
       <select id="pv-filter" style="width:auto"><option value="">Todas</option><option value="pending">Por revisar</option><option value="approved">✔ Aprobadas</option><option value="rejected">✖ Rechazadas</option></select></div>
       <div class="pv-grid" id="pv-grid"></div></div>`;
@@ -96,6 +97,19 @@ VIEWS.privado = async (el) => {
   const refresh = async () => { try { paintGrid((await api("/api/privado/estado")).entries || []); } catch {} };
   paintGrid(st.entries || []);
   $("#pv-filter", el).onchange = () => paintGrid(lastList);
+  const paintStyle = async () => {        // 🎓 LoRA propia de la Adult Zone
+    const c = $("#pv-style", el); if (!c) return;
+    let s; try { s = await api("/api/privado/estilo"); } catch { c.remove(); return; }
+    const busy = ["training", "queued"].includes(s.status);
+    c.innerHTML = `<div class="row" style="gap:8px;flex-wrap:wrap"><b class="grow">🎓 LoRA de la Adult Zone</b>
+        ${s.ready ? '<span class="chip good">activa en SDXL</span>' : '<span class="chip">todavía sin entrenar</span>'}
+        <button class="btn sm ${busy ? "" : "primary"}" id="pv-style-go" ${busy || s.approved < s.min ? "disabled" : ""}>${busy ? (s.status === "queued" ? "En fila…" : `Aprendiendo… ${s.progress}%`) : `Entrenar con las aprobadas (${s.approved})`}</button></div>
+      <div class="faint small" style="margin-top:6px">Aprende el estilo y la anatomía de las fotos que aprobaste con ✔ (mínimo ${s.min}). Se suma sola a cada foto con SDXL, junto con la LoRA de la modelo. Todo en la placa: nunca va a la nube. Cada vez que la entrenas sigue sumando sobre lo aprendido.${busy && s.phase ? ` · ${esc(s.phase)}` : ""}</div>`;
+    const b = $("#pv-style-go", c);
+    if (b) b.onclick = async () => { try { await api("/api/privado/estilo/entrenar", { method: "POST" }); toast("Entrenando la LoRA de la Adult Zone", "good", "🎓"); paintStyle(); } catch (e) { toast(esc(e.message), "bad"); } };
+    if (busy) setTimeout(() => { if (document.body.contains(c)) paintStyle(); }, 15000);
+  };
+  paintStyle();
   $$("[data-pvok]", el).forEach((b) => b.onclick = async () => {
     if (!confirm(`Confirmo que «${b.dataset.pvname}» es una modelo INVENTADA (no es una persona real) y MAYOR DE 18 años.`)) return;
     try { await api(`/api/privado/modelos/${b.dataset.pvok}/confirmar`, { method: "POST", body: { inventada: true, mayor: true } }); route(); }

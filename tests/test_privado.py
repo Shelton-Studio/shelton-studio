@@ -308,3 +308,33 @@ def test_sdxl_version_trains_with_her_private_photos():
     lora._update(sid, info={"train_private": True})
     assert len(privado.private_paths(var["id"])) == 1
     assert any(privado.is_private_path(p) for p in lora.dataset_images(var["id"]))
+
+
+
+def test_adult_zone_style_lora_learns_from_approved(monkeypatch):
+    """🎓 La LoRA propia de la Adult Zone aprende de las fotos aprobadas, no aparece en el Banco y se suma en SDXL."""
+    import asyncio as _a
+    from app import lora, main
+    init_db()
+    for i in range(9):
+        eid = f"st-{i}"
+        privado._append({"id": eid, "batch": "st", "at": "2099", "status": "done", "file": f"{eid}.png",
+                         "prompt": "adult woman, loft" if i else "una colegiala", "review": "approved"})
+        (settings.DATA_DIR / "privado" / f"{eid}.png").write_bytes(_png("red"))
+    ds = privado.style_dataset()
+    assert len([p for p in ds if "st-" in p]) == 8                      # la que menciona menores se descarta
+    started = {}
+    monkeypatch.setattr(lora, "start", lambda sid, **k: started.update(sid=sid) or {"queued": True})
+    privado.style_train()
+    sid = started["sid"]
+    with session() as s:
+        sub = s.get(Subject, sid)
+        assert sub.name == privado.STYLE_NAME and len(sub.references) >= 8
+        sub.lora_status, sub.lora_name, sub.lora_trigger = "ready", "estilo.safetensors", "azst"
+    assert all(x["id"] != sid for x in _a.run(main.subjects()))         # no aparece en el Banco
+    assert privado._style_lora("sdxl") == ("estilo.safetensors", "azst")
+    assert privado._style_lora("flux") is None
+    for i in range(9):
+        privado.delete(f"st-{i}")
+    with session() as s:                                                 # no dejarla activa para otras pruebas
+        s.delete(s.get(Subject, sid))
