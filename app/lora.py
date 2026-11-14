@@ -75,7 +75,7 @@ def dataset_images(subject_id: str) -> list[str]:
             if subject_id in (p.subject_ids or []) and len(p.subject_ids or []) == 1 and p.image_path \
                     and Path(p.image_path).exists() and p.media_type == "image":
                 paths.append(p.image_path)
-    try:   # fotos privadas (Adult Zone), solo si la modelo está confirmada y eligieron usarlas al entrenar
+    try:   # fotos privadas (Shelton Hot), solo si la modelo está confirmada y eligieron usarlas al entrenar
         from app import privado
         paths += privado.private_paths(subject_id)
     except Exception:  # noqa: BLE001

@@ -1,4 +1,4 @@
-"""Shelton Studio · Adult Zone (solo administradores): contenido adulto con modelos INVENTADAS y MAYORES DE 18, 100% local.
+"""Shelton Studio · Shelton Hot (solo administradores): contenido adulto con modelos INVENTADAS y MAYORES DE 18, 100% local.
 
 - El pedido lo escribe la persona y va directo a la GPU de la placa (SDXL / Flux). No pasa por ningún agente ni por
   la nube: el texto y las imágenes no salen de la placa.
@@ -97,7 +97,7 @@ def _admin(request: Request) -> dict:
     from app.auth_routes import current
     u = current(request)
     if u.get("role") != "admin":
-        raise HTTPException(403, "La Adult Zone es solo para administradores")
+        raise HTTPException(403, "Shelton Hot es solo para administradores")
     return u
 
 
@@ -113,7 +113,7 @@ def subject_ok(sub: Subject) -> tuple[bool, str]:
         return False, "Falta confirmar en su ficha que es una modelo inventada y mayor de 18"
     why = minor_problem(" ".join([sub.name or "", sub.description or "", sub.notes or ""]))
     if why:
-        return False, f"La ficha de {sub.name} {why}: no se puede usar en la Adult Zone"
+        return False, f"La ficha de {sub.name} {why}: no se puede usar en Shelton Hot"
     return True, ""
 
 
@@ -125,8 +125,55 @@ def models() -> list[dict]:
             ok, why = subject_ok(sub)
             out.append({"id": sub.id, "name": sub.name, "confirmed": bool((sub.lora_info or {}).get("adult_ok")),
                         "usable": ok, "why": why, "base": base_of(sub.id),
-                        "lora_ready": _has_lora(sub), "variant_of": (sub.lora_info or {}).get("variant_of", "")})
+                        "lora_ready": _has_lora(sub), "variant_of": (sub.lora_info or {}).get("variant_of", ""),
+                        "status": sub.lora_status or "", "progress": round(sub.lora_progress or 0)})
+            out[-1]["adult_twin"] = bool((sub.lora_info or {}).get("adult_twin"))
+    # cada modelo muestra el estado de su 🔞 LoRA adulta (privada, solo de Shelton Hot)
+    for m in out:
+        twin = next((x for x in out if x["variant_of"] == m["id"] and x["adult_twin"]), None)
+        m["adult"] = ({"id": twin["id"], "ready": twin["lora_ready"], "status": twin["status"], "progress": twin["progress"]}
+                      if twin else None)
     return out
+
+
+ADULT_MARK = "🔞"
+
+
+def adult_twin_id(sid: str) -> str:
+    """La 🔞 LoRA adulta de una modelo: una gemela SDXL privada («Valentina · 🔞»). Vive solo en Shelton Hot:
+    no aparece en el Banco, ni en el chat de Shelton, ni en el contenido normal. La crea si no existe."""
+    with session() as s:
+        for x in s.query(Subject).filter(Subject.kind == "person"):
+            info = x.lora_info or {}
+            if info.get("adult_twin") and info.get("variant_of") == sid:
+                return x.id
+        src = s.get(Subject, sid)
+        if not src:
+            raise ValueError("Esa modelo no existe")
+        new = Subject(name=f"{src.name} · {ADULT_MARK}", kind=src.kind, description=src.description, notes=src.notes,
+                      references=list(src.references or []),
+                      lora_info={"base": "sdxl", "variant_of": src.id, "adult_twin": True})
+        s.add(new)
+        s.flush()
+        return new.id
+
+
+def train_adult(sid: str) -> dict:
+    """🎓 Entrenar la 🔞 LoRA adulta de una modelo: con sus fotos del Banco + sus fotos privadas. Mismo entrenamiento
+    de siempre, pero queda solo en Shelton Hot. Su LoRA normal no se toca."""
+    from app import lora
+    with session() as s:
+        sub = s.get(Subject, sid)
+        if not sub:
+            raise ValueError("Esa modelo no existe")
+        ok, why = subject_ok(sub)
+        if not ok:
+            raise ValueError(why)
+        name = sub.name
+    twin_id = adult_twin_id(sid)
+    # se entrena SOLO en la placa: sus fotos privadas no salen de aquí (ni a la nube ni a tarjetas alquiladas)
+    r = lora.start(twin_id)
+    return {**r, "twin": twin_id, "name": f"{name} · {ADULT_MARK}", "where": "la placa"}
 
 
 def confirm(subject_id: str, by: str, inventada: bool, mayor: bool) -> dict:
@@ -200,7 +247,7 @@ async def generate(by: str, prompt: str, subject_id: str = "", preset: str = "sd
         why = minor_problem(text)
         if why:
             log.warning("Estudio privado: pedido bloqueado (%s)", why)
-            raise ValueError(f"Bloqueado: el pedido {why}. La Adult Zone es solo para adultos.")
+            raise ValueError(f"Bloqueado: el pedido {why}. Shelton Hot es solo para adultos.")
     loras, trigger = [], ""
     if subject_id:
         with session() as s:
@@ -214,7 +261,7 @@ async def generate(by: str, prompt: str, subject_id: str = "", preset: str = "sd
                 loras = [(sub.lora_name, float(strength) if strength else lora.strength_of(sub))]
                 trigger = sub.lora_trigger or ""
             name = sub.name
-    st = _style_lora(preset)                  # 🎓 la LoRA propia de la Adult Zone (aprende de las aprobadas)
+    st = _style_lora(preset)                  # 🎓 la LoRA propia de Shelton Hot (aprende de las aprobadas)
     if st:
         loras = [*loras, (st[0], STYLE_STRENGTH)]
         trigger = ", ".join(x for x in [trigger, st[1]] if x)
@@ -234,7 +281,7 @@ async def generate(by: str, prompt: str, subject_id: str = "", preset: str = "sd
             neg = ", ".join(x for x in [neg_en, SDXL_NEGATIVE, SAFE_NEGATIVE] if x)
         why = minor_problem(prompt_en)
         if why:
-            raise ValueError(f"Bloqueado: el pedido {why}. La Adult Zone es solo para adultos.")
+            raise ValueError(f"Bloqueado: el pedido {why}. Shelton Hot es solo para adultos.")
     cfg, engine = _engine(preset, ckpt)
     full = enrich(f"{trigger}, adult, {prompt_en}" if trigger else f"adult, {prompt_en}", preset, ckpt)
     batch = uuid.uuid4().hex[:10]
@@ -297,7 +344,7 @@ async def _run_ids(ids: list[str], engine, cfg: dict, prompt: str, negative: str
                 _append({"id": eid, "status": "done", "file": f.name, "seed": seed, "note": ""})
                 break
             except Exception as e:  # noqa: BLE001
-                log.warning("Adult Zone: falló %s (intento %d/%d): %s", eid, attempt, ATTEMPTS, e)
+                log.warning("Shelton Hot: falló %s (intento %d/%d): %s", eid, attempt, ATTEMPTS, e)
                 if attempt == ATTEMPTS:
                     _append({"id": eid, "status": "failed", "error": str(e)[:300], "note": ""})
                     break
@@ -337,7 +384,7 @@ def recover_after_restart() -> int:
         job = json.loads(raw)
         loop.create_task(_resume(ids, preset, ckpt, job))
         n += len(ids)
-    log.info("Adult Zone: retomo %d foto(s) que quedaron a medias", n)
+    log.info("Shelton Hot: retomo %d foto(s) que quedaron a medias", n)
     return n
 
 
@@ -353,7 +400,7 @@ async def _resume(ids: list[str], preset: str, ckpt: str, job: dict) -> None:
 
 
 def review(entry_id: str, ok: bool | None, by: str = "") -> dict:
-    """Aprobación interna de la Adult Zone (no publica nada: solo marca cuáles sirven y cuáles no)."""
+    """Aprobación interna de Shelton Hot (no publica nada: solo marca cuáles sirven y cuáles no)."""
     e = next((x for x in entries() if x["id"] == entry_id), None)
     if not e or e.get("status") != "done":
         raise ValueError("Esa imagen no existe o todavía no está lista")
@@ -362,18 +409,18 @@ def review(entry_id: str, ok: bool | None, by: str = "") -> dict:
     return {"ok": True, "review": state}
 
 
-# ------------------------------------------------------------------ 🎓 LoRA propia de la Adult Zone
+# ------------------------------------------------------------------ 🎓 LoRA propia de Shelton Hot
 STYLE_NAME = "Adult Zone · Estilo"
 STYLE_STRENGTH = 0.6          # se suma a la LoRA de la modelo sin taparle la cara
 STYLE_MIN = 8
 
 
 def style_subject_id() -> str:
-    """La «modelo» interna que guarda la LoRA de estilo de la Adult Zone (no aparece en el Banco)."""
+    """La «modelo» interna que guarda la LoRA de estilo de Shelton Hot (no aparece en el Banco)."""
     with session() as s:
         for x in s.query(Subject).filter(Subject.name == STYLE_NAME):
             return x.id
-        sub = Subject(name=STYLE_NAME, kind="style", description="Estilo aprendido de las fotos aprobadas de la Adult Zone",
+        sub = Subject(name=STYLE_NAME, kind="style", description="Estilo aprendido de las fotos aprobadas de Shelton Hot",
                       lora_info={"base": "sdxl", "adult_style": True,
                                  "adult_ok": {"by": "sistema", "at": datetime.now().isoformat(timespec="seconds")}})
         s.add(sub)
@@ -386,7 +433,7 @@ def _style_file() -> Path:
 
 
 def style_uploads() -> list[dict]:
-    """Fotos propias subidas para la LoRA de la Adult Zone (con quién confirmó que son inventadas y +18)."""
+    """Fotos propias subidas para la LoRA de Shelton Hot (con quién confirmó que son inventadas y +18)."""
     try:
         rows = json.loads(_style_file().read_text(encoding="utf-8")) if _style_file().exists() else []
     except ValueError:
@@ -420,7 +467,7 @@ def style_remove(file: str) -> dict:
 
 
 def style_dataset() -> list[str]:
-    """Fotos propias subidas + las aprobadas en la Adult Zone (solo las que pasan el control de menores)."""
+    """Fotos propias subidas + las aprobadas en Shelton Hot (solo las que pasan el control de menores)."""
     out = [str(_dir() / Path(r["file"]).name) for r in style_uploads()]
     for e in entries():
         if e.get("review") != "approved" or e.get("status") != "done" or not e.get("file"):
@@ -548,6 +595,15 @@ async def api_style_remove(body: StyleRemoveIn, request: Request):
     return style_remove(body.file)
 
 
+@router.post("/modelo/{sid}/lora-adulta")
+async def api_train_adult(sid: str, request: Request):
+    _admin(request)
+    try:
+        return train_adult(sid)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @router.post("/estilo/entrenar")
 async def api_style_train(request: Request):
     _admin(request)
@@ -614,7 +670,7 @@ async def api_delete(entry_id: str, request: Request):
     return {"ok": True}
 
 
-# ------------------------------------------------------------------ chat de la Adult Zone (como hablarle a Shelton)
+# ------------------------------------------------------------------ chat de Shelton Hot (como hablarle a Shelton)
 NUM_WORDS = {"una": 1, "un": 1, "uno": 1, "dos": 2, "tres": 3, "cuatro": 4}
 
 
@@ -633,16 +689,26 @@ def parse_request(text: str) -> dict:
     size = ("historia" if re.search(r"historia|9:16|story|reel", low) else "horizontal" if "horizontal" in low
             else "cuadrado" if "cuadrad" in low else "vertical")
     preset = "flux" if "flux" in low else "zimage" if re.search(r"z-?image", low) else "sdxl"
-    if subject and not re.search(r"\b(flux|sdxl)\b|z-?image", low) and subject["lora_ready"] and subject["base"] in ENGINES:
+    if subject and subject.get("adult_twin"):            # escribieron «Valentina · 🔞»: es la misma Valentina
+        subject = next((m for m in usable if m["id"] == subject["variant_of"]), subject)
+    adult_twin = (next((m for m in usable if m["variant_of"] == subject["id"] and m["adult_twin"] and m["lora_ready"]),
+                       None) if subject else None)
+    if subject and adult_twin and not re.search(r"\b(flux|z-?image)\b", low):
+        # Como en el Shelton normal: nombras a la modelo y listo. Si ya tiene su 🔞 LoRA adulta, se usa esa,
+        # junto con la LoRA de Shelton Hot.
+        preset = "sdxl"
+        subject = adult_twin
+    elif subject and not re.search(r"\b(flux|sdxl)\b|z-?image", low) and subject["lora_ready"] and subject["base"] in ENGINES:
         preset = subject["base"]          # usa el motor de SU LoRA (la que aprendió de sus fotos del Banco): sale con su cara
     named = subject
     if subject and subject["base"] != preset:
         # «Valentina con sdxl»: usa su versión SDXL (con su propia LoRA SDXL) si ya la tiene
-        twin = next((m for m in usable if m["variant_of"] == subject["id"] and m["base"] == preset), None)
+        twin = next((m for m in usable if m["variant_of"] == subject["id"] and m["base"] == preset
+                     and not m["adult_twin"]), None)
         if twin:
             subject = twin
     prompt = t
-    for who in {x["name"] for x in (named, subject) if x}:
+    for who in {x["name"] for x in (named, subject) if x} | ({named["name"].split(" · ")[0]} if named else set()):
         prompt = re.sub(re.escape(who), "", prompt, flags=re.IGNORECASE)
     prompt = re.sub(r"\b(hazme|haz|genera|generame|créame|creame|crea|quiero|dame)\b", "", prompt, flags=re.IGNORECASE)
     prompt = re.sub(r"\b(\d|una|un|uno|dos|tres|cuatro)\s*(fotos?|im[aá]genes?|versiones?)\s*(de)?\b", "", prompt,
@@ -707,23 +773,20 @@ def private_refs(sid: str) -> list[str]:
 
 
 def private_paths(sid: str) -> list[str]:
-    """Rutas de sus fotos privadas, solo si la modelo está confirmada y eligieron usarlas al entrenar."""
+    """Rutas de sus fotos privadas: solo para su 🔞 LoRA adulta (Shelton Hot), si la modelo está confirmada."""
     try:
         info = _sub_info(sid)
     except ValueError:
         return []
-    if info.get("variant_of") and not private_refs(sid):
-        # «Valentina · SDXL» entrena también con las fotos privadas de Valentina (si ahí eligieron usarlas)
-        try:
-            orig = _sub_info(info["variant_of"])
-        except ValueError:
-            return []
-        if orig.get("adult_ok") and (orig.get("train_private") or info.get("train_private")):
-            return [str(_dir() / Path(f).name) for f in private_refs(info["variant_of"])]
+    if not (info.get("adult_twin") and info.get("variant_of")):
+        return []        # sus LoRAs normales (las del Shelton normal) nunca aprenden de lo privado
+    try:
+        orig = _sub_info(info["variant_of"])
+    except ValueError:
         return []
-    if not (info.get("adult_ok") and info.get("train_private")):
+    if not orig.get("adult_ok"):
         return []
-    return [str(_dir() / Path(f).name) for f in private_refs(sid)]
+    return [str(_dir() / Path(f).name) for f in private_refs(info["variant_of"])]
 
 
 def is_private_path(p: str) -> bool:

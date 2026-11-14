@@ -17,6 +17,7 @@ from app.connections import ENGINE_ROLES, TYPES, merge_config, public
 from app.db import AgentRun, Approval, Connection, Finding, Job, Post, get_or_create_brand, now, session
 from app.engines import PRESET_INFO, VIDEO_INFO, engine_choices, reset_cache
 from app.media import save_bytes, url_for
+from app.zona import adult_only
 
 router = APIRouter(prefix="/api")
 
@@ -485,7 +486,7 @@ async def search(q: str):
     with session() as s:
         for p in s.query(Post).filter(Post.idea.ilike(like) | Post.caption.ilike(like)).order_by(Post.created_at.desc()).limit(8):
             out.append({"type": "post", "id": p.id, "title": p.idea[:90], "image_url": url_for(p.image_path)})
-        for x in s.query(Subject).filter(Subject.name.ilike(like)).limit(5):
+        for x in [y for y in s.query(Subject).filter(Subject.name.ilike(like)).limit(20) if not adult_only(y)][:5]:
             out.append({"type": "subject", "id": x.id, "title": x.name, "image_url": url_for((x.references or [""])[0])})
         for c in s.query(Conversation).filter(Conversation.title.ilike(like)).order_by(Conversation.updated_at.desc()).limit(5):
             out.append({"type": "conversation", "id": c.id, "title": c.title})

@@ -23,6 +23,8 @@ from app.db import Subject, session
 log = logging.getLogger("shelton.granja")
 router = APIRouter(prefix="/api")
 
+from app.zona import adult_only  # noqa: E402
+
 _health: dict[str, tuple[float, dict]] = {}
 _remote_jobs: dict[str, tuple[dict, str]] = {}     # subject_id -> (nodo, job_id en el nodo)
 _transport = None                                  # las pruebas inyectan un transporte simulado
@@ -333,7 +335,8 @@ async def push_lora(path: Path) -> list[str]:
 async def overview() -> dict:
     from app import consumo, lora
     with session() as s:
-        subs = [(x.id, x.name, x.lora_status, x.lora_progress or 0, dict(x.lora_info or {}))
+        subs = [(x.id, "🔒 Privado (Shelton Hot)" if adult_only(x) else x.name, x.lora_status, x.lora_progress or 0,
+                 dict(x.lora_info or {}))
                 for x in s.query(Subject).filter(Subject.lora_status.in_(["training", "queued"]))]
     training = [{"id": i, "name": n, "status": st, "progress": round(p), "where": inf.get("where", ""),
                  "eta_min": inf.get("eta_min"), "phase": inf.get("phase", ""), "position": inf.get("position"),
@@ -413,7 +416,8 @@ async def granja_overview():
 async def granja_training():
     """Lo que entrena ahora y lo que está en fila (para todos: sin datos técnicos)."""
     with session() as s:
-        subs = [(x.id, x.name, x.lora_status, x.lora_progress or 0, dict(x.lora_info or {}))
+        subs = [(x.id, "🔒 Privado (Shelton Hot)" if adult_only(x) else x.name, x.lora_status, x.lora_progress or 0,
+                 dict(x.lora_info or {}))
                 for x in s.query(Subject).filter(Subject.lora_status.in_(["training", "queued"]))]
     out = [{"id": i, "name": n, "status": st, "progress": round(p), "eta_min": inf.get("eta_min"),
             "position": inf.get("position"), "queued_at": inf.get("queued_at", "")} for i, n, st, p, inf in subs]

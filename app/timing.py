@@ -14,6 +14,7 @@ from pathlib import Path
 
 from app.config import settings
 from app.db import Brand, Post, Subject, get_or_create_brand, session
+from app.zona import adult_only
 
 DAYS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
 
@@ -109,7 +110,7 @@ async def refresh() -> dict:
         b: Brand = get_or_create_brand(s)
         brand_txt = brand_context(b)
         platforms = list(b.platforms or []) or ["instagram_feed", "instagram_story", "tiktok"]
-        subjects = [f"{x.name} ({x.kind})" for x in s.query(Subject).all()]
+        subjects = [f"{x.name} ({x.kind})" for x in s.query(Subject).all() if not adult_only(x)]
     inside = inside_stats()
     ask = (f"{brand_txt}\nTime zone: {tz_name()}\nPlatforms: {', '.join(platforms)}\n"
            f"Recurring models: {', '.join(subjects) or 'none'}\n"

@@ -16,7 +16,7 @@ RULES = [
      "Ese modelo no existe (o cambió de nombre) en ese servicio: elige otro en 🎨 Modelos."),
     (r"(fal\.ai|higgsfield) (400|422)", "El modelo elegido no aceptó el pedido: prueba otro modelo en 🎨 Modelos."),
     (r"content.*(policy|moderation|safety|nsfw)|flagged|safety checker",
-     "El servicio en la nube rechazó el contenido por sus reglas. Para eso usa tu placa (o la Adult Zone si es adulto)."),
+     "El servicio en la nube rechazó el contenido por sus reglas. Para eso usa tu placa (o Shelton Hot si es adulto)."),
     (r"timed? ?out|timeout", "El servicio tardó demasiado en responder. Prueba de nuevo en un rato."),
 ]
 
