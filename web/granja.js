@@ -47,8 +47,8 @@ function renderGranja(box, d) {
             : n.runpod && n.resuming ? '<span class="chip warn">⏳ esperando tarjeta</span>' : '<span class="chip bad">apagado / sin respuesta</span>'}
           <span class="faint small grow">${esc(d.profiles[n.profile] || n.profile)} · ${n.slots} a la vez${n.cost_hour ? ` · US$ ${n.cost_hour}/h` : ""}</span>
           ${n.runpod && n.resuming && !n.health?.ok ? `<button class="btn sm ghost" data-gpow="dejar" data-gcid="${esc(n.conn_id)}">✕ Dejar de intentar</button>`
-            : n.runpod && n.starting && !n.health?.ok ? `<button class="btn sm ghost" data-gpow="pausar" data-gcid="${esc(n.conn_id)}" data-gbusy="0">⏸ Pausar</button>`
-            : n.runpod ? (n.health?.ok ? `<button class="btn sm" data-gpow="pausar" data-gcid="${esc(n.conn_id)}" data-gbusy="${(n.health?.running || []).length}">⏸ Pausar</button>`
+            : n.runpod && n.starting && !n.health?.ok ? `<button class="btn sm ghost" data-gpow="pausar" data-gcid="${esc(n.conn_id)}" data-gvol="${n.volume ? 1 : 0}" data-gbusy="0">⏸ Pausar</button>`
+            : n.runpod ? (n.health?.ok ? `<button class="btn sm" data-gpow="pausar" data-gcid="${esc(n.conn_id)}" data-gvol="${n.volume ? 1 : 0}" data-gbusy="${(n.health?.running || []).length}">⏸ Pausar</button>`
             : `<button class="btn sm primary" data-gpow="prender" data-gcid="${esc(n.conn_id)}">▶ Prender</button>`) : ""}
           <button class="btn sm ghost" data-gtest="${esc(n.conn_id)}">Probar</button></div>
         ${n.runpod && n.resuming && !n.health?.ok ? `<div style="margin-top:8px"><span class="chip warn">⏳ Esperando una libre en RunPod · intento ${n.resuming.try} de ${n.resuming.max}</span>
@@ -83,7 +83,9 @@ document.addEventListener("click", async (e) => {
   const action = b.dataset.gpow, cid = b.dataset.gcid;
   if (action === "pausar") {
     const busy = +b.dataset.gbusy || 0;
+    const vol = b.dataset.gvol === "1";
     if (!confirm(busy ? `Está entrenando ${busy} modelo(s). Si la pausas, se cortan y se retoman solos cuando la vuelvas a prender (desde el último punto guardado). ¿Pausar igual?`
+      : vol ? "¿Pausar la tarjeta? Se suelta la máquina (deja de cobrar por hora). Tu disco (Network Volume) y todo lo instalado quedan guardados; con ▶ se arma otra y se conecta sola."
       : "¿Pausar la tarjeta? Deja de cobrar por hora (solo el disco) y se puede volver a prender con ▶.")) return;
   }
   b.disabled = true; b.textContent = action === "prender" ? "Prendiendo…" : action === "dejar" ? "…" : "Pausando…";

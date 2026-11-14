@@ -131,7 +131,12 @@ TYPES: dict[str, dict] = {
                             F("cost_hour", "Costo por hora en US$ (para Consumo)", placeholder="2.0"),
                             F("comfy_url", "ComfyUI de ese nodo (opcional)", placeholder="http://100.x.x.x:8288"),
                             F("runpod_api_key", "Clave de API de RunPod (opcional: para ▶ prender / ⏸ pausar desde Shelton)", "secret"),
-                            F("runpod_pod_id", "ID del pod en RunPod (opcional)", placeholder="pzovsi7bwnsytl")]},
+                            F("runpod_pod_id", "ID del pod en RunPod (opcional)", placeholder="pzovsi7bwnsytl"),
+                            F("runpod_volume_id", "ID del Network Volume (opcional: ▶ arma una máquina nueva con tu disco y "
+                              "⏸ la suelta; el disco queda guardado)", placeholder="abc123xyz"),
+                            F("runpod_gpu", "Tarjeta a pedir con el Network Volume", placeholder="RTX PRO 6000"),
+                            F("runpod_image", "Imagen del pod (opcional)",
+                              placeholder="runpod/pytorch:2.1.0-cu1320-torch280-ubuntu2404")]},
     "event_webhook": {"category": "webhook", "name": "Webhook de eventos",
                       "help": "Recibe un POST cada vez que pasa algo (post listo, aprobado, publicado, campaña terminada...).",
                       "fields": [F("url", "URL", required=True), F("headers", "Cabeceras (JSON)", "json"),

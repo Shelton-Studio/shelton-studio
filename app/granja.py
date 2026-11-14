@@ -51,7 +51,8 @@ def remote_nodes() -> list[dict]:
                     "url": cfg["url"].rstrip("/"), "token": cfg.get("token", ""), "slots": slots,
                     "profile": "pro" if str(cfg.get("profile", "pro")).lower().startswith("pro") else "estandar",
                     "cost_hour": cost, "comfy_url": (cfg.get("comfy_url") or "").rstrip("/"),
-                    "runpod": bool(cfg.get("runpod_api_key") and cfg.get("runpod_pod_id")),
+                    "runpod": bool(cfg.get("runpod_api_key") and (cfg.get("runpod_pod_id") or cfg.get("runpod_volume_id"))),
+                    "volume": bool(cfg.get("runpod_api_key") and cfg.get("runpod_volume_id")),
                     "resuming": resuming(c.id), "starting": starting(c.id)})
     return out
 
@@ -403,15 +404,36 @@ async def overview() -> dict:
 RUNPOD_GQL = "https://api.runpod.io/graphql"
 
 
-async def runpod(cid: str, query: str) -> dict:
+def _rp_cfg(cid: str) -> dict:
     from app.connections import list_enabled
     c = next((x for x in list_enabled("gpu") if x.id == cid), None)
-    cfg = (c.config or {}) if c else {}
-    key, pod = cfg.get("runpod_api_key"), cfg.get("runpod_pod_id")
-    if not key or not pod:
+    return dict(c.config or {}) if c else {}
+
+
+def volume_mode(cid: str) -> bool:
+    """Con Network Volume: ▶ arma una máquina nueva con tu disco y ⏸ la suelta (el disco queda guardado)."""
+    cfg = _rp_cfg(cid)
+    return bool(cfg.get("runpod_api_key") and cfg.get("runpod_volume_id"))
+
+
+def _save_pod_id(cid: str, pod_id: str) -> None:
+    from app.db import Connection
+    with session() as s:
+        c = s.get(Connection, cid)
+        if c:
+            c.config = {**(c.config or {}), "runpod_pod_id": pod_id}
+
+
+async def runpod(cid: str, query: str, variables: dict | None = None, need_pod: bool = True) -> dict:
+    cfg = _rp_cfg(cid)
+    key, pod = cfg.get("runpod_api_key"), cfg.get("runpod_pod_id") or ""
+    if not key or (need_pod and not pod):
         raise ValueError("Falta la clave de API de RunPod o el ID del pod: Conexiones → la tarjeta → Editar")
+    body = {"query": query.replace("POD_ID", pod)}
+    if variables:
+        body["variables"] = variables
     async with _client(30) as cl:
-        r = await cl.post(RUNPOD_GQL, params={"api_key": key}, json={"query": query.replace("POD_ID", pod)},
+        r = await cl.post(RUNPOD_GQL, params={"api_key": key}, json=body,
                           headers={"Authorization": f"Bearer {key}"})
     if r.status_code in (401, 403):
         raise ValueError("RunPod rechazó la clave de API: créala de nuevo en RunPod → Settings → API Keys")
@@ -437,6 +459,51 @@ async def rtx_status(cid: str):
     return {"status": p.get("desiredStatus", ""), "name": p.get("name", ""), "cost_hour": p.get("costPerHr")}
 
 
+START_CMD = ('bash -c "nohup bash /workspace/autostart.sh > /workspace/autostart.log 2>&1 & '
+             'if [ -x /start.sh ]; then exec /start.sh; else sleep infinity; fi"')
+DEFAULT_IMAGE = "runpod/pytorch:2.1.0-cu1320-torch280-ubuntu2404"
+
+
+async def _gpu_type_id(cid: str, wanted: str) -> str:
+    """El ID exacto que RunPod usa para la tarjeta pedida (p. ej. «RTX PRO 6000» → su nombre completo)."""
+    d = await runpod(cid, "query { gpuTypes { id displayName memoryInGb } }", need_pod=False)
+    w = (wanted or "RTX PRO 6000").lower()
+    types = d.get("gpuTypes") or []
+    hit = [t for t in types if w in (t.get("id") or "").lower() or w in (t.get("displayName") or "").lower()]
+    hit.sort(key=lambda t: ("max-q" in (t.get("id") or "").lower(), "workstation" in (t.get("id") or "").lower()))
+    if not hit:
+        raise ValueError(f"RunPod no tiene una tarjeta llamada «{wanted}»")
+    return hit[0]["id"]
+
+
+async def deploy_on_volume(cid: str) -> dict:
+    """▶ con Network Volume: pide una máquina nueva con la tarjeta elegida y le conecta tu disco en /workspace.
+    El arranque automático (en tu disco) la conecta sola a Shelton."""
+    cfg = _rp_cfg(cid)
+    gpu = await _gpu_type_id(cid, cfg.get("runpod_gpu") or "RTX PRO 6000")
+    inp = {"cloudType": "SECURE", "gpuCount": 1, "gpuTypeId": gpu, "networkVolumeId": cfg["runpod_volume_id"],
+           "volumeMountPath": "/workspace", "containerDiskInGb": 50, "volumeInGb": 0,
+           "imageName": cfg.get("runpod_image") or DEFAULT_IMAGE, "dockerArgs": START_CMD,
+           "ports": "8888/http,22/tcp", "name": "shelton-rtx", "startSsh": True}
+    d = await runpod(cid, "mutation($input: PodFindAndDeployOnDemandInput) { podFindAndDeployOnDemand(input: $input) "
+                          "{ id desiredStatus costPerHr } }", {"input": inp}, need_pod=False)
+    p = d.get("podFindAndDeployOnDemand") or {}
+    if not p.get("id"):
+        raise ValueError("RunPod no devolvió la máquina nueva")
+    _save_pod_id(cid, p["id"])
+    return p
+
+
+async def release_volume_pod(cid: str) -> None:
+    """⏸ con Network Volume: suelta la máquina (deja de cobrar). Tu disco y todo lo instalado quedan guardados."""
+    if not volume_mode(cid):
+        raise ValueError("Esta tarjeta no usa Network Volume")
+    if not _rp_cfg(cid).get("runpod_pod_id"):
+        return
+    await runpod(cid, 'mutation { podTerminate(input: {podId: "POD_ID"}) }')
+    _save_pod_id(cid, "")
+
+
 RESUME_EVERY = 60        # segundos entre intentos cuando RunPod no tiene la tarjeta libre
 RESUME_TRIES = 45        # ~45 minutos intentando solo
 _resuming: dict[str, dict] = {}     # cid → {"try": n, "since": t, "error": ""}
@@ -459,7 +526,10 @@ async def _keep_resuming(cid: str) -> None:
                 break
             st["try"] += 1
             try:
-                await runpod(cid, q)
+                if volume_mode(cid):
+                    await deploy_on_volume(cid)
+                else:
+                    await runpod(cid, q)
                 _started[cid] = time.time()
                 _health.pop(f"node:{cid}", None)
                 log.info("RunPod: tarjeta %s prendida al intento %d", cid, st["try"])
@@ -505,7 +575,15 @@ async def rtx_power(cid: str, action: str):
     if action == "prender" and cid in _resuming:
         return {"ok": True, "waiting": True, **resuming(cid)}
     try:
-        d = await runpod(cid, q)
+        if volume_mode(cid):
+            if action == "prender":
+                p = await deploy_on_volume(cid)
+                d = {"podResume": p}
+            else:
+                await release_volume_pod(cid)
+                d = {"podStop": {"desiredStatus": "RELEASED"}}
+        else:
+            d = await runpod(cid, q)
     except ValueError as e:
         if action == "prender" and _no_free_gpu(str(e)):
             _resuming[cid] = {"try": 0, "since": time.time(), "error": str(e)}
