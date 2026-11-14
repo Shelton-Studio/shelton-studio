@@ -88,7 +88,7 @@ window.onExtraEvent = (ev) => {
 // ------------------------------------------------------------------ 🎯 Indicaciones al entrenar
 // Panel «qué quieres que aprenda» + «cómo ver las muestras». Se usa en el diálogo de entrenar de siempre (se suma, no
 // cambia lo que ya tenía) y en «⚡ Entrenar en la RTX». Se guarda solo mientras escribes.
-async function briefPanel(sid) {
+async function briefPanel(sid, opts = {}) {
   let d = { brief: "", sample_prompt: "" };
   try { d = await api(`/api/subjects/${sid}/lora/indicaciones`); } catch {}
   const panel = document.createElement("div");
@@ -97,7 +97,7 @@ async function briefPanel(sid) {
     <div class="faint small" style="margin:4px 0 8px">Cuéntale a Shelton cómo la quieres. Con esto describe cada foto al entrenar (qué tiene que aprender y qué no) y arma las fotos de muestra.</div>
     <label class="f">¿Qué quieres que aprenda?<textarea id="lb-brief" rows="4" placeholder="Ej: que aprenda su cara tal cual: lunar en la mejilla izquierda, ojos verdes, pecas suaves. Que NO aprenda la ropa ni los fondos de las fotos. La voy a usar para fotos de Instagram estilo lifestyle.">${esc(d.brief || "")}</textarea></label>
     <label class="f">📸 ¿Cómo quieres ver las fotos de muestra? (una cada 100 pasos)<input id="lb-sample" placeholder="Ej: retrato de frente, luz natural de ventana, fondo neutro, sonriendo" value="${esc(d.sample_prompt || "")}"></label>
-    <div class="row" style="gap:8px;margin-top:4px"><label class="btn sm">📎 Agregar fotos de referencia (opcional)<input type="file" id="lb-photos" accept="image/*" multiple hidden></label>
+    <div class="row" style="gap:8px;margin-top:4px;${opts.photos === false ? "display:none" : ""}"><label class="btn sm">📎 Agregar fotos de referencia (opcional)<input type="file" id="lb-photos" accept="image/*" multiple hidden></label>
       <span class="faint small" id="lb-photos-state">Se suman a sus fotos para aprender (por ejemplo, primeros planos de su cara o del rasgo que quieres que aprenda).</span></div>
     <div class="faint small" id="lb-state"></div>`;
   let t = null;
