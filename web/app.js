@@ -377,6 +377,7 @@ VIEWS.chat = async (el, convId) => {
       <div class="grow"></div><span class="muted small">Motor</span>
       <select id="engine-sel" title="Motor de imagen de esta conversación">${S.engines.image.map((e) => `<option value="${esc(e.id)}">${esc(e.label)}${e.local ? "" : " ☁"}</option>`).join("")}</select>
       <button class="icon-btn" id="engine-help" title="¿Qué motor elijo?">?</button>
+      <button class="icon-btn" id="conv-del" title="Borrar esta conversación">${icon("trash", 16)}</button>
       <button class="btn sm" id="video-models" title="Elegir el modelo de video (Veo, Sora, Seedance, Kling, Wan…)">🎬 Video</button></div>
       <div class="msgs" id="msgs"></div>
       <form class="composer" id="composer"><div class="composer-box"><div class="attachments" id="attachments"></div>
@@ -387,6 +388,7 @@ VIEWS.chat = async (el, convId) => {
   $("#agent-sel").onchange = (e) => { S.chatAgent = e.target.value; S.conv = null; go("chat"); route(); };
   $("#engine-sel").onchange = (e) => { S.chatEngine = e.target.value; toast(`Motor: <b>${esc(e.target.selectedOptions[0].text)}</b>. Se aplica desde tu próximo mensaje.`, "good", "🎛️"); };
   $("#engine-help").onclick = engineHelp;
+  $("#conv-del").onclick = () => S.conv ? deleteConversation(S.conv) : toast("Esta conversación todavía está vacía", "", "🗑");
   $("#video-models").onclick = () => openVideoModels();
   $("#new-chat").onclick = () => { S.conv = null; S.chatEngine = ""; go("chat"); route(); };
   $("#th-search").oninput = () => renderThreads($("#th-search").value);
@@ -414,8 +416,18 @@ async function renderThreads(q = "") {
   const groups = { Hoy: [], Ayer: [], "Esta semana": [], Antes: [] };
   const now = new Date(); const day = (d) => Math.floor((new Date(now.toDateString()) - new Date(new Date(d).toDateString())) / 864e5);
   list.forEach((c) => { const d = day(c.updated_at); (d <= 0 ? groups.Hoy : d === 1 ? groups.Ayer : d < 7 ? groups["Esta semana"] : groups.Antes).push(c); });
-  $("#th-list").innerHTML = Object.entries(groups).filter(([, v]) => v.length).map(([g, v]) => `<div class="th-group">${g}</div>` + v.map((c) => `<div class="th-item ${c.id === S.conv ? "on" : ""}" data-id="${c.id}"><b>${esc(c.title)}</b><small>${when(c.updated_at)}</small></div>`).join("")).join("") || `<div class="empty small">Sin conversaciones con ${esc(agentName(S.chatAgent))}.</div>`;
+  $("#th-list").innerHTML = Object.entries(groups).filter(([, v]) => v.length).map(([g, v]) => `<div class="th-group">${g}</div>` + v.map((c) => `<div class="th-item ${c.id === S.conv ? "on" : ""}" data-id="${c.id}"><b>${esc(c.title)}</b><small>${when(c.updated_at)}</small><button class="th-del" data-thdel="${c.id}" title="Borrar esta conversación">${icon("trash", 14)}</button></div>`).join("")).join("") || `<div class="empty small">Sin conversaciones con ${esc(agentName(S.chatAgent))}.</div>`;
   $$(".th-item").forEach((t) => t.onclick = () => go("chat", t.dataset.id));
+  $$("[data-thdel]").forEach((b) => b.onclick = (e) => { e.stopPropagation(); deleteConversation(b.dataset.thdel); });
+}
+
+// 🗑 Borrar una conversación (las fotos y videos que salieron de ella quedan en la Galería)
+async function deleteConversation(id) {
+  if (!id || !confirm("¿Borrar esta conversación? Las fotos y videos que salieron de ella quedan en la Galería.")) return;
+  try { await api(`/api/conversations/${id}`, { method: "DELETE" }); }
+  catch (e) { return toast(esc(e.message), "bad"); }
+  toast("Conversación borrada", "good", "🗑");
+  if (S.conv === id) { S.conv = null; go("chat"); } else renderThreads();
 }
 function welcome() {
   const chief = S.chatAgent === "shelton", a = S.agents.find((x) => x.key === S.chatAgent);
