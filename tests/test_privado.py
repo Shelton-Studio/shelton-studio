@@ -543,3 +543,23 @@ def test_outside_images_cannot_be_uploaded_and_remake_works_on_generated_ones(mo
     hit = privado._remake_intent("ponle el cuerpo y la cara de Remake, medio", "gen-0")
     assert hit["mode"] == "cuerpo" and hit["level"] == "medio" and hit["subject"]["id"] == sid
     assert privado._remake_intent("ponle la cara de Remake") is None            # sin imagen elegida, nada
+
+
+def test_choosing_a_checkpoint_in_hot_chat_forces_sdxl_with_her_face(monkeypatch):
+    """Si eligió un checkpoint en el chat, va con SDXL aunque la modelo solo tenga su LoRA de Z-Image; la cara se le
+    pone después con su LoRA de siempre."""
+    import asyncio
+    from app import lora
+    sid = _subject("Chkpt")
+    lora._update(sid, lora_status="ready", lora_name="chkpt.safetensors")
+    privado.confirm(sid, "admin", True, True)
+    got = {}
+
+    async def fake_generate(by, prompt, subject_id="", preset="sdxl", ckpt="", **k):
+        got.update(preset=preset, ckpt=ckpt, subject_id=subject_id)
+        return {"batch": "b", "with_lora": False, "translated": "", "prompt_en": prompt}
+    monkeypatch.setattr(privado, "generate", fake_generate)
+    asyncio.run(privado.chat("admin", "una foto de Chkpt en la cama", "", "cyberrealistic.safetensors"))
+    assert got == {"preset": "sdxl", "ckpt": "cyberrealistic.safetensors", "subject_id": sid}
+    asyncio.run(privado.chat("admin", "una foto de Chkpt en la cama"))
+    assert got["preset"] == "zimage"                               # sin checkpoint elegido, como siempre

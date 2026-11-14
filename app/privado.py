@@ -1018,6 +1018,13 @@ async def chat(by: str, text: str, image_id: str = "", ckpt: str = "") -> dict:
                          "unos segundos.", "batch": "rehacer"}
     p = parse_request(text)
     sub = p["subject"]
+    if ckpt and p["preset"] != "sdxl":
+        # Eligió un checkpoint (SDXL, Pony…): se usa SDXL sí o sí. El cuerpo, de su 🔞 LoRA adulta si la tiene; la
+        # cara, siempre de su LoRA de siempre (pasada de rostro automática).
+        p["preset"] = "sdxl"
+        if sub:
+            twin = next((m for m in models() if m["variant_of"] == sub["id"] and m.get("adult_twin") and m["lora_ready"]), None)
+            sub = twin or sub
     use_ckpt = ckpt if (ckpt and p["preset"] == "sdxl") else ""      # el checkpoint elegido (SDXL, Pony…)
     r = await generate(by, p["prompt"], sub["id"] if sub else "", p["preset"], ckpt=use_ckpt, count=p["count"],
                        size=p["size"])
