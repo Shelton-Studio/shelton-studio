@@ -165,7 +165,47 @@ def listing(sid: str, limit: int = 300) -> dict:
             "samples": [{**x, "url": url(sid, x["file"]), "label": label(sid, x)} for x in reversed(rows)]}
 
 
+def last(sid: str) -> dict | None:
+    idx = index(sid)
+    if not idx:
+        return None
+    x = idx[-1]
+    return {"n": x["n"], "step": x["step"], "url": url(sid, x["file"]), "label": label(sid, x)}
+
+
+def overview(include_private: bool = False) -> list[dict]:
+    """📸 Todas las modelos con muestras (la que entrena ahora primero, después la más reciente)."""
+    from app.zona import adult_only
+    out = []
+    with session() as s:
+        subs = [(x.id, x.name, x.lora_status, adult_only(x)) for x in s.query(Subject)]
+    for sid, name, status, private in subs:
+        if private and not include_private:
+            continue
+        rows = index(sid)
+        if not rows:
+            continue
+        out.append({"id": sid, "name": "🔒 " + name if private else name, "training": status == "training",
+                    "count": len(rows), "last_at": rows[-1].get("at", ""),
+                    "samples": [{**x, "url": url(sid, x["file"]), "label": label(sid, x)} for x in reversed(rows[-60:])]})
+    out.sort(key=lambda m: (not m["training"], m["last_at"]), reverse=False)
+    out.sort(key=lambda m: m["training"], reverse=True)
+    return out
+
+
 # ------------------------------------------------------------------ API
+@router.get("/muestras")
+async def api_overview(request: Request):
+    """Pantalla 📸 Muestras: cada foto del entrenamiento con su número y sus pasos."""
+    admin = True
+    try:
+        from app.privado import _admin
+        _admin(request)
+    except HTTPException:
+        admin = False
+    return {"every": every(), "models": overview(include_private=admin)}
+
+
 def _guard(sid: str, request: Request) -> None:
     """Las muestras de las 🔞 LoRAs de Shelton Hot son solo para administradores."""
     from app.zona import adult_only

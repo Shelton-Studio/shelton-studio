@@ -387,6 +387,20 @@ def versions(subject_id: str) -> list[dict]:
     return out
 
 
+def used_step(sub: Subject) -> int:
+    """Pasos de la LoRA que se usa AHORA para generar (la del archivo activo en ComfyUI)."""
+    if not sub or not sub.lora_name:
+        return 0
+    f = Path(settings.COMFY_LORA_DIR).expanduser() / sub.lora_name
+    step = _read_saved_step(f) if f.exists() else 0
+    info = sub.lora_info or {}
+    return int(step or info.get("trained_steps") or 0)
+
+
+def fmt_steps(n: int) -> str:
+    return f"{int(n):,}".replace(",", ".")
+
+
 def use_version(subject_id: str, file: str) -> dict:
     """Vuelve a una versión anterior: la copia a ComfyUI como la LoRA activa (las demás siguen guardadas)."""
     vfile = settings.DATA_DIR / "lora" / subject_id / "versiones" / Path(file).name

@@ -90,3 +90,28 @@ def test_shelton_can_list_and_use_samples_by_number():
     assert got["samples"][0]["number"] == 1 and got["samples"][0]["step"] == 100
     got = json.loads(asyncio.run(shelton._run_tool("use_training_sample", {"subject": "Lirio", "number": 1}, ctx, emit)))
     assert got["ok"] and "#0001" in got["now_active"]
+
+
+def test_samples_screen_lists_models_with_numbers_and_steps_and_posts_record_lora_steps():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    sid = _subject("Pantalla")
+    job = lora.job_for(sid)
+    out = settings.DATA_DIR / "lora" / sid / "output" / job
+    (out / "samples").mkdir(parents=True, exist_ok=True)
+    for step in (100, 300):
+        (out / "samples" / f"17{step}__{step:09d}_0.jpg").write_bytes(b"jpg")
+    lora_muestras.collect(sid)
+    with TestClient(app) as c:
+        d = c.get("/api/muestras").json()
+    m = next(x for x in d["models"] if x["id"] == sid)
+    assert [(x["n"], x["step"]) for x in m["samples"]] == [(2, 300), (1, 100)]
+    assert lora_muestras.last(sid)["label"] == "Pantalla #0002 · paso 300"
+    # la LoRA que se usa para generar dice sus pasos
+    lora_dir = Path(settings.COMFY_LORA_DIR).expanduser()
+    _ckpt(lora_dir / "pantalla.safetensors", 2500)
+    with session() as s:
+        sub = s.get(Subject, sid)
+        sub.lora_name = "pantalla.safetensors"
+        s.flush()
+        assert lora.used_step(sub) == 2500 and lora.fmt_steps(20700) == "20.700"

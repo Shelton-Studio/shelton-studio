@@ -345,6 +345,13 @@ async def _create_post(post_id: str, payload: dict) -> None:
     from app.engines import engine_label
     _mark(post_id, "image", engine_label(engine, "subject" if refs else "generate")
           + (" + LoRA " + ", ".join(s.name for s in subjects) if loras else ""))
+    if loras:      # 🎓 con qué versión de su LoRA se hizo (cuántos pasos)
+        try:
+            _mark(post_id, "lora", ", ".join(
+                f"{s.name} · {lora_mod.fmt_steps(lora_mod.used_step(s))} pasos" if lora_mod.used_step(s) else s.name
+                for s in subjects))
+        except Exception:  # noqa: BLE001
+            log.warning("No pude anotar los pasos de la LoRA", exc_info=True)
 
     feedback: list[str] = []
     tries: list[dict] = []   # todos los intentos se conservan

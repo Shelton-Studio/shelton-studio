@@ -35,7 +35,12 @@ function renderGranja(box, d) {
   box.innerHTML = `
     <div class="card"><b>🎓 Entrenamientos</b>${tr.length ? tr.map((x) => `<div class="tn-row"><span class="tn-name">${esc(x.name)}</span>
       ${x.status === "training" ? `<div class="lora-bar grow"><i style="width:${Math.max(2, x.progress)}%"></i></div><span class="small">${[x.progress + "%", x.where ? (/placa/i.test(x.where) ? "🦎 " : "⚡ ") + esc(x.where) : "", x.eta_min != null ? `~${x.eta_min} min` : ""].filter(Boolean).join(" · ")}</span>`
-        : `<span class="chip warn">En fila #${x.position || "?"}</span><span class="faint small grow">${esc(x.phase || "")}</span>`}</div>`).join("") : `<div class="faint small" style="margin-top:6px">Nada entrenando ahora.</div>`}</div>
+        : `<span class="chip warn">En fila #${x.position || "?"}</span><span class="faint small grow">${esc(x.phase || "")}</span>`}</div>
+      ${x.status === "training" ? `<div class="row" style="gap:10px;margin:4px 0 8px">${x.sample
+        ? `<img src="${esc(x.sample.url)}" style="width:56px;height:56px;object-fit:cover;border-radius:8px;cursor:pointer" onclick="go('muestras')" title="Última muestra">
+           <span class="small">📸 Última muestra: <b>#${String(x.sample.n).padStart(4, "0")}</b> · ${Number(x.sample.step).toLocaleString("es")} pasos</span>`
+        : `<span class="faint small">📸 La primera muestra sale al paso ${Math.ceil(((x.step || 0) + 1) / 100) * 100}${x.step ? ` (va en el ${Number(x.step).toLocaleString("es")})` : ""}.</span>`}
+        <button class="btn sm ghost" onclick="go('muestras')">Ver muestras</button></div>` : ""}`).join("") : `<div class="faint small" style="margin-top:6px">Nada entrenando ahora.</div>`}</div>
     <div class="grid g2" style="margin-top:16px">
       <div class="card"><div class="row" style="gap:8px"><b>🏠 Placa</b>${d.local.trainer_ready ? '<span class="chip good">entrenador listo</span>' : '<span class="chip warn">sin entrenador</span>'}
         <span class="faint small grow">perfil ${esc(d.profiles[d.local.profile] || d.local.profile)} · ${d.local.slots.length} lugar(es) de entrenamiento</span></div>

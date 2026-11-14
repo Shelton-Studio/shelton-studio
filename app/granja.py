@@ -385,9 +385,11 @@ async def overview() -> dict:
         subs = [(x.id, "🔒 Privado (Shelton Hot)" if adult_only(x) else x.name, x.lora_status, x.lora_progress or 0,
                  dict(x.lora_info or {}))
                 for x in s.query(Subject).filter(Subject.lora_status.in_(["training", "queued"]))]
+    from app import lora_muestras
     training = [{"id": i, "name": n, "status": st, "progress": round(p), "where": inf.get("where", ""),
                  "eta_min": inf.get("eta_min"), "phase": inf.get("phase", ""), "position": inf.get("position"),
-                 "queued_at": inf.get("queued_at", "")} for i, n, st, p, inf in subs]
+                 "queued_at": inf.get("queued_at", ""), "step": inf.get("step"),
+                 "sample": None if n.startswith("🔒") else lora_muestras.last(i)} for i, n, st, p, inf in subs]
     training.sort(key=lambda x: (x["status"] != "training", x["queued_at"]))
     local = await consumo.gpu_now()
     nodes = []
@@ -611,8 +613,10 @@ async def granja_training():
         subs = [(x.id, "🔒 Privado (Shelton Hot)" if adult_only(x) else x.name, x.lora_status, x.lora_progress or 0,
                  dict(x.lora_info or {}))
                 for x in s.query(Subject).filter(Subject.lora_status.in_(["training", "queued"]))]
+    from app import lora_muestras
     out = [{"id": i, "name": n, "status": st, "progress": round(p), "eta_min": inf.get("eta_min"),
-            "position": inf.get("position"), "queued_at": inf.get("queued_at", "")} for i, n, st, p, inf in subs]
+            "position": inf.get("position"), "queued_at": inf.get("queued_at", ""), "step": inf.get("step"),
+            "sample": None if n.startswith("🔒") else lora_muestras.last(i)} for i, n, st, p, inf in subs]
     out.sort(key=lambda x: (x["status"] != "training", x["queued_at"]))
     return out
 

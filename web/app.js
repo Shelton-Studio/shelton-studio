@@ -624,7 +624,7 @@ async function openPost(id, refetch = true, keepScroll = false) {
   const media = busy ? `<div class="tile"><div class="img" style="aspect-ratio:4/5"><div><div class="spinner"></div>${esc(S.progress.get(id) || STATUS[p.status][0])}</div></div></div>`
     : isVid ? `<video class="media-main" src="${esc(p.video_url)}" poster="${esc(p.image_url)}" controls playsinline loop></video>`
     : p.image_url ? `<img class="media-main" src="${esc(p.image_url)}" alt="${esc(p.alt_text)}">` : `<div class="qa-box">${esc(p.error || "Sin imagen")}</div>`;
-  const MW = { image: "🖼️ Imagen", edit: "✏️ Edición", video: "🎬 Video", voice: "🎙️ Voz", sound: "🔊 Sonido" };
+  const MW = { image: "🖼️ Imagen", edit: "✏️ Edición", video: "🎬 Video", voice: "🎙️ Voz", sound: "🔊 Sonido", lora: "🎓 LoRA" };
   const madeWith = Object.entries(p.made_with || {}).map(([k, v]) => `<span class="chip ${k === "video" ? "accent" : k === "voice" || k === "sound" ? "info" : ""}">${MW[k] || esc(k)}: ${esc(v)}</span>`).join("");
   d.innerHTML = `<div class="d-head">${chip(p.status)}<span class="muted small">${esc(p.platform_name)} · ${p.width}×${p.height}${p.duration ? ` · ${p.duration.toFixed(1)} s` : ""}</span>
     ${p.qa_score ? `<span class="score ${scoreCls(p.qa_score)}">Juez ${Math.round(p.qa_score)}/100</span>` : ""}<div class="grow"></div><button class="icon-btn" id="d-x">${icon("x")}</button></div>
