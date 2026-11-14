@@ -23,7 +23,7 @@ VIEWS.privado = async (el) => {
     <div class="card pv-rules"><b>Reglas:</b> solo modelos <b>inventadas</b> (no personas reales) y <b>mayores de 18</b>. Cualquier pedido que mencione menores se bloquea.</div>
     <div class="card pv-chat" style="margin-top:14px">
       <div id="pv-msgs" class="pv-msgs"><div class="pv-msg bot">Hola, soy Shelton en Shelton Hot. Pídeme como siempre, por ejemplo: <i>«3 fotos de ${esc((models.find((m) => m.usable) || {}).name || "Luna")} en un loft, luz de ventana, formato historia»</i>. Si nombras a una modelo confirmada, uso su LoRA.</div></div>
-      <form id="pv-form" class="row" style="gap:8px;margin-top:10px"><input id="pv-text" class="grow" placeholder="Escríbele a Shelton…" autocomplete="off"><button class="btn primary">Enviar</button></form>
+      <form id="pv-form" class="row" style="gap:8px;margin-top:10px"><label class="btn ghost" title="Subir una imagen hecha con IA para ponerle la cara o el cuerpo de una modelo">📎<input type="file" id="pv-chatup" accept="image/*" hidden></label><select id="pv-chatsub" style="width:auto;max-width:180px" title="Modelo para este pedido (si no la nombras en el mensaje)"><option value="">Modelo: la que nombre</option>${models.filter((m) => m.usable && !m.variant_of && !m.adult_twin).map((m) => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join("")}</select><input id="pv-text" class="grow" placeholder="Escríbele a Shelton… (o sube 📎 una imagen IA y dile «ponle la cara»)" autocomplete="off"><button class="btn primary">Enviar</button></form>
     </div>
     <details class="card" style="margin-top:14px"><summary style="cursor:pointer"><b>Opciones avanzadas</b> <span class="faint small">(modelos, motor, checkpoint, cantidad, formato)</span></summary>
     <div class="grid g2" style="margin-top:14px;align-items:start">
@@ -205,11 +205,30 @@ VIEWS.privado = async (el) => {
     } catch (e) { toast(esc(e.message), "bad"); }
   };
   const say = (who, html) => { const m = document.createElement("div"); m.className = `pv-msg ${who}`; m.innerHTML = html; $("#pv-msgs", el).append(m); $("#pv-msgs", el).scrollTop = 1e9; };
+  let chatImage = "";
+  $("#pv-chatup", el).onchange = async (ev) => {
+    const f = ev.target.files[0]; ev.target.value = "";
+    if (!f) return;
+    if (!confirm("Solo se admiten imágenes HECHAS CON IA.\n\nConfirmo que esta imagen está generada con IA, que muestra una persona INVENTADA (no real) y MAYOR DE 18.\n\n¿Aceptas?")) return;
+    const fd = new FormData(); fd.append("files", f); fd.append("confirm", "1");
+    try {
+      const r = await api("/api/privado/rehacer/subir", { method: "POST", body: fd });
+      chatImage = r.ids[0];
+      say("me", `<img src="/api/privado/imagen/${esc(chatImage)}?t=1" style="max-width:160px;border-radius:10px">`);
+      say("bot", "Recibida. Dime qué hago: «ponle la cara de Valentina» o «ponle el cuerpo y la cara de Valentina» (suave, medio o fuerte).");
+      refresh();
+    } catch (e) { say("bot err", "⚠ " + esc(e.message)); }
+  };
   $("#pv-form", el).onsubmit = async (ev) => {
     ev.preventDefault();
     const t = $("#pv-text", el).value.trim(); if (!t) return;
     say("me", esc(t)); $("#pv-text", el).value = "";
-    try { const r = await api("/api/privado/chat", { method: "POST", body: { text: t } }); say("bot", esc(r.reply)); refresh(); }
+    const pick = $("#pv-chatsub", el).value;
+    let send = t;
+    if (pick && !t.toLowerCase().includes(pick.toLowerCase())) {   // la modelo elegida arriba, si no la nombró
+      send = /\b(cara|rostro|cuerpo)\b/i.test(t) ? `${t} de ${pick}` : `${pick}: ${t}`;
+    }
+    try { const r = await api("/api/privado/chat", { method: "POST", body: { text: send, image_id: chatImage } }); say("bot", esc(r.reply)); if (r.batch === "rehacer") chatImage = ""; refresh(); }
     catch (e) { say("bot err", "⚠ " + esc(e.message)); }
   };
   if (privTimer) clearInterval(privTimer);

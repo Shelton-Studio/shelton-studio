@@ -974,7 +974,32 @@ def parse_request(text: str) -> dict:
             "prompt": prompt or t}
 
 
-async def chat(by: str, text: str) -> dict:
+def _remake_intent(text: str, image_id: str = "") -> dict | None:
+    """«Ponle la cara de Valentina» / «el cuerpo y la cara de Valentina» sobre una imagen subida (o la elegida)."""
+    low = (text or "").lower()
+    if not re.search(r"\b(cara|rostro|cuerpo)\b", low):
+        return None
+    usable = [m for m in models() if m["usable"] and not m["variant_of"] and not m.get("adult_twin")]
+    sub = next((m for m in sorted(usable, key=lambda m: -len(m["name"])) if m["name"].lower() in low), None)
+    if not sub:
+        return None
+    if not image_id and not re.search(r"\b(ponle|ponerle|pon|p[oó]nle|c[aá]mbiale|cambia|reemplaza|usa)\b", low):
+        return None          # «foto de Valentina sonriendo, cara feliz» es un pedido normal, no rehacer
+    src = image_id or next((e["id"] for e in entries() if e.get("source") == "upload" and e.get("status") == "done"), "")
+    if not src:
+        return None
+    level = "fuerte" if "fuerte" in low else "medio" if "medio" in low else "suave"
+    return {"src": src, "subject": sub, "mode": "cuerpo" if "cuerpo" in low else "cara", "level": level}
+
+
+async def chat(by: str, text: str, image_id: str = "") -> dict:
+    hit = _remake_intent(text, image_id)
+    if hit:                 # rehacer la imagen subida con la cara (o la cara y el cuerpo) de la modelo
+        remake(hit["src"], hit["subject"]["id"], hit["mode"], hit["level"], by)
+        what = "la cara y el cuerpo" if hit["mode"] == "cuerpo" else "la cara"
+        return {"reply": f"Listo: le pongo {what} de {hit['subject']['name']} a la imagen, desde sus LoRAs, en la placa"
+                         f"{' (cambio de cuerpo ' + hit['level'] + ')' if hit['mode'] == 'cuerpo' else ''}. Aparece abajo en "
+                         "unos segundos.", "batch": "rehacer"}
     p = parse_request(text)
     sub = p["subject"]
     r = await generate(by, p["prompt"], sub["id"] if sub else "", p["preset"], count=p["count"], size=p["size"])
@@ -1000,13 +1025,14 @@ def usable_names() -> list[str]:
 
 class ChatIn(BaseModel):
     text: str
+    image_id: str = ""
 
 
 @router.post("/chat")
 async def api_chat(body: ChatIn, request: Request):
     u = _admin(request)
     try:
-        return await chat(u.get("username", ""), body.text)
+        return await chat(u.get("username", ""), body.text, body.image_id)
     except ValueError as e:
         raise HTTPException(400, str(e))
 

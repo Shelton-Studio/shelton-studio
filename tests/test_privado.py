@@ -529,3 +529,15 @@ def test_upload_ai_image_and_remake_with_a_model(monkeypatch):
     calls.clear()
     out = asyncio.run(go("cuerpo"))
     assert [c[0] for c in calls] == ["cuerpo", "cara"] and calls[0][2] == privado.REMAKE_LEVELS["suave"]
+
+
+def test_hot_chat_understands_put_her_face_on_the_uploaded_image(monkeypatch):
+    from app import lora
+    sid = _subject("Chatcara")
+    lora._update(sid, lora_status="ready", lora_name="chatcara.safetensors")
+    privado.confirm(sid, "admin", True, True)
+    up = privado.upload_ai_image(_png("red"), "admin", confirmed=True)
+    hit = privado._remake_intent("ponle el cuerpo y la cara de Chatcara, medio", up["id"])
+    assert hit["mode"] == "cuerpo" and hit["level"] == "medio" and hit["subject"]["id"] == sid
+    assert privado._remake_intent("ponle la cara de Chatcara")["mode"] == "cara"          # usa la última subida
+    assert privado._remake_intent("3 fotos de Chatcara en la playa, cara sonriente") is None   # pedido normal
