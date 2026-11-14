@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
 
 from app import events
 from app.config import settings
@@ -40,12 +41,16 @@ def every() -> int:
         return 100
 
 
-def apply_to_config(proc: dict) -> None:
-    """Enciende las muestras de ai-toolkit (cada `every()` pasos) y un punto guardado en cada una."""
+def apply_to_config(proc: dict, trigger: str = "", sample_prompt: str = "") -> None:
+    """Enciende las muestras de ai-toolkit (cada `every()` pasos) y un punto guardado en cada una.
+    sample_prompt: la escena que pidió la persona para las muestras (siempre con la palabra clave de la modelo)."""
     n = every()
     if not n:
         return
     proc["sample"] = {**proc.get("sample", {}), "sample_every": n, "seed": 42, "walk_seed": False}
+    if sample_prompt:
+        sp = sample_prompt if (not trigger or trigger in sample_prompt) else f"{trigger}, {sample_prompt}"
+        proc["sample"]["prompts"] = [sp]
     proc["train"] = {**proc.get("train", {}), "disable_sampling": False, "skip_first_sample": True}
     save = proc.setdefault("save", {})
     save["save_every"] = min(int(save.get("save_every") or n), n)
@@ -193,7 +198,61 @@ def overview(include_private: bool = False) -> list[dict]:
     return out
 
 
+# ------------------------------------------------------------------ 🎯 Indicaciones para entrenar
+class BriefIn(BaseModel):
+    brief: str | None = None
+    sample_prompt: str | None = None
+
+
+async def save_brief(sid: str, brief: str | None = None, sample_prompt: str | None = None) -> dict:
+    """Guarda lo que la persona quiere que aprenda la LoRA y cómo quiere ver las muestras."""
+    from app.lora import _update
+    with session() as s:
+        sub = s.get(Subject, sid)
+        if not sub:
+            raise ValueError("Ese modelo no existe")
+        info = dict(sub.lora_info or {})
+    upd: dict = {}
+    if brief is not None:
+        upd["train_brief"] = brief.strip()[:2000]
+    if sample_prompt is not None:
+        sp = sample_prompt.strip()[:600]
+        upd["sample_prompt"] = sp
+        en = sp
+        if sp and info.get("base", "zimage") in ("sdxl", "flux"):      # SDXL/Flux entienden inglés
+            try:
+                from app import traductor
+                en, _ = await traductor.to_english(sp)
+            except Exception:  # noqa: BLE001
+                en = sp
+        upd["sample_prompt_en"] = en
+    _update(sid, info=upd)
+    return get_brief(sid)
+
+
+def get_brief(sid: str) -> dict:
+    with session() as s:
+        sub = s.get(Subject, sid)
+        info = (sub.lora_info or {}) if sub else {}
+    return {"brief": info.get("train_brief", ""), "sample_prompt": info.get("sample_prompt", "")}
+
+
 # ------------------------------------------------------------------ API
+@router.get("/subjects/{sid}/lora/indicaciones")
+async def api_get_brief(sid: str, request: Request):
+    _guard(sid, request)
+    return get_brief(sid)
+
+
+@router.put("/subjects/{sid}/lora/indicaciones")
+async def api_put_brief(sid: str, body: BriefIn, request: Request):
+    _guard(sid, request)
+    try:
+        return await save_brief(sid, body.brief, body.sample_prompt)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
 @router.get("/muestras")
 async def api_overview(request: Request):
     """Pantalla 📸 Muestras: cada foto del entrenamiento con su número y sus pasos."""

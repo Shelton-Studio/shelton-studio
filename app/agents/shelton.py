@@ -279,7 +279,11 @@ TOOLS = [
                     "description": "continue = seguir entrenando lo ya aprendido (suma); restart = empezar de cero"},
            "minutes": {"type": "number", "description": "Si piden TIEMPO («2 horas más», «45 min»): minutos a entrenar. "
                        "Shelton lo convierte en pasos con la velocidad real medida. NO calcules pasos tú."},
-           "steps": {"type": "integer", "description": "Solo si piden PASOS explícitos: pasos MÁS en esta sesión"}}, ["subject"]),
+           "steps": {"type": "integer", "description": "Solo si piden PASOS explícitos: pasos MÁS en esta sesión"},
+           "brief": {"type": "string", "description": "🎯 Qué quiere el usuario que aprenda esta LoRA (rasgos fijos, qué "
+                     "ignorar, para qué la usará). Pásalo tal cual lo dijo. Se usa para describir las fotos al entrenar."},
+           "sample_prompt": {"type": "string", "description": "📸 Escena en la que quiere ver las fotos de muestra "
+                             "(una cada 100 pasos)."}}, ["subject"]),
     _tool("memory_archive", "Archivo de memoria (todo en .md, nada se borra): lecciones activas y archivadas de cada "
           "agente y de cada modelo del banco, bitácoras diarias de trabajo, conversaciones pasadas y revisiones. "
           "action=list para ver las carpetas, search para buscar un texto, read para abrir un archivo.",
@@ -723,6 +727,9 @@ async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
             lora.cancel(sids[0])
             return "Entrenamiento cancelado."
         if action == "start":
+            if args.get("brief") is not None or args.get("sample_prompt") is not None:
+                from app import lora_muestras
+                await lora_muestras.save_brief(sids[0], args.get("brief"), args.get("sample_prompt"))
             r = lora.start(sids[0], args.get("steps"), args.get("mode") or "auto", args.get("minutes"))
             await emit({"type": "status", "text": (f"En la fila de entrenamiento (#{r['position']})…" if r.get("queued")
                                                    else f"Entrenando la LoRA con {r['images']} fotos ({r['steps']} pasos)…")})

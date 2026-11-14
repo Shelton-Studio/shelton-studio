@@ -115,3 +115,35 @@ def test_samples_screen_lists_models_with_numbers_and_steps_and_posts_record_lor
         sub.lora_name = "pantalla.safetensors"
         s.flush()
         assert lora.used_step(sub) == 2500 and lora.fmt_steps(20700) == "20.700"
+
+
+def test_training_instructions_shape_captions_and_samples(monkeypatch):
+    """🎯 Indicaciones al entrenar: se guardan, guían la descripción de cada foto y arman las fotos de muestra."""
+    import asyncio
+    from fastapi.testclient import TestClient
+    from app import llm
+    from app.main import app
+    sid = _subject("Indicada")
+    with TestClient(app) as c:
+        r = c.put(f"/api/subjects/{sid}/lora/indicaciones",
+                  json={"brief": "que aprenda su lunar en la mejilla izquierda; no la ropa", "sample_prompt": "retrato de frente, luz de ventana"})
+        assert r.status_code == 200 and r.json()["brief"].startswith("que aprenda")
+        assert c.get(f"/api/subjects/{sid}/lora/indicaciones").json()["sample_prompt"] == "retrato de frente, luz de ventana"
+    assert lora.brief_for(sid).startswith("que aprenda") and lora.sample_prompt_for(sid)
+    cfg = lora.config_dict("job", "/w", "tok_x", 1000, "estandar", "zimage", lora.sample_prompt_for(sid))
+    assert cfg["config"]["process"][0]["sample"]["prompts"] == ["tok_x, retrato de frente, luz de ventana"]
+    # sin indicaciones, las muestras son las de siempre
+    assert lora.config_dict("job", "/w", "tok_x", 1000)["config"]["process"][0]["sample"]["prompts"] == ["a photo of tok_x"]
+    # la descripción de las fotos sigue las indicaciones
+    seen = []
+
+    async def fake_json_call(system, content, schema, **k):
+        seen.append(system)
+        return {"captions": ["a caption"] * (len(content) - 1)}
+    monkeypatch.setattr(llm, "json_call", fake_json_call)
+    img = settings.DATA_DIR / "ind.jpg"
+    img.write_bytes(b"x")
+    monkeypatch.setattr(lora, "session_images", lambda i: [str(img)])
+    monkeypatch.setattr("app.media.image_block", lambda p, s=0: {"type": "image"})
+    asyncio.run(lora.caption_photos(sid, "tok_x"))
+    assert seen and "lunar en la mejilla izquierda" in seen[0]

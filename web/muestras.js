@@ -64,3 +64,35 @@ window.onExtraEvent = (ev) => {
   }
   if (_extraMuestras) _extraMuestras(ev);
 };
+
+// ------------------------------------------------------------------ 🎯 Indicaciones al entrenar
+// Se suma un panel al diálogo de entrenar de siempre (no se cambia nada de lo que ya tenía): qué quieres que aprenda
+// y cómo quieres ver las fotos de muestra. Se guarda solo mientras escribes.
+if (typeof loraDialog === "function") {
+  const _loraDialog = loraDialog;
+  loraDialog = async (sid, name) => {
+    await _loraDialog(sid, name);
+    const box = $("#modal .box");
+    const plan = box && $("#lplan", box);
+    if (!plan || $("#lbrief", box)) return;
+    let d = { brief: "", sample_prompt: "" };
+    try { d = await api(`/api/subjects/${sid}/lora/indicaciones`); } catch {}
+    const panel = document.createElement("div");
+    panel.className = "card"; panel.id = "lbrief"; panel.style.cssText = "padding:12px;border-color:var(--accent)";
+    panel.innerHTML = `<b>🎯 Indicaciones para este entrenamiento</b>
+      <div class="faint small" style="margin:4px 0 8px">Cuéntale a Shelton cómo la quieres. Con esto describe cada foto al entrenar (qué tiene que aprender y qué no) y arma las fotos de muestra.</div>
+      <label class="f">¿Qué quieres que aprenda?<textarea id="lb-brief" rows="4" placeholder="Ej: que aprenda su cara tal cual: lunar en la mejilla izquierda, ojos verdes, pecas suaves. Que NO aprenda la ropa ni los fondos de las fotos. La voy a usar para fotos de Instagram estilo lifestyle.">${esc(d.brief || "")}</textarea></label>
+      <label class="f">📸 ¿Cómo quieres ver las fotos de muestra? (una cada 100 pasos)<input id="lb-sample" placeholder="Ej: retrato de frente, luz natural de ventana, fondo neutro, sonriendo" value="${esc(d.sample_prompt || "")}"></label>
+      <div class="faint small" id="lb-state"></div>`;
+    plan.before(panel);
+    let t = null;
+    const save = async () => {
+      $("#lb-state", panel).textContent = "Guardando…";
+      try { await api(`/api/subjects/${sid}/lora/indicaciones`, { method: "PUT", body: { brief: $("#lb-brief", panel).value, sample_prompt: $("#lb-sample", panel).value } }); $("#lb-state", panel).textContent = "✓ Guardado: se usa al entrenar"; }
+      catch (e) { $("#lb-state", panel).textContent = "⚠ " + e.message; }
+    };
+    ["#lb-brief", "#lb-sample"].forEach((q) => { $(q, panel).oninput = () => { clearTimeout(t); t = setTimeout(save, 500); }; $(q, panel).onblur = save; });
+    const go = $("#lgo", box);           // al tocar «Empezar», primero se guardan las indicaciones
+    if (go) go.addEventListener("pointerdown", () => { clearTimeout(t); save(); }, true);
+  };
+}
