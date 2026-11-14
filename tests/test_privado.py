@@ -314,6 +314,7 @@ def test_adult_lora_stays_only_in_the_adult_zone(monkeypatch):
     names = [x["name"] for x in asyncio.run(main.subjects())]
     assert "Brisa" in names and not any("🔞" in n for n in names)
     started = []
+    monkeypatch.setattr(lora, "available", lambda: (True, ""))
     monkeypatch.setattr(lora, "start", lambda i, *a, **k: started.append(i) or {"ok": True})
     monkeypatch.setattr(lora, "start_on", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no sale de la placa")))
     r = privado.train_adult(sid)
@@ -371,3 +372,29 @@ def test_own_photos_for_the_adult_zone_lora_need_confirmation():
     assert privado.style_uploads()[-1]["by"] == "admin"
     privado.style_remove(r["file"])
     assert not any(r["file"] in p for p in privado.style_dataset())
+
+
+def test_adult_lora_keeps_learning_with_new_photos(monkeypatch):
+    """Cada 5 fotos nuevas, su 🔞 LoRA adulta sigue aprendiendo sola, y siempre en la placa (nunca en la RTX)."""
+    import asyncio
+    from app import granja, lora
+    init_db()
+    sid = _subject("Nube")
+    privado.confirm(sid, "admin", True, True)
+    tw = privado.adult_twin_id(sid)
+    started = []
+    monkeypatch.setattr(lora, "available", lambda: (True, ""))
+    monkeypatch.setattr(lora, "start", lambda i, *a, **k: started.append(i) or {"ok": True})
+    for c in ("red", "blue", "green", "white"):
+        privado.add_ref_upload(sid, _png(c))
+    assert privado.auto_learn(sid) == ""                     # todavía no tiene LoRA adulta: no hace nada solo
+    lora._update(tw, lora_status="ready", lora_name="nube_adulta.safetensors")
+    assert privado.auto_learn(sid) == "" and privado.new_photos(sid) == 4     # 4 nuevas: espera a 5
+    privado.add_ref_upload(sid, _png("black"))
+    assert next(m for m in privado.models() if m["id"] == sid)["new_photos"] == 5
+    assert privado.auto_learn(sid) and started == [tw]
+    # la fila nunca la manda a una tarjeta alquilada
+    assert lora._private_only(tw) and not lora._private_only(sid)
+    monkeypatch.setattr(granja, "remote_nodes", lambda: [{"id": "rtx", "slots": 1}])
+    assert asyncio.run(granja.free_slot({}, local_only=True)) is None or \
+        asyncio.run(granja.free_slot({}, local_only=True))["id"] != "rtx"

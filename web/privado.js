@@ -32,12 +32,13 @@ VIEWS.privado = async (el) => {
         <div class="pv-models">${models.filter((m) => !m.variant_of && !m.adult_twin).map((m) => `<div class="row" style="gap:8px;padding:6px 0;border-bottom:1px solid var(--line);flex-wrap:wrap">
           <b class="grow">${esc(m.name)}</b>
           ${m.lora_ready ? `<span class="chip" title="Su LoRA de siempre (la cara)">${esc(m.base.toUpperCase())}</span>` : ""}
+          ${m.usable ? `<button class="btn sm ghost" data-pvphotos="${esc(m.id)}" data-pvname="${esc(m.name)}" title="Sus fotos privadas: súbelas aquí para que su LoRA adulta aprenda de ellas">📷 Sus fotos (${m.private_photos || 0})${m.new_photos ? ` · ${m.new_photos} nuevas` : ""}</button>` : ""}
           ${!m.usable ? "" : m.adult && ["training", "queued"].includes(m.adult.status) ? `<span class="chip warn">🔞 LoRA adulta: ${m.adult.status === "queued" ? "en fila" : `aprendiendo ${m.adult.progress}%`}</span>`
             : m.adult && m.adult.ready ? `<span class="chip good" title="Su LoRA adulta: se usa sola al nombrarla. Vive solo aquí">🔞 LoRA adulta lista</span><button class="btn sm ghost" data-pvadult="${esc(m.id)}" title="Seguir entrenando (suma sobre lo aprendido)">🎓 Seguir</button>`
             : `<button class="btn sm" data-pvadult="${esc(m.id)}" title="Entrena su LoRA adulta en la placa con sus fotos y sus fotos privadas. Queda solo en Shelton Hot; su LoRA normal no se toca">🎓 Entrenar LoRA adulta</button>`}
           ${m.usable ? '<span class="chip good">Confirmada</span>' : m.confirmed ? `<span class="chip bad" title="${esc(m.why)}">Bloqueada</span>`
             : `<button class="btn sm" data-pvok="${esc(m.id)}" data-pvname="${esc(m.name)}">Confirmar +18 e inventada</button>`}</div>`).join("") || empty("👥", "No hay modelos de tipo persona en el banco.")}</div>
-        <div class="faint small" style="margin-top:8px">Igual que en el Shelton normal: <b>nombra a la modelo</b> y listo. Si tiene su <b>🔞 LoRA adulta</b>, se usa sola (su cara + el estilo de Shelton Hot). Si todavía no, toca <b>🎓 Entrenar LoRA adulta</b>. Se entrena en la placa con sus fotos + sus 🔞 fotos privadas, y <b>queda solo en Shelton Hot</b>: no aparece en el Banco ni en el Shelton normal, y su LoRA normal no se toca.</div>
+        <div class="faint small" style="margin-top:8px">Igual que en el Shelton normal: <b>nombra a la modelo</b> y listo. Si tiene su <b>🔞 LoRA adulta</b>, se usa sola (su cara + el estilo de Shelton Hot). Si todavía no: <b>1)</b> toca <b>📷 Sus fotos</b> y sube las fotos que quieras que aprenda, <b>2)</b> toca <b>🎓 Entrenar LoRA adulta</b>. Después, <b>cada 5 fotos nuevas que le subas, sigue aprendiendo sola</b> (suma a lo que ya sabe, nunca empieza de cero). Se entrena en la placa con sus fotos + sus 🔞 fotos privadas, y <b>queda solo en Shelton Hot</b>: no aparece en el Banco ni en el Shelton normal, y su LoRA normal no se toca.</div>
       </div>
       <div class="card">
         <b>Generar</b>
@@ -126,6 +127,7 @@ VIEWS.privado = async (el) => {
     if (busy) setTimeout(() => { if (document.body.contains(c)) paintStyle(); }, 15000);
   };
   paintStyle();
+  $$("[data-pvphotos]", el).forEach((b) => b.onclick = () => privateDialog(b.dataset.pvphotos, b.dataset.pvname));
   $$("[data-pvadult]", el).forEach((b) => b.onclick = async () => {
     b.disabled = true;
     try { const r = await api(`/api/privado/modelo/${b.dataset.pvadult}/lora-adulta`, { method: "POST" }); toast(`Entrenando ${esc(r.name)} en ${esc(r.where)}`, "good", "🎓"); route(); }
@@ -212,7 +214,7 @@ async function privateDialog(sid, name) {
   let d;
   try { d = await api(`/api/privado/modelo/${sid}`); } catch (e) { return toast(esc(e.message), "bad"); }
   const box = modal(`🔞 Fotos privadas · ${esc(name)}`, d.confirmed ? `
-    <div class="hint">Solo administradores. Estas fotos <b>no se publican, no van a /media y nunca se mandan a ninguna IA de la nube</b>. Se usan solo en la placa (o en tus tarjetas alquiladas).</div>
+    <div class="hint">Solo administradores. Estas fotos <b>no se publican, no van a /media y nunca se mandan a ninguna IA de la nube</b>. Se quedan solo en la placa.</div>
     <div class="hint">🎓 Estas fotos le enseñan <b>solo a su 🔞 LoRA adulta</b> (botón «Entrenar LoRA adulta» en Shelton Hot). Su LoRA normal nunca las ve.</div>
     <div class="row" style="gap:8px"><b class="grow">Sus fotos privadas (${d.refs.length})</b>
       <label class="btn sm">⬆ Subir fotos<input type="file" id="pv-up" accept="image/*" multiple hidden></label></div>
@@ -221,14 +223,14 @@ async function privateDialog(sid, name) {
     <b style="margin-top:10px">Generadas en Shelton Hot (${d.generated.length})</b>
     <div class="pv-grid">${d.generated.map((e) => `<div class="pv-item"><img src="/api/privado/imagen/${esc(e.id)}" loading="lazy">
       ${d.refs.includes(e.file) ? '<span class="chip good">En sus fotos</span>' : `<button class="btn sm" data-pvadd="${esc(e.id)}">➕ A sus fotos</button>`}</div>`).join("") || '<div class="faint small">Todavía no hay. Pídelas en Shelton Hot nombrándola.</div>'}</div>`
-    : `<div class="card pv-rules">Primero confirma en la <b>Shelton Hot</b> (Opciones avanzadas) que <b>${esc(name)}</b> es una modelo <b>inventada y mayor de 18</b>.</div>`,
+    : `<div class="card pv-rules">Primero confirma en <b>Shelton Hot</b> (Opciones avanzadas) que <b>${esc(name)}</b> es una modelo <b>inventada y mayor de 18</b>.</div>`,
     `<button class="btn ghost" onclick="closeModal()">Cerrar</button>`, true);
   if (!d.confirmed) return;
   const tp = $("#pv-trainp", box);
   if (tp) tp.onchange = async (ev) => { await api(`/api/privado/modelo/${sid}/entrenar-con-privadas`, { method: "POST", body: { on: ev.target.checked } }); };
   $("#pv-up", box).onchange = async (ev) => {
     const fd = new FormData(); [...ev.target.files].forEach((f) => fd.append("files", f));
-    try { await api(`/api/privado/modelo/${sid}/subir`, { method: "POST", body: fd }); privateDialog(sid, name); route(); }
+    try { const r = await api(`/api/privado/modelo/${sid}/subir`, { method: "POST", body: fd }); if (r.auto) toast(`${esc(name)}: ${esc(r.auto)}`, "good", "🎓"); privateDialog(sid, name); route(); }
     catch (e) { toast(esc(e.message), "bad"); }
   };
   $$("[data-pvadd]", box).forEach((b) => b.onclick = async () => { try { await api(`/api/privado/modelo/${sid}/fotos`, { method: "POST", body: { entry_id: b.dataset.pvadd } }); privateDialog(sid, name); } catch (e) { toast(esc(e.message), "bad"); } });
