@@ -128,12 +128,19 @@ def models() -> list[dict]:
                         "lora_ready": _has_lora(sub), "variant_of": (sub.lora_info or {}).get("variant_of", ""),
                         "status": sub.lora_status or "", "progress": round(sub.lora_progress or 0),
                         "private_photos": len((sub.lora_info or {}).get("private_refs") or [])})
+            if out[-1]["private_photos"] and not (sub.lora_info or {}).get("adult_twin"):
+                out[-1]["_check_new"] = True
             out[-1]["adult_twin"] = bool((sub.lora_info or {}).get("adult_twin"))
     # cada modelo muestra el estado de su 🔞 LoRA adulta (privada, solo de Shelton Hot)
     for m in out:
         twin = next((x for x in out if x["variant_of"] == m["id"] and x["adult_twin"]), None)
         m["adult"] = ({"id": twin["id"], "ready": twin["lora_ready"], "status": twin["status"], "progress": twin["progress"]}
                       if twin else None)
+        m["new_photos"] = 0
+        if m.pop("_check_new", False) and twin and twin["lora_ready"]:
+            from app.lora import studied_counts
+            seen = studied_counts(twin["id"])
+            m["new_photos"] = sum(1 for f in private_refs(m["id"]) if not seen.get(str(_dir() / Path(f).name)))
     return out
 
 
@@ -159,6 +166,31 @@ def adult_twin_id(sid: str) -> str:
         return new.id
 
 
+AUTO_NEW = 5      # con 5 fotos nuevas sin aprender, su LoRA adulta vuelve a estudiar sola (suma a lo aprendido)
+
+
+def new_photos(sid: str) -> int:
+    """Cuántas de sus fotos privadas su 🔞 LoRA adulta todavía no estudió."""
+    from app.lora import studied_counts
+    twin = next((m["adult"] for m in models() if m["id"] == sid and m.get("adult")), None)
+    seen = studied_counts(twin["id"]) if twin else {}
+    return sum(1 for f in private_refs(sid) if not seen.get(str(_dir() / Path(f).name)))
+
+
+def auto_learn(sid: str) -> str:
+    """Si su LoRA adulta ya existe y le subieron fotos nuevas, sigue aprendiendo sola. Nunca empieza de cero."""
+    m = next((x for x in models() if x["id"] == sid), None)
+    if not m or not m["usable"] or not m.get("adult") or not m["adult"]["ready"]:
+        return ""
+    if m["adult"]["status"] in ("training", "queued") or new_photos(sid) < AUTO_NEW:
+        return ""
+    try:
+        train_adult(sid)
+        return "Aprendiendo sus fotos nuevas"
+    except ValueError:
+        return ""
+
+
 def train_adult(sid: str) -> dict:
     """🎓 Entrenar la 🔞 LoRA adulta de una modelo: con sus fotos del Banco + sus fotos privadas. Mismo entrenamiento
     de siempre, pero queda solo en Shelton Hot. Su LoRA normal no se toca."""
@@ -171,6 +203,10 @@ def train_adult(sid: str) -> dict:
         if not ok:
             raise ValueError(why)
         name = sub.name
+    from app.lora import available
+    ok, why = available()
+    if not ok:
+        raise ValueError(f"La placa no puede entrenar ahora: {why}")
     twin_id = adult_twin_id(sid)
     # se entrena SOLO en la placa: sus fotos privadas no salen de aquí (ni a la nube ni a tarjetas alquiladas)
     r = lora.start(twin_id)
@@ -865,9 +901,10 @@ async def api_model(sid: str, request: Request):
 async def api_add_ref(sid: str, body: RefIn, request: Request):
     _admin(request)
     try:
-        return add_ref_from_entry(sid, body.entry_id)
+        out = add_ref_from_entry(sid, body.entry_id)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    return {**out, "auto": auto_learn(sid)}
 
 
 @router.post("/modelo/{sid}/subir")
@@ -880,7 +917,7 @@ async def api_upload_ref(sid: str, request: Request):
             out = add_ref_upload(sid, await f.read())
     except ValueError as e:
         raise HTTPException(400, str(e))
-    return out or {"ok": False}
+    return {**(out or {"ok": False}), "auto": auto_learn(sid)}
 
 
 @router.post("/modelo/{sid}/quitar")

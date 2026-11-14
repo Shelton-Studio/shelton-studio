@@ -87,11 +87,11 @@ async def health(node: dict, fresh: bool = False) -> dict:
     return data
 
 
-async def free_slot(used: dict[str, int], big: bool = False, only: str = "") -> dict | None:
+async def free_slot(used: dict[str, int], big: bool = False, only: str = "", local_only: bool = False) -> dict | None:
     """El primer lugar libre. Si hay una tarjeta alquilada prendida (se paga por hora y es la más rápida), va
     PRIMERO a ella hasta llenarla; recién después usa las GPUs de la placa.
     big=True (modelos grandes como Qwen-Image): nunca en una GPU chica de la placa (solo placa «pro» o tarjetas alquiladas)."""
-    for n in remote_nodes():      # las tarjetas alquiladas siempre son grandes: con perfil estándar, Qwen va comprimido
+    for n in ([] if local_only else remote_nodes()):   # lo privado (Shelton Hot) se entrena solo en la placa
         if only and n["id"] != only:
             continue
         if used.get(n["id"], 0) >= n["slots"]:
