@@ -1018,8 +1018,8 @@ def new_swap(parent_id: str, subject_id: str, conversation_id=None, body: bool =
     return pid
 
 
-SWAP_DENOISE = 0.62      # cuánto se redibuja la cara: lo justo para que sea ella, con el mismo gesto y la misma luz
-BODY_DENOISE = 0.55      # cuánto se redibuja la foto entera para que sea SU cuerpo: misma pose, ropa, fondo y encuadre
+SWAP_DENOISE = 0.70      # cuánto se redibuja la cara: que sea claramente ella, con el mismo gesto y la misma luz
+BODY_DENOISE = 0.68      # cuánto se redibuja la foto entera para que sea SU cuerpo: misma pose, ropa, fondo y encuadre
 
 SWAP_CHECK = ("You check a reference photo before a face replacement. Answer with JSON. people: true if there is at "
               "least one clearly visible human face. minor: true if ANY person could be under 18 (when in doubt, true). "
@@ -1064,7 +1064,7 @@ async def _swap_face(post_id: str, payload: dict) -> None:
     _cfg, engine = local_engine("zimage", "")
     if not hasattr(engine, "face_pass"):
         raise ValueError("Para cambiar la cara hace falta el motor local (ComfyUI de la placa)")
-    _mark(post_id, "image", "Cambio de cara · Z-Image + LoRA " + name)
+    _mark(post_id, "image", ("Cara y cuerpo" if payload.get("body") else "Solo cara") + " · Z-Image + LoRA " + name)
     if step_used:
         _mark(post_id, "lora", f"{name} · {lora_mod.fmt_steps(step_used)} pasos")
     from app import working

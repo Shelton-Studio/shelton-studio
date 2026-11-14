@@ -151,7 +151,7 @@ class ComfyEngine:
             name = await self.client.upload_image(image, f"shelton_i2i_{uuid.uuid4().hex[:10]}.png")
             wf = self._wf("generate", {"prompt": prompt, "width": 1024, "height": 1024, "seed": seed})
             inject_loras(wf, loras)
-            if not img2img_workflow(wf, name, denoise):
+            if not img2img_workflow(wf, name, denoise, size=_i2i_size(image)):
                 raise RuntimeError("Este motor no sirve para redibujar la foto")
             return (await self.client.run(wf))[0]
 
@@ -271,7 +271,17 @@ def _attach_extra_refs(wf: dict, names: list[str]) -> None:
             wf[enc]["inputs"][f"image{i}"] = [scale_id, 0]
 
 
-def img2img_workflow(wf: dict, image_name: str, denoise: float = 0.5) -> bool:
+def _i2i_size(image: bytes) -> tuple[int, int]:
+    """Tamaño de trabajo (~1 megapíxel, múltiplo de 16) con la misma proporción que la foto."""
+    import io
+    from PIL import Image
+    with Image.open(io.BytesIO(image)) as im:
+        w, h = im.size
+    k = (1024 * 1024 / max(1, w * h)) ** 0.5
+    return max(256, int(w * k) // 16 * 16), max(256, int(h * k) // 16 * 16)
+
+
+def img2img_workflow(wf: dict, image_name: str, denoise: float = 0.5, size: tuple[int, int] = (1024, 1024)) -> bool:
     """Convierte «generar» en «redibujar esta imagen»: el lienzo vacío pasa a ser la foto (VAEEncode) y el KSampler
     redibuja con `denoise` (0 = igual, 1 = foto nueva)."""
     from app.calidad import _find
@@ -280,8 +290,10 @@ def img2img_workflow(wf: dict, image_name: str, denoise: float = 0.5) -> bool:
         return False
     vae = wf[dec[0]]["inputs"]["vae"]
     wf["shl_src"] = {"class_type": "LoadImage", "inputs": {"image": image_name}}
-    wf["shl_scale"] = {"class_type": "ImageScaleToTotalPixels",
-                       "inputs": {"image": ["shl_src", 0], "upscale_method": "lanczos", "megapixels": 1.0}}
+    # ImageScale existe igual en todas las versiones de ComfyUI (el tamaño se calcula antes, en Python)
+    wf["shl_scale"] = {"class_type": "ImageScale",
+                       "inputs": {"image": ["shl_src", 0], "upscale_method": "lanczos", "width": int(size[0]),
+                                  "height": int(size[1]), "crop": "disabled"}}
     wf["shl_enc"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["shl_scale", 0], "vae": vae}}
     wf[ks[0]]["inputs"]["latent_image"] = ["shl_enc", 0]
     wf[ks[0]]["inputs"]["denoise"] = float(denoise)
