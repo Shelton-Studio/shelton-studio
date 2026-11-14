@@ -35,7 +35,12 @@ function renderGranja(box, d) {
   box.innerHTML = `
     <div class="card"><b>🎓 Entrenamientos</b>${tr.length ? tr.map((x) => `<div class="tn-row"><span class="tn-name">${esc(x.name)}</span>
       ${x.status === "training" ? `<div class="lora-bar grow"><i style="width:${Math.max(2, x.progress)}%"></i></div><span class="small">${[x.progress + "%", x.where ? (/placa/i.test(x.where) ? "🦎 " : "⚡ ") + esc(x.where) : "", x.eta_min != null ? `~${x.eta_min} min` : ""].filter(Boolean).join(" · ")}</span>`
-        : `<span class="chip warn">En fila #${x.position || "?"}</span><span class="faint small grow">${esc(x.phase || "")}</span>`}</div>`).join("") : `<div class="faint small" style="margin-top:6px">Nada entrenando ahora.</div>`}</div>
+        : `<span class="chip warn">En fila #${x.position || "?"}</span><span class="faint small grow">${esc(x.phase || "")}</span>`}</div>
+      ${x.status === "training" ? `<div class="row" style="gap:10px;margin:4px 0 8px">${x.sample
+        ? `<img src="${esc(x.sample.url)}" style="width:56px;height:56px;object-fit:cover;border-radius:8px;cursor:pointer" onclick="go('muestras')" title="Última muestra">
+           <span class="small">📸 Última muestra: <b>#${String(x.sample.n).padStart(4, "0")}</b> · ${Number(x.sample.step).toLocaleString("es")} pasos</span>`
+        : `<span class="faint small">📸 La primera muestra sale al paso ${Math.ceil(((x.step || 0) + 1) / 100) * 100}${x.step ? ` (va en el ${Number(x.step).toLocaleString("es")})` : ""}.</span>`}
+        <button class="btn sm ghost" onclick="go('muestras')">Ver muestras</button></div>` : ""}`).join("") : `<div class="faint small" style="margin-top:6px">Nada entrenando ahora.</div>`}</div>
     <div class="grid g2" style="margin-top:16px">
       <div class="card"><div class="row" style="gap:8px"><b>🏠 Placa</b>${d.local.trainer_ready ? '<span class="chip good">entrenador listo</span>' : '<span class="chip warn">sin entrenador</span>'}
         <span class="faint small grow">perfil ${esc(d.profiles[d.local.profile] || d.local.profile)} · ${d.local.slots.length} lugar(es) de entrenamiento</span></div>
@@ -47,8 +52,8 @@ function renderGranja(box, d) {
             : n.runpod && n.resuming ? '<span class="chip warn">⏳ esperando tarjeta</span>' : '<span class="chip bad">apagado / sin respuesta</span>'}
           <span class="faint small grow">${esc(d.profiles[n.profile] || n.profile)} · ${n.slots} a la vez${n.cost_hour ? ` · US$ ${n.cost_hour}/h` : ""}</span>
           ${n.runpod && n.resuming && !n.health?.ok ? `<button class="btn sm ghost" data-gpow="dejar" data-gcid="${esc(n.conn_id)}">✕ Dejar de intentar</button>`
-            : n.runpod && n.starting && !n.health?.ok ? `<button class="btn sm ghost" data-gpow="pausar" data-gcid="${esc(n.conn_id)}" data-gbusy="0">⏸ Pausar</button>`
-            : n.runpod ? (n.health?.ok ? `<button class="btn sm" data-gpow="pausar" data-gcid="${esc(n.conn_id)}" data-gbusy="${(n.health?.running || []).length}">⏸ Pausar</button>`
+            : n.runpod && n.starting && !n.health?.ok ? `<button class="btn sm ghost" data-gpow="pausar" data-gcid="${esc(n.conn_id)}" data-gvol="${n.volume ? 1 : 0}" data-gbusy="0">⏸ Pausar</button>`
+            : n.runpod ? (n.health?.ok ? `<button class="btn sm" data-gpow="pausar" data-gcid="${esc(n.conn_id)}" data-gvol="${n.volume ? 1 : 0}" data-gbusy="${(n.health?.running || []).length}">⏸ Pausar</button>`
             : `<button class="btn sm primary" data-gpow="prender" data-gcid="${esc(n.conn_id)}">▶ Prender</button>`) : ""}
           <button class="btn sm ghost" data-gtest="${esc(n.conn_id)}">Probar</button></div>
         ${n.runpod && n.resuming && !n.health?.ok ? `<div style="margin-top:8px"><span class="chip warn">⏳ Esperando una libre en RunPod · intento ${n.resuming.try} de ${n.resuming.max}</span>
@@ -83,7 +88,9 @@ document.addEventListener("click", async (e) => {
   const action = b.dataset.gpow, cid = b.dataset.gcid;
   if (action === "pausar") {
     const busy = +b.dataset.gbusy || 0;
+    const vol = b.dataset.gvol === "1";
     if (!confirm(busy ? `Está entrenando ${busy} modelo(s). Si la pausas, se cortan y se retoman solos cuando la vuelvas a prender (desde el último punto guardado). ¿Pausar igual?`
+      : vol ? "¿Pausar la tarjeta? Se suelta la máquina (deja de cobrar por hora). Tu disco (Network Volume) y todo lo instalado quedan guardados; con ▶ se arma otra y se conecta sola."
       : "¿Pausar la tarjeta? Deja de cobrar por hora (solo el disco) y se puede volver a prender con ▶.")) return;
   }
   b.disabled = true; b.textContent = action === "prender" ? "Prendiendo…" : action === "dejar" ? "…" : "Pausando…";

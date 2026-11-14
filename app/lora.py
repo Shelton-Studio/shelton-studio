@@ -234,7 +234,8 @@ def _arch_parts(base: str, pf: dict, trigger: str) -> tuple[dict, dict, dict]:
              "prompts": [f"a photo of {trigger}"], "guidance_scale": 1, "sample_steps": 9})
 
 
-def config_dict(name: str, root: str, trigger: str, steps: int, profile: str = "estandar", base: str = "zimage") -> dict:
+def config_dict(name: str, root: str, trigger: str, steps: int, profile: str = "estandar", base: str = "zimage",
+                sample_prompt: str = "") -> dict:
     """Configuración de ai-toolkit. root = carpeta de trabajo (local o la del nodo remoto).
     base: zimage (por defecto, la de siempre), sdxl o flux (las «versiones» de un modelo para esos motores)."""
     pf = PROFILES.get(profile, PROFILES["estandar"])
@@ -253,14 +254,15 @@ def config_dict(name: str, root: str, trigger: str, steps: int, profile: str = "
     }]}, "meta": {"name": name, "version": "1.0", "base": base}}
     try:   # 📸 una muestra numerada cada 100 pasos (y un punto guardado en cada una para poder elegirla)
         from app import lora_muestras
-        lora_muestras.apply_to_config(cfg["config"]["process"][0])
+        lora_muestras.apply_to_config(cfg["config"]["process"][0], trigger, sample_prompt)
     except Exception:  # noqa: BLE001
         log.warning("No pude activar las muestras del entrenamiento", exc_info=True)
     return cfg
 
 
-def _config(name: str, work: Path, trigger: str, steps: int, profile: str = "estandar", base: str = "zimage") -> Path:
-    cfg = config_dict(name, str(work), trigger, steps, profile, base)
+def _config(name: str, work: Path, trigger: str, steps: int, profile: str = "estandar", base: str = "zimage",
+            sample_prompt: str = "") -> Path:
+    cfg = config_dict(name, str(work), trigger, steps, profile, base, sample_prompt)
     path = work / "config.json"
     path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     return path
@@ -387,6 +389,20 @@ def versions(subject_id: str) -> list[dict]:
     return out
 
 
+def used_step(sub: Subject) -> int:
+    """Pasos de la LoRA que se usa AHORA para generar (la del archivo activo en ComfyUI)."""
+    if not sub or not sub.lora_name:
+        return 0
+    f = Path(settings.COMFY_LORA_DIR).expanduser() / sub.lora_name
+    step = _read_saved_step(f) if f.exists() else 0
+    info = sub.lora_info or {}
+    return int(step or info.get("trained_steps") or 0)
+
+
+def fmt_steps(n: int) -> str:
+    return f"{int(n):,}".replace(",", ".")
+
+
 def use_version(subject_id: str, file: str) -> dict:
     """Vuelve a una versión anterior: la copia a ComfyUI como la LoRA activa (las demás siguen guardadas)."""
     vfile = settings.DATA_DIR / "lora" / subject_id / "versiones" / Path(file).name
@@ -510,7 +526,7 @@ async def _pre(subject_id: str, mode: str, base: int, profile: str = "estandar")
         await asyncio.to_thread(_archive_old_output, subject_id, job_name)
         base = 0
     captions = None
-    if profile == "pro" or _detailed_captions_on():
+    if profile == "pro" or _detailed_captions_on() or brief_for(subject_id):
         try:
             _update(subject_id, info={"phase": "Describiendo cada foto (pose, ropa, luz, fondo)"})
             captions = await caption_photos(subject_id, trigger)
@@ -529,7 +545,8 @@ async def _run(subject_id: str, steps: int, base: int = 0, mode: str = "restart"
     ctx = await _pre(subject_id, mode, base, profile_for_gpu(gpu))
     if not ctx:
         return
-    cfg = _config(ctx["job"], ctx["work"], ctx["trigger"], steps, profile_for_gpu(gpu), base_of(subject_id))
+    cfg = _config(ctx["job"], ctx["work"], ctx["trigger"], steps, profile_for_gpu(gpu), base_of(subject_id),
+                  sample_prompt_for(subject_id))
     t0 = time.time()
     _update(subject_id, lora_status="training", lora_progress=0, lora_trigger=ctx["trigger"],
             info={"images": ctx["n"], "steps": steps, "from_step": ctx["base"], "mode": mode, "requeued": False,
@@ -834,6 +851,21 @@ def _comfy_urls_for_gpu(gpu: str | None) -> list[str]:
     return sorted(set(same))
 
 
+def brief_for(subject_id: str) -> str:
+    """🎯 Lo que la persona quiere que aprenda esta LoRA (sus indicaciones al entrenar)."""
+    with session() as s:
+        sub = s.get(Subject, subject_id)
+        return ((sub.lora_info or {}).get("train_brief") or "").strip() if sub else ""
+
+
+def sample_prompt_for(subject_id: str) -> str:
+    """📸 Escena de las fotos de muestra (en inglés para el entrenador). Vacío = la de siempre."""
+    with session() as s:
+        sub = s.get(Subject, subject_id)
+        info = (sub.lora_info or {}) if sub else {}
+        return (info.get("sample_prompt_en") or info.get("sample_prompt") or "").strip()
+
+
 CAPTION_PROMPT = ("You write training captions for a LoRA of ONE recurring subject. For each photo, in order, write ONE "
                   "short English caption (max 30 words) describing ONLY what changes between photos: pose, framing "
                   "(close-up, half body, full body), clothing, accessories, expression, background/place, lighting and "
@@ -854,11 +886,15 @@ async def caption_photos(subject_id: str, trigger: str) -> dict:
         cache = json.loads(cache_f.read_text(encoding="utf-8")) if cache_f.exists() else {}
     except Exception:  # noqa: BLE001
         cache = {}
+    brief = brief_for(subject_id)
+    if cache.get("__brief__", "") != brief:          # cambiaron las indicaciones: se vuelven a describir
+        cache = {}
+    cache["__brief__"] = brief
     # «Valentina · Qwen» / «· SDXL» usan las mismas fotos que Valentina: se reaprovechan sus descripciones
     with session() as s:
         sub = s.get(Subject, subject_id)
         orig = (sub.lora_info or {}).get("variant_of") if sub else None
-    if orig:
+    if orig and not brief:
         try:
             of = _work(orig) / "descripciones.json"
             if of.exists():
@@ -874,8 +910,11 @@ async def caption_photos(subject_id: str, trigger: str) -> dict:
         async with sem:
             content = [image_block(p, 768) for p in batch]
             content.append({"type": "text", "text": f"{len(batch)} photos. Trigger word: {trigger}."})
+            system = CAPTION_PROMPT + (
+                "\n\nThe owner's instructions for this LoRA (they may be in Spanish). Follow them when deciding what to "
+                f"describe and what to leave to the trigger word:\n{brief}" if brief else "")
             try:
-                out = await llm.json_call(CAPTION_PROMPT, content,
+                out = await llm.json_call(system, content,
                                           llm.obj({"captions": {"type": "array", "items": {"type": "string"}}}),
                                           agent="subject_analyst", max_tokens=2000)
             except Exception as e:  # noqa: BLE001

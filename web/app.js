@@ -154,13 +154,45 @@ function connectEvents() {
       note(`Revisión del equipo: ${ev.issues} problema(s)`, ev.issues ? "warn" : "good", "memoria");
       toast(`<b>Shelton revisó al equipo</b><br>${esc(ev.summary)}`, ev.issues ? "warn" : "good", "🧠", `<button class="btn sm" onclick="go('memoria')">Ver revisión</button>`);
     } else if (ev.type === "subject" || ev.type === "subject_failed") {
-      if (location.hash.startsWith("#/banco")) VIEWS.banco($("#view"));
+      if (location.hash.startsWith("#/banco")) bancoRefresh(ev);
       if (ev.type === "subject_failed") toast("No se pudo crear la referencia: " + esc(ev.error), "bad");
     } else if (ev.type === "campaign" && location.hash.startsWith("#/campanas")) { VIEWS.campanas($("#view")); }
     else if (window.onExtraEvent) onExtraEvent(ev);
   };
   es.onerror = () => { es.close(); setTimeout(connectEvents, 3000); };
 }
+// Banco sin saltos: mientras entrena llegan avisos cada pocos segundos. Si solo cambió el avance, se actualiza la barra
+// y el texto en su lugar (sin redibujar la página). Si cambió algo de verdad, se redibuja una sola vez, guardando la
+// posición, y nunca mientras estás escribiendo, eligiendo algo o con una ventana abierta.
+const _subjSig = new Map();
+let _bancoTimer = null;
+function bancoRefresh(ev) {
+  const s = ev.subject, L = (s && s.lora) || {};
+  if (s && s.id) {
+    const sig = JSON.stringify([s.name, (s.references || []).length, (s.alternatives || []).length, L.status, L.name, L.enabled, s.voice_url]);
+    const before = _subjSig.get(s.id);
+    _subjSig.set(s.id, sig);
+    const card = document.querySelector(`.subject-card [data-del="${s.id}"]`)?.closest(".subject-card");
+    const sameAsShown = before === sig || (before === undefined && L.status === "training" && card?.querySelector(".lora-bar"));
+    if (sameAsShown && card) {                  // solo avance del entrenamiento: en su lugar
+      const info = L.info || {};
+      const bar = card.querySelector(".lora-bar i"); if (bar) bar.style.width = `${Math.max(2, L.progress || 0)}%`;
+      const chipEl = card.querySelector(".lora-box .chip.accent"); if (chipEl) chipEl.textContent = `🎓 Aprendiendo… ${Math.round(L.progress || 0)}%`;
+      const txt = card.querySelector(".lora-box .row .faint.small");
+      if (txt && L.status === "training") txt.textContent = `${info.phase || ""}${info.eta_min != null ? ` · faltan ~${info.eta_min} min` : ""}`;
+      return;
+    }
+  }
+  clearTimeout(_bancoTimer);
+  _bancoTimer = setTimeout(function redraw() {
+    if (!location.hash.startsWith("#/banco")) return;
+    const busy = document.querySelector("#modal:not(.hidden)") || ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
+    if (busy) { _bancoTimer = setTimeout(redraw, 3000); return; }
+    const view = $("#view"), y = view.scrollTop;
+    Promise.resolve(VIEWS.banco(view)).then(() => { view.scrollTop = y; });
+  }, 1500);
+}
+
 function learnedBanner(ev, global) {
   const ok = ev.applied;
   const msg = ok ? `<b>${esc(ev.agent_name || agentName(ev.agent))}</b> guardó en memoria: «${esc(ev.title)}» · <span class="chip good">Aplicado</span>`
@@ -624,7 +656,7 @@ async function openPost(id, refetch = true, keepScroll = false) {
   const media = busy ? `<div class="tile"><div class="img" style="aspect-ratio:4/5"><div><div class="spinner"></div>${esc(S.progress.get(id) || STATUS[p.status][0])}</div></div></div>`
     : isVid ? `<video class="media-main" src="${esc(p.video_url)}" poster="${esc(p.image_url)}" controls playsinline loop></video>`
     : p.image_url ? `<img class="media-main" src="${esc(p.image_url)}" alt="${esc(p.alt_text)}">` : `<div class="qa-box">${esc(p.error || "Sin imagen")}</div>`;
-  const MW = { image: "🖼️ Imagen", edit: "✏️ Edición", video: "🎬 Video", voice: "🎙️ Voz", sound: "🔊 Sonido" };
+  const MW = { image: "🖼️ Imagen", edit: "✏️ Edición", video: "🎬 Video", voice: "🎙️ Voz", sound: "🔊 Sonido", lora: "🎓 LoRA" };
   const madeWith = Object.entries(p.made_with || {}).map(([k, v]) => `<span class="chip ${k === "video" ? "accent" : k === "voice" || k === "sound" ? "info" : ""}">${MW[k] || esc(k)}: ${esc(v)}</span>`).join("");
   d.innerHTML = `<div class="d-head">${chip(p.status)}<span class="muted small">${esc(p.platform_name)} · ${p.width}×${p.height}${p.duration ? ` · ${p.duration.toFixed(1)} s` : ""}</span>
     ${p.qa_score ? `<span class="score ${scoreCls(p.qa_score)}">Juez ${Math.round(p.qa_score)}/100</span>` : ""}<div class="grow"></div><button class="icon-btn" id="d-x">${icon("x")}</button></div>

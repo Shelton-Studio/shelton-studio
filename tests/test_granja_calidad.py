@@ -485,3 +485,48 @@ def test_rtx_shows_connecting_after_play(monkeypatch):
     assert granja.starting("c7") > 0
     asyncio.run(granja.rtx_power("c7", "pausar"))
     assert granja.starting("c7") == 0
+
+
+def test_rtx_with_network_volume_play_builds_a_machine_and_pause_releases_it(monkeypatch):
+    """Network Volume: ▶ arma una máquina nueva con la RTX PRO 6000 y tu disco; ⏸ la suelta (el disco queda)."""
+    import asyncio
+    from app import granja
+    from app.db import Connection, init_db, session
+    init_db()
+    with session() as s:
+        c = Connection(type="gpu_node", name="RTX", config={"url": "http://100.1.1.9:8299", "token": "t",
+                       "runpod_api_key": "k", "runpod_volume_id": "vol123"})
+        s.add(c)
+        s.flush()
+        cid = c.id
+    calls = []
+
+    async def fake_runpod(cid_, query, variables=None, need_pod=True):
+        calls.append((query.split("{")[1].split("(")[0].strip(), variables))
+        if "gpuTypes" in query:
+            return {"gpuTypes": [{"id": "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition"},
+                                 {"id": "NVIDIA RTX PRO 6000 Blackwell Server Edition"}, {"id": "NVIDIA A40"}]}
+        if "podFindAndDeployOnDemand" in query:
+            return {"podFindAndDeployOnDemand": {"id": "newpod1", "desiredStatus": "RUNNING"}}
+        return {}
+    monkeypatch.setattr(granja, "runpod", fake_runpod)
+    assert granja.volume_mode(cid)
+    r = asyncio.run(granja.rtx_power(cid, "prender"))
+    assert r["ok"]
+    inp = next(v for q, v in calls if v)["input"]
+    assert inp["networkVolumeId"] == "vol123" and inp["gpuTypeId"] == "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+    assert inp["volumeMountPath"] == "/workspace" and "autostart.sh" in inp["dockerArgs"]
+    assert granja._rp_cfg(cid)["runpod_pod_id"] == "newpod1"           # se guarda la máquina nueva
+    asyncio.run(granja.rtx_power(cid, "pausar"))
+    assert any(q.startswith("podTerminate") for q, _ in calls) and granja._rp_cfg(cid)["runpod_pod_id"] == ""
+    # sin Network Volume nunca se usa «terminate»
+    with session() as s:
+        s.get(Connection, cid).config = {"runpod_api_key": "k", "runpod_pod_id": "old"}
+    try:
+        asyncio.run(granja.release_volume_pod(cid))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("no debía soltar una máquina sin Network Volume")
+    with session() as s:
+        s.delete(s.get(Connection, cid))
