@@ -23,9 +23,10 @@ from app.db import Subject, session
 log = logging.getLogger("shelton.inactividad")
 router = APIRouter(prefix="/api")
 
-DEFAULTS = {"on": True, "hours": 2.0, "steps": 1000}
+DEFAULTS = {"on": True, "hours": 2.0, "steps": 1000, "rest_min": 30}
 CHECK_EVERY = 300          # segundos entre revisiones
 _last = {"t": time.time()}  # última actividad de una persona (al arrancar cuenta como actividad)
+_busy_seen = {"t": time.time()}   # última vez que vimos a la placa o la RTX trabajando (fotos, videos, entrenamientos)
 _state = {"last_auto": "", "last_name": "", "last_at": ""}
 
 
@@ -47,6 +48,7 @@ def save(**kw) -> dict:
             cur[k] = v
     cur["hours"] = max(0.5, min(float(cur["hours"]), 24.0))
     cur["steps"] = max(100, min(int(cur["steps"]), 5000))
+    cur["rest_min"] = max(10, min(int(cur.get("rest_min") or 30), 240))
     _file().write_text(json.dumps(cur, ensure_ascii=False), encoding="utf-8")
     return cur
 
@@ -54,6 +56,20 @@ def save(**kw) -> dict:
 def touch() -> None:
     """Alguien está usando Shelton (clic, tecla, pedido)."""
     _last["t"] = time.time()
+
+
+def rested_minutes() -> float:
+    """Minutos de calma total: desde lo último que se vio trabajando o el último entrenamiento que terminó."""
+    last = _busy_seen["t"]
+    with session() as s:
+        for x in s.query(Subject).filter(Subject.lora_status == "ready"):
+            fin = (x.lora_info or {}).get("finished")
+            if fin:
+                try:
+                    last = max(last, datetime.fromisoformat(fin).timestamp())
+                except ValueError:
+                    pass
+    return (time.time() - last) / 60
 
 
 def idle_minutes() -> float:
@@ -114,7 +130,12 @@ def tick() -> dict:
         return {"started": False, "why": "hay actividad"}
     why = busy_reason()
     if why:
+        _busy_seen["t"] = time.time()
         return {"started": False, "why": why}
+    rest = rested_minutes()
+    if rest < float(cfg.get("rest_min") or 30):
+        # Recién terminó algo (por ejemplo un entrenamiento): espera al menos 30 min de calma antes de seguir
+        return {"started": False, "why": f"descansando: hace {round(rest)} min que terminó lo último"}
     for sid in candidates():
         try:
             r = lora.start(sid, steps=int(cfg["steps"]), mode="continue")
@@ -146,6 +167,7 @@ async def loop() -> None:
 
 # ------------------------------------------------------------------ API
 class IdleIn(BaseModel):
+    rest_min: int | None = None
     on: bool | None = None
     hours: float | None = None
     steps: int | None = None
@@ -159,7 +181,8 @@ async def api_touch():
 
 @router.get("/inactividad")
 async def api_get():
-    return {**get(), "idle_min": round(idle_minutes()), "busy": busy_reason(), "last_name": _state["last_name"],
+    return {**get(), "idle_min": round(idle_minutes()), "busy": busy_reason(), "rest_min_now": round(rested_minutes()),
+            "last_name": _state["last_name"],
             "last_at": _state["last_at"]}
 
 

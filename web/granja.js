@@ -116,7 +116,8 @@ async function renderIdle() {
       <select id="idle-h">${[1, 2, 3, 4, 6, 8].map((h) => `<option value="${h}" ${+d.hours === h ? "selected" : ""}>${h} h</option>`).join("")}</select>
       <span class="faint small">sin uso, · pasos por sesión</span>
       <select id="idle-s">${[500, 1000, 2000, 3000].map((n) => `<option value="${n}" ${+d.steps === n ? "selected" : ""}>${n}</option>`).join("")}</select></div>
-    <div class="faint small" style="margin-top:6px">Si nadie usa Shelton (ni clics, ni pedidos, ni fotos en cola, ni Shelton Hot), pone a entrenar a las modelos de a una,
+    <div class="faint small" style="margin-top:6px">Si nadie usa Shelton (ni clics, ni pedidos, ni fotos en cola, ni Shelton Hot), pone a entrenar a las modelos de a una.
+      <b>Después de cada entrenamiento descansa al menos ${d.rest_min || 30} min sin que pase nada</b> antes de empezar el siguiente.
       sumando sobre lo que ya saben (primero las que tienen fotos nuevas). Nunca empieza una de cero.
       ${d.last_name ? `<br>Último entrenamiento automático: <b>${esc(d.last_name)}</b> (${esc(d.last_at.replace("T", " "))}).` : ""}
       ${d.on ? `<br>Ahora: ${d.busy ? esc(d.busy) : `sin uso hace ${d.idle_min} min`}.` : ""}</div>`;
