@@ -943,8 +943,7 @@ async def _drain() -> None:
         for sid in queue_ids():
             if sid in running:
                 continue
-            slot = await granja.free_slot(used, big=base_of(sid) in BIG_BASES, only=_prefer(sid),
-                                          local_only=_private_only(sid))
+            slot = await granja.free_slot(used, big=base_of(sid) in BIG_BASES, only=_prefer(sid))
             if not slot:
                 break
             used[slot["id"]] = used.get(slot["id"], 0) + 1
@@ -960,14 +959,6 @@ async def _drain() -> None:
                                      return_when=asyncio.FIRST_COMPLETED)
         for sid in [k for k, (t, _) in running.items() if t in done]:
             running.pop(sid)
-
-
-def _private_only(subject_id: str) -> bool:
-    """Las 🔞 LoRAs de Shelton Hot aprenden de fotos privadas: se entrenan solo en la placa."""
-    from app.zona import adult_only
-    with session() as s:
-        sub = s.get(Subject, subject_id)
-        return bool(sub and adult_only(sub))
 
 
 def _prefer(subject_id: str) -> str:

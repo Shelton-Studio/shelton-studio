@@ -193,8 +193,10 @@ def auto_learn(sid: str) -> str:
 
 def train_adult(sid: str) -> dict:
     """🎓 Entrenar la 🔞 LoRA adulta de una modelo: con sus fotos del Banco + sus fotos privadas. Mismo entrenamiento
-    de siempre, pero queda solo en Shelton Hot. Su LoRA normal no se toca."""
-    from app import lora
+    de siempre, pero queda solo en Shelton Hot. Su LoRA normal no se toca.
+    Como en el Shelton normal: si la RTX está prendida va ahí (la más rápida); si no, a la placa. En la RTX las fotos
+    se borran apenas termina (la LoRA vuelve a la placa)."""
+    from app import granja, lora
     with session() as s:
         sub = s.get(Subject, sid)
         if not sub:
@@ -203,14 +205,10 @@ def train_adult(sid: str) -> dict:
         if not ok:
             raise ValueError(why)
         name = sub.name
-    from app.lora import available
-    ok, why = available()
-    if not ok:
-        raise ValueError(f"La placa no puede entrenar ahora: {why}")
     twin_id = adult_twin_id(sid)
-    # se entrena SOLO en la placa: sus fotos privadas no salen de aquí (ni a la nube ni a tarjetas alquiladas)
-    r = lora.start(twin_id)
-    return {**r, "twin": twin_id, "name": f"{name} · {ADULT_MARK}", "where": "la placa"}
+    node = next((n for n in granja.remote_nodes() if (granja._health.get(n["id"]) or (0, {}))[1].get("ok")), None)
+    r = lora.start_on(twin_id, node["id"]) if node else lora.start(twin_id)
+    return {**r, "twin": twin_id, "name": f"{name} · {ADULT_MARK}", "where": node["label"] if node else "la placa"}
 
 
 def confirm(subject_id: str, by: str, inventada: bool, mayor: bool) -> dict:

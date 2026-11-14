@@ -35,10 +35,10 @@ VIEWS.privado = async (el) => {
           ${m.usable ? `<button class="btn sm ghost" data-pvphotos="${esc(m.id)}" data-pvname="${esc(m.name)}" title="Sus fotos privadas: súbelas aquí para que su LoRA adulta aprenda de ellas">📷 Sus fotos (${m.private_photos || 0})${m.new_photos ? ` · ${m.new_photos} nuevas` : ""}</button>` : ""}
           ${!m.usable ? "" : m.adult && ["training", "queued"].includes(m.adult.status) ? `<span class="chip warn">🔞 LoRA adulta: ${m.adult.status === "queued" ? "en fila" : `aprendiendo ${m.adult.progress}%`}</span>`
             : m.adult && m.adult.ready ? `<span class="chip good" title="Su LoRA adulta: se usa sola al nombrarla. Vive solo aquí">🔞 LoRA adulta lista</span><button class="btn sm ghost" data-pvadult="${esc(m.id)}" title="Seguir entrenando (suma sobre lo aprendido)">🎓 Seguir</button>`
-            : `<button class="btn sm" data-pvadult="${esc(m.id)}" title="Entrena su LoRA adulta en la placa con sus fotos y sus fotos privadas. Queda solo en Shelton Hot; su LoRA normal no se toca">🎓 Entrenar LoRA adulta</button>`}
+            : `<button class="btn sm" data-pvadult="${esc(m.id)}" title="Entrena su LoRA adulta con sus fotos y sus fotos privadas (en la RTX si está prendida; si no, en la placa). Queda solo en Shelton Hot; su LoRA normal no se toca">🎓 Entrenar LoRA adulta</button>`}
           ${m.usable ? '<span class="chip good">Confirmada</span>' : m.confirmed ? `<span class="chip bad" title="${esc(m.why)}">Bloqueada</span>`
             : `<button class="btn sm" data-pvok="${esc(m.id)}" data-pvname="${esc(m.name)}">Confirmar +18 e inventada</button>`}</div>`).join("") || empty("👥", "No hay modelos de tipo persona en el banco.")}</div>
-        <div class="faint small" style="margin-top:8px">Igual que en el Shelton normal: <b>nombra a la modelo</b> y listo. Si tiene su <b>🔞 LoRA adulta</b>, se usa sola (su cara + el estilo de Shelton Hot). Si todavía no: <b>1)</b> toca <b>📷 Sus fotos</b> y sube las fotos que quieras que aprenda, <b>2)</b> toca <b>🎓 Entrenar LoRA adulta</b>. Después, <b>cada 5 fotos nuevas que le subas, sigue aprendiendo sola</b> (suma a lo que ya sabe, nunca empieza de cero). Se entrena en la placa con sus fotos + sus 🔞 fotos privadas, y <b>queda solo en Shelton Hot</b>: no aparece en el Banco ni en el Shelton normal, y su LoRA normal no se toca.</div>
+        <div class="faint small" style="margin-top:8px">Igual que en el Shelton normal: <b>nombra a la modelo</b> y listo. Si tiene su <b>🔞 LoRA adulta</b>, se usa sola (su cara + el estilo de Shelton Hot). Si todavía no: <b>1)</b> toca <b>📷 Sus fotos</b> y sube las fotos que quieras que aprenda, <b>2)</b> toca <b>🎓 Entrenar LoRA adulta</b>. Después, <b>cada 5 fotos nuevas que le subas, sigue aprendiendo sola</b> (suma a lo que ya sabe, nunca empieza de cero). Se entrena como siempre (en la RTX si está prendida, si no en la placa; en la RTX sus fotos se borran al terminar) con sus fotos + sus 🔞 fotos privadas, y <b>queda solo en Shelton Hot</b>: no aparece en el Banco ni en el Shelton normal, y su LoRA normal no se toca.</div>
       </div>
       <div class="card">
         <b>Generar</b>
@@ -214,7 +214,7 @@ async function privateDialog(sid, name) {
   let d;
   try { d = await api(`/api/privado/modelo/${sid}`); } catch (e) { return toast(esc(e.message), "bad"); }
   const box = modal(`🔞 Fotos privadas · ${esc(name)}`, d.confirmed ? `
-    <div class="hint">Solo administradores. Estas fotos <b>no se publican, no van a /media y nunca se mandan a ninguna IA de la nube</b>. Se quedan solo en la placa.</div>
+    <div class="hint">Solo administradores. Estas fotos <b>no se publican, no van a /media y nunca se mandan a ninguna IA de la nube</b>. Se guardan en la placa; si entrena en tu RTX, allá se borran apenas termina.</div>
     <div class="hint">🎓 Estas fotos le enseñan <b>solo a su 🔞 LoRA adulta</b> (botón «Entrenar LoRA adulta» en Shelton Hot). Su LoRA normal nunca las ve.</div>
     <div class="row" style="gap:8px"><b class="grow">Sus fotos privadas (${d.refs.length})</b>
       <label class="btn sm">⬆ Subir fotos<input type="file" id="pv-up" accept="image/*" multiple hidden></label></div>
