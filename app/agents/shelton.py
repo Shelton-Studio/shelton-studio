@@ -56,6 +56,8 @@ Cómo trabajas:
 - Si el usuario nombra a un personaje, auto, lugar, producto o estilo, búscalo en el banco (list_subjects) y pásalo
   en `subjects`. Si no existe y lo quiere recurrente, créalo con create_subject.
 - Para cambiar una imagen existente usa edit_post (crea una versión nueva; la original se conserva).
+- NUNCA uses edit_post para poner la cara o el cuerpo de un modelo del banco: edit_post no usa su LoRA e inventa una
+  cara. Para eso siempre swap_face (con body=true si pide también su cuerpo).
 - Si el usuario pega una foto (de TikTok, Instagram o de quien sea) y pide «igual / tal cual / replícala con la cara de
   X», usa swap_face: copia la foto exacta y solo cambia la cara por la de la modelo entrenada. Si pide algo «parecido»
   o con cambios (otra ropa, otro lugar), usa create_posts describiendo esa foto. Avisa en una línea que revise los
@@ -275,7 +277,10 @@ TOOLS = [
           "fondo, luz, encuadre) y solo cambia la cara por la de su LoRA. Usa el post_id de la foto subida. Necesita "
           "que la modelo tenga su LoRA lista. Espera el resultado.",
           {"post_id": {"type": "string", "description": "La foto de referencia (subida o de la galería)"},
-           "subject": {"type": "string", "description": "Modelo del banco cuya cara se pone"}}, ["post_id", "subject"]),
+           "subject": {"type": "string", "description": "Modelo del banco cuya cara se pone"},
+           "body": {"type": "boolean", "description": "true si pide también SU cuerpo («la cara y el cuerpo de X», "
+                    "«que sea X»): redibuja la foto entera con su LoRA y después le pone su cara"}},
+          ["post_id", "subject"]),
     _tool("best_times", "Mejor hora para publicar por red y por modelo del banco (mezcla tu historial con investigación "
           "web; se actualiza cada 2 h). refresh=true la recalcula ahora.",
           {"refresh": {"type": "boolean"}, "model": {"type": "string", "description": "Solo este modelo del banco"}}, []),
@@ -399,6 +404,23 @@ def asked_count(text: str) -> int:
     return max((int(m.group(1)) for m in _ASKED.finditer(text or "")), default=0)
 
 
+def _edit_is_a_swap(instruction: str):
+    """¿La edición pide poner la cara o el cuerpo de una modelo del banco con LoRA? → (id, nombre, con_cuerpo)."""
+    import re as _re
+    low = (instruction or "").lower()
+    if not _re.search(r"\b(cara|rostro|cuerpo|face|body|que sea|convi[eé]rtela|reemplaz|cambia(r)? (a|por) )", low):
+        return None
+    from app.db import Subject
+    from app.zona import adult_only
+    with session() as s:
+        subs = [x for x in s.query(Subject) if x.lora_name and not adult_only(x) and x.name.lower() in low
+                and not (x.lora_info or {}).get("variant_of")]
+    if not subs:
+        return None
+    sub = max(subs, key=lambda x: len(x.name))
+    return sub.id, sub.name, bool(_re.search(r"\b(cuerpo|body|que sea|convi[eé]rtela)", low))
+
+
 def agent_off_in(text: str) -> str | None:
     """Si un resultado dice que un subagente está apagado («El Planificador está apagado…»), cuál es."""
     low = (text or "").lower()
@@ -509,10 +531,16 @@ async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
         sids, missing = pipeline.find_subjects([args["subject"]])
         if not sids:
             return f"No encontré a «{args['subject']}» en el banco."
-        pid = pipeline.new_swap(args["post_id"], sids[0], conv_id)
-        return await _wait_and_report([pid], emit, f"Poniéndole la cara de {args['subject']}…")
+        pid = pipeline.new_swap(args["post_id"], sids[0], conv_id, bool(args.get("body")))
+        return await _wait_and_report([pid], emit, f"Poniéndole {'el cuerpo y ' if args.get('body') else ''}la cara de "
+                                                   f"{args['subject']}…")
 
     if name == "edit_post":
+        swap = _edit_is_a_swap(args.get("instruction", ""))
+        if swap:   # «ponle la cara / el cuerpo de Valentina»: con su LoRA, nunca con la edición que inventa caras
+            sid, sname, body = swap
+            pid = pipeline.new_swap(args["post_id"], sid, conv_id, body)
+            return await _wait_and_report([pid], emit, f"Poniéndole {'el cuerpo y ' if body else ''}la cara de {sname}…")
         pid = pipeline.new_edit(args["post_id"], args["instruction"], bool(args.get("rewrite_caption")), conv_id, engine)
         return await _wait_and_report([pid], emit, "Editando…")
 

@@ -140,6 +140,21 @@ class ComfyEngine:
             calidad.fill_required(wf, info)
             return (await self.client.run(wf))[0]
 
+    async def img2img(self, image: bytes, loras: list[tuple[str, float]], prompt: str, seed: int,
+                      denoise: float = 0.5) -> bytes:
+        """Redibuja la foto ENTERA con este motor y la LoRA de la modelo, manteniendo pose, ropa, fondo y encuadre
+        (denoise medio): sale con SU cuerpo y SU cara, no los de la foto original."""
+        hook = getattr(self, "ensure_loras", None)
+        if hook and loras:
+            await hook([name for name, _ in loras])
+        async with gpu_slot(self.url):
+            name = await self.client.upload_image(image, f"shelton_i2i_{uuid.uuid4().hex[:10]}.png")
+            wf = self._wf("generate", {"prompt": prompt, "width": 1024, "height": 1024, "seed": seed})
+            inject_loras(wf, loras)
+            if not img2img_workflow(wf, name, denoise):
+                raise RuntimeError("Este motor no sirve para redibujar la foto")
+            return (await self.client.run(wf))[0]
+
     async def edit(self, image, instruction, seed, on_progress: Progress = None) -> bytes:
         async with gpu_slot(self.url):
             name = await self.client.upload_image(image, f"shelton_{uuid.uuid4().hex[:10]}.png")
@@ -254,6 +269,26 @@ def _attach_extra_refs(wf: dict, names: list[str]) -> None:
                                    "image": [load_id, 0]}}
         for enc in encoders:
             wf[enc]["inputs"][f"image{i}"] = [scale_id, 0]
+
+
+def img2img_workflow(wf: dict, image_name: str, denoise: float = 0.5) -> bool:
+    """Convierte «generar» en «redibujar esta imagen»: el lienzo vacío pasa a ser la foto (VAEEncode) y el KSampler
+    redibuja con `denoise` (0 = igual, 1 = foto nueva)."""
+    from app.calidad import _find
+    ks, dec = _find(wf, "KSampler"), _find(wf, "VAEDecode")
+    if len(ks) != 1 or not dec:
+        return False
+    vae = wf[dec[0]]["inputs"]["vae"]
+    wf["shl_src"] = {"class_type": "LoadImage", "inputs": {"image": image_name}}
+    wf["shl_scale"] = {"class_type": "ImageScaleToTotalPixels",
+                       "inputs": {"image": ["shl_src", 0], "upscale_method": "lanczos", "megapixels": 1.0}}
+    wf["shl_enc"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["shl_scale", 0], "vae": vae}}
+    wf[ks[0]]["inputs"]["latent_image"] = ["shl_enc", 0]
+    wf[ks[0]]["inputs"]["denoise"] = float(denoise)
+    for k in [k for k, v in wf.items() if isinstance(v, dict) and v.get("class_type") in
+              ("EmptySD3LatentImage", "EmptyLatentImage")]:
+        wf.pop(k)
+    return True
 
 
 def face_workflow(wf: dict, image_name: str, denoise: float = 0.45) -> bool:
