@@ -338,3 +338,23 @@ def test_adult_zone_style_lora_learns_from_approved(monkeypatch):
         privado.delete(f"st-{i}")
     with session() as s:                                                 # no dejarla activa para otras pruebas
         s.delete(s.get(Subject, sid))
+
+
+
+def test_own_photos_for_the_adult_zone_lora_need_confirmation():
+    """Subir fotos propias para la LoRA de la Adult Zone: solo con la confirmación (IA, inventadas, +18)."""
+    import io
+    from PIL import Image
+    b = io.BytesIO()
+    Image.new("RGB", (32, 32), "blue").save(b, "PNG")
+    try:
+        privado.style_upload(b.getvalue(), "admin", confirmed=False)
+    except ValueError as e:
+        assert "inventadas" in str(e)
+    else:
+        raise AssertionError("sin confirmar no debía dejar")
+    r = privado.style_upload(b.getvalue(), "admin", confirmed=True)
+    assert any(r["file"] in p for p in privado.style_dataset())
+    assert privado.style_uploads()[-1]["by"] == "admin"
+    privado.style_remove(r["file"])
+    assert not any(r["file"] in p for p in privado.style_dataset())
