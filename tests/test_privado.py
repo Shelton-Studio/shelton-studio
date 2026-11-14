@@ -398,3 +398,43 @@ def test_adult_lora_keeps_learning_with_new_photos(monkeypatch):
     monkeypatch.setitem(granja._health, "rtx", (9e18, {"ok": True}))
     monkeypatch.setattr(lora, "start_on", lambda i, n, **k: on.append((i, n)) or {"ok": True})
     assert privado.train_adult(sid)["where"] == "RTX" and on == [(tw, "rtx")]
+
+
+def test_adult_photos_get_her_zimage_face(monkeypatch):
+    """Foto con su 🔞 LoRA adulta (SDXL) → segunda pasada automática con Z-Image + su LoRA de siempre: su cara tal cual."""
+    import asyncio
+    from app import lora
+    from app.comfyui.client import load_workflow
+    from app.engines.comfy import face_workflow
+    init_db()
+    # el workflow de Z-Image se convierte en «re-dibujar solo la cara de esta imagen»
+    wf = load_workflow("z_image_turbo.json")
+    assert face_workflow(wf, "foto.png", 0.45)
+    save = next(v for v in wf.values() if isinstance(v, dict) and v.get("class_type") == "SaveImage")
+    assert save["inputs"]["images"] == ["shl_face", 0] and wf["shl_src"]["inputs"]["image"] == "foto.png"
+    # la modelo: LoRA normal de Z-Image (su cara) + su 🔞 LoRA adulta (SDXL)
+    sid = _subject("Rocío")
+    lora._update(sid, lora_status="ready", lora_name="rocio.safetensors", lora_trigger="rocio_tk")
+    privado.confirm(sid, "admin", True, True)
+    tw = privado.adult_twin_id(sid)
+    lora._update(tw, lora_status="ready", lora_name="rocio_adulta.safetensors")
+    with privado.session() as s:
+        face = privado._face_lora(s.get(privado.Subject, tw))
+    assert face["lora"] == "rocio.safetensors" and face["trigger"] == "rocio_tk"
+
+    class Fake:
+        url = "http://x"
+        values = {"generate": {}}
+
+        async def generate_with_loras(self, loras, prompt, w, h, seed):
+            return b"sdxl"
+
+    calls = []
+
+    async def fake_face(raw, f, prompt, seed):
+        calls.append((raw, f["lora"]))
+        return b"con-su-cara"
+    monkeypatch.setattr(privado, "_put_face", fake_face)
+    asyncio.run(privado._run_ids(["fc-0"], Fake(), {}, "p", "n", 64, 64, [("rocio_adulta.safetensors", 1.0)], face))
+    assert calls == [(b"sdxl", "rocio.safetensors")]
+    assert (privado._dir() / "fc-0.png").read_bytes() == b"con-su-cara"

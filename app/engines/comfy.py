@@ -120,6 +120,26 @@ class ComfyEngine:
         async with gpu_slot(self.url):
             return (await self.client.run(wf, on_progress))[0]
 
+    async def face_pass(self, image: bytes, loras: list[tuple[str, float]], prompt: str, seed: int,
+                        denoise: float = 0.45) -> bytes:
+        """Pone SU cara: detecta el rostro de una foto ya hecha (p. ej. SDXL) y lo vuelve a dibujar con este motor
+        (Z-Image) y la LoRA de la modelo. El cuerpo y la escena no se tocan. Necesita el Impact Pack de ComfyUI."""
+        from app import calidad
+        info = await calidad.node_info(self.client)
+        if not all(n in info for n in calidad.FACE_NODES):
+            raise RuntimeError("Falta el Impact Pack (FaceDetailer) en ComfyUI de la placa")
+        hook = getattr(self, "ensure_loras", None)
+        if hook and loras:
+            await hook([name for name, _ in loras])
+        async with gpu_slot(self.url):
+            name = await self.client.upload_image(image, f"shelton_face_{uuid.uuid4().hex[:10]}.png")
+            wf = self._wf("generate", {"prompt": prompt, "width": 1024, "height": 1024, "seed": seed})
+            inject_loras(wf, loras)
+            if not face_workflow(wf, name, denoise):
+                raise RuntimeError("Este motor no sirve para la pasada de rostro")
+            calidad.fill_required(wf, info)
+            return (await self.client.run(wf))[0]
+
     async def edit(self, image, instruction, seed, on_progress: Progress = None) -> bytes:
         async with gpu_slot(self.url):
             name = await self.client.upload_image(image, f"shelton_{uuid.uuid4().hex[:10]}.png")
@@ -234,6 +254,38 @@ def _attach_extra_refs(wf: dict, names: list[str]) -> None:
                                    "image": [load_id, 0]}}
         for enc in encoders:
             wf[enc]["inputs"][f"image{i}"] = [scale_id, 0]
+
+
+def face_workflow(wf: dict, image_name: str, denoise: float = 0.45) -> bool:
+    """Convierte un workflow de generar en «re-dibujar solo la cara de esta imagen» (FaceDetailer) con el mismo modelo,
+    LoRA y textos. La generación original queda sin usar (ComfyUI no la ejecuta)."""
+    from app.calidad import FACE_MODEL, _find
+    ks, saves = _find(wf, "KSampler"), _find(wf, "SaveImage")
+    dec = _find(wf, "VAEDecode")
+    if len(ks) != 1 or not saves or not dec:
+        return False
+    k = wf[ks[0]]["inputs"]
+    vae = wf[dec[0]]["inputs"]["vae"]
+    clip = next(iter(_find(wf, "CLIPLoader") + _find(wf, "DualCLIPLoader")), None)
+    clip_ref = [clip, 0] if clip else ([_find(wf, "CheckpointLoaderSimple")[0], 1]
+                                       if _find(wf, "CheckpointLoaderSimple") else None)
+    if not clip_ref:
+        return False
+    wf["shl_src"] = {"class_type": "LoadImage", "inputs": {"image": image_name}}
+    wf["shl_facedet"] = {"class_type": "UltralyticsDetectorProvider", "inputs": {"model_name": FACE_MODEL}}
+    wf["shl_face"] = {"class_type": "FaceDetailer", "inputs": {
+        "image": ["shl_src", 0], "model": k["model"], "clip": clip_ref, "vae": vae,
+        "positive": k["positive"], "negative": k["negative"], "bbox_detector": ["shl_facedet", 0],
+        "guide_size": 768, "guide_size_for": True, "max_size": 1536, "seed": k["seed"], "steps": k["steps"],
+        "cfg": k["cfg"], "sampler_name": k["sampler_name"], "scheduler": k["scheduler"], "denoise": float(denoise),
+        "feather": 5, "noise_mask": True, "force_inpaint": True, "bbox_threshold": 0.5, "bbox_dilation": 10,
+        "bbox_crop_factor": 3.0, "sam_detection_hint": "center-1", "sam_dilation": 0, "sam_threshold": 0.93,
+        "sam_bbox_expansion": 0, "sam_mask_hint_threshold": 0.7, "sam_mask_hint_use_negative": "False",
+        "drop_size": 10, "wildcard": "", "cycle": 1, "inpaint_model": False, "noise_mask_feather": 20,
+        "tiled_encode": False, "tiled_decode": False}}
+    for s in saves:
+        wf[s]["inputs"]["images"] = ["shl_face", 0]
+    return True
 
 
 def inject_loras(wf: dict, loras: list[tuple[str, float]]) -> dict:
