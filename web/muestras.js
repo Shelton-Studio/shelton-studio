@@ -66,8 +66,29 @@ window.onExtraEvent = (ev) => {
 };
 
 // ------------------------------------------------------------------ 🎯 Indicaciones al entrenar
-// Se suma un panel al diálogo de entrenar de siempre (no se cambia nada de lo que ya tenía): qué quieres que aprenda
-// y cómo quieres ver las fotos de muestra. Se guarda solo mientras escribes.
+// Panel «qué quieres que aprenda» + «cómo ver las muestras». Se usa en el diálogo de entrenar de siempre (se suma, no
+// cambia lo que ya tenía) y en «⚡ Entrenar en la RTX». Se guarda solo mientras escribes.
+async function briefPanel(sid) {
+  let d = { brief: "", sample_prompt: "" };
+  try { d = await api(`/api/subjects/${sid}/lora/indicaciones`); } catch {}
+  const panel = document.createElement("div");
+  panel.className = "card"; panel.id = "lbrief"; panel.style.cssText = "padding:12px;border-color:var(--accent)";
+  panel.innerHTML = `<b>🎯 Indicaciones para este entrenamiento</b>
+    <div class="faint small" style="margin:4px 0 8px">Cuéntale a Shelton cómo la quieres. Con esto describe cada foto al entrenar (qué tiene que aprender y qué no) y arma las fotos de muestra.</div>
+    <label class="f">¿Qué quieres que aprenda?<textarea id="lb-brief" rows="4" placeholder="Ej: que aprenda su cara tal cual: lunar en la mejilla izquierda, ojos verdes, pecas suaves. Que NO aprenda la ropa ni los fondos de las fotos. La voy a usar para fotos de Instagram estilo lifestyle.">${esc(d.brief || "")}</textarea></label>
+    <label class="f">📸 ¿Cómo quieres ver las fotos de muestra? (una cada 100 pasos)<input id="lb-sample" placeholder="Ej: retrato de frente, luz natural de ventana, fondo neutro, sonriendo" value="${esc(d.sample_prompt || "")}"></label>
+    <div class="faint small" id="lb-state"></div>`;
+  let t = null;
+  const save = async () => {
+    clearTimeout(t);
+    $("#lb-state", panel).textContent = "Guardando…";
+    try { await api(`/api/subjects/${sid}/lora/indicaciones`, { method: "PUT", body: { brief: $("#lb-brief", panel).value, sample_prompt: $("#lb-sample", panel).value } }); $("#lb-state", panel).textContent = "✓ Guardado: se usa al entrenar"; }
+    catch (e) { $("#lb-state", panel).textContent = "⚠ " + e.message; throw e; }
+  };
+  ["#lb-brief", "#lb-sample"].forEach((q) => { $(q, panel).oninput = () => { clearTimeout(t); t = setTimeout(() => save().catch(() => {}), 500); }; $(q, panel).onblur = () => save().catch(() => {}); });
+  return { el: panel, save };
+}
+
 if (typeof loraDialog === "function") {
   const _loraDialog = loraDialog;
   loraDialog = async (sid, name) => {
@@ -75,24 +96,24 @@ if (typeof loraDialog === "function") {
     const box = $("#modal .box");
     const plan = box && $("#lplan", box);
     if (!plan || $("#lbrief", box)) return;
-    let d = { brief: "", sample_prompt: "" };
-    try { d = await api(`/api/subjects/${sid}/lora/indicaciones`); } catch {}
-    const panel = document.createElement("div");
-    panel.className = "card"; panel.id = "lbrief"; panel.style.cssText = "padding:12px;border-color:var(--accent)";
-    panel.innerHTML = `<b>🎯 Indicaciones para este entrenamiento</b>
-      <div class="faint small" style="margin:4px 0 8px">Cuéntale a Shelton cómo la quieres. Con esto describe cada foto al entrenar (qué tiene que aprender y qué no) y arma las fotos de muestra.</div>
-      <label class="f">¿Qué quieres que aprenda?<textarea id="lb-brief" rows="4" placeholder="Ej: que aprenda su cara tal cual: lunar en la mejilla izquierda, ojos verdes, pecas suaves. Que NO aprenda la ropa ni los fondos de las fotos. La voy a usar para fotos de Instagram estilo lifestyle.">${esc(d.brief || "")}</textarea></label>
-      <label class="f">📸 ¿Cómo quieres ver las fotos de muestra? (una cada 100 pasos)<input id="lb-sample" placeholder="Ej: retrato de frente, luz natural de ventana, fondo neutro, sonriendo" value="${esc(d.sample_prompt || "")}"></label>
-      <div class="faint small" id="lb-state"></div>`;
-    plan.before(panel);
-    let t = null;
-    const save = async () => {
-      $("#lb-state", panel).textContent = "Guardando…";
-      try { await api(`/api/subjects/${sid}/lora/indicaciones`, { method: "PUT", body: { brief: $("#lb-brief", panel).value, sample_prompt: $("#lb-sample", panel).value } }); $("#lb-state", panel).textContent = "✓ Guardado: se usa al entrenar"; }
-      catch (e) { $("#lb-state", panel).textContent = "⚠ " + e.message; }
-    };
-    ["#lb-brief", "#lb-sample"].forEach((q) => { $(q, panel).oninput = () => { clearTimeout(t); t = setTimeout(save, 500); }; $(q, panel).onblur = save; });
+    const bp = await briefPanel(sid);
+    plan.before(bp.el);
     const go = $("#lgo", box);           // al tocar «Empezar», primero se guardan las indicaciones
-    if (go) go.addEventListener("pointerdown", () => { clearTimeout(t); save(); }, true);
+    if (go) go.addEventListener("pointerdown", () => { bp.save().catch(() => {}); }, true);
+  };
+}
+
+// ⚡ Entrenar en la RTX: antes de empezar, la misma ventana de indicaciones (en vez del aviso simple)
+async function rtxTrainDialog(sid, name, node) {
+  const box = modal(`⚡ Entrenar a ${esc(name)} en ${esc(node.label)}`,
+    `<div class="hint">Entrena en la tarjeta rápida y sigue donde quedó su LoRA. <b>Cobra por hora mientras esté prendida.</b></div><div id="rtx-brief"></div>`,
+    `<button class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn primary" id="rtx-go">⚡ Empezar</button>`);
+  const bp = await briefPanel(sid);
+  $("#rtx-brief", box).append(bp.el);
+  $("#rtx-go", box).onclick = async (e) => {
+    e.target.disabled = true;
+    try { await bp.save(); } catch { e.target.disabled = false; return; }
+    try { await api(`/api/subjects/${sid}/lora/entrenar-en`, { method: "POST", body: { slot: node.id } }); closeModal(); toast(`${esc(name)}: entrenando en ${esc(node.label)}`, "good", "⚡"); route(); }
+    catch (err) { toast(esc(err.message), "bad"); e.target.disabled = false; }
   };
 }

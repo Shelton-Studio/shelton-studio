@@ -215,6 +215,7 @@ VIEWS.banco = async (el) => {
     b.className = "btn sm"; b.dataset.lrtx = sid; b.textContent = `⚡ Entrenar en ${node.label}`;
     b.title = "Lo mismo que Entrenar, pero en la tarjeta rápida (la RTX alquilada). Sigue donde quedó su LoRA.";
     b.onclick = async () => {
+      if (typeof rtxTrainDialog === "function") return rtxTrainDialog(sid, s.name, node);    // con 🎯 indicaciones
       if (!confirm(`¿Entrenar a ${s.name} en ${node.label}? (cobra por hora mientras esté prendida)`)) return;
       try { await api(`/api/subjects/${sid}/lora/entrenar-en`, { method: "POST", body: { slot: node.id } }); toast(`${esc(s.name)}: entrenando en ${esc(node.label)}`, "good", "⚡"); route(); }
       catch (e) { toast(esc(e.message), "bad"); }
