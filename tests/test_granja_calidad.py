@@ -470,3 +470,18 @@ def test_rtx_play_keeps_trying_when_runpod_has_no_free_card(monkeypatch):
     # «Dejar de intentar»
     granja._resuming["c2"] = {"try": 1, "since": 0, "error": ""}
     assert asyncio.run(granja.rtx_power("c2", "dejar"))["stopped"] and granja.resuming("c2") is None
+
+
+def test_rtx_shows_connecting_after_play(monkeypatch):
+    """Después de ▶, mientras se conecta, Granja muestra «Prendida, conectándose…» (no vuelve a ofrecer ▶)."""
+    import asyncio
+    from app import granja
+
+    async def fake_runpod(cid, q):
+        return {"podResume": {"desiredStatus": "RUNNING"}}
+    monkeypatch.setattr(granja, "runpod", fake_runpod)
+    assert granja.starting("c7") == 0
+    asyncio.run(granja.rtx_power("c7", "prender"))
+    assert granja.starting("c7") > 0
+    asyncio.run(granja.rtx_power("c7", "pausar"))
+    assert granja.starting("c7") == 0

@@ -46,13 +46,15 @@ function renderGranja(box, d) {
           ${n.health?.ok ? '<span class="chip good">conectado</span>' : '<span class="chip bad">apagado / sin respuesta</span>'}
           <span class="faint small grow">${esc(d.profiles[n.profile] || n.profile)} · ${n.slots} a la vez${n.cost_hour ? ` · US$ ${n.cost_hour}/h` : ""}</span>
           ${n.runpod && n.resuming && !n.health?.ok ? `<button class="btn sm ghost" data-gpow="dejar" data-gcid="${esc(n.conn_id)}">✕ Dejar de intentar</button>`
+            : n.runpod && n.starting && !n.health?.ok ? `<span class="chip warn" title="RunPod ya la prendió: se está conectando sola">🔌 Prendida, conectándose… (${Math.floor(n.starting / 60)} min)</span><button class="btn sm ghost" data-gpow="pausar" data-gcid="${esc(n.conn_id)}" data-gbusy="0">⏸ Pausar</button>`
             : n.runpod ? (n.health?.ok ? `<button class="btn sm" data-gpow="pausar" data-gcid="${esc(n.conn_id)}" data-gbusy="${(n.health?.running || []).length}">⏸ Pausar</button>`
             : `<button class="btn sm primary" data-gpow="prender" data-gcid="${esc(n.conn_id)}">▶ Prender</button>`) : ""}
           <button class="btn sm ghost" data-gtest="${esc(n.conn_id)}">Probar</button></div>
         ${n.runpod && n.resuming && !n.health?.ok ? `<div style="margin-top:8px"><span class="chip warn">⏳ Esperando una libre en RunPod · intento ${n.resuming.try} de ${n.resuming.max}</span>
           <div class="faint small" style="margin-top:4px">Tu misma tarjeta, con todo instalado: RunPod la tiene ocupada. Sigo intentando solo cada minuto; cuando se libere se prende y se conecta sola.</div></div>` : ""}
+        ${n.runpod && n.starting && !n.health?.ok ? `<div class="faint small" style="margin-top:8px">RunPod ya la prendió (ya cobra por hora). En 2–4 minutos aparece «conectado» sola.${n.starting > 300 ? " <b>Tarda más de lo normal:</b> revisa que el pod tenga el arranque automático (Edit Pod → Container Start Command)." : ""}</div>` : ""}
         ${n.runpod ? "" : `<div class="faint small" style="margin-top:4px">Para ▶ prender / ⏸ pausar desde acá: Conexiones → esta tarjeta → Editar → pega la clave de API de RunPod y el ID del pod.</div>`}
-        <div style="margin-top:8px">${(n.health?.gpus || []).map(gpuLine).join("") || (n.resuming || !n.health?.error ? "" : `<div class="faint small">${esc(n.health.error)}</div>`)}</div>
+        <div style="margin-top:8px">${(n.health?.gpus || []).map(gpuLine).join("") || (n.resuming || n.starting || !n.health?.error ? "" : `<div class="faint small">${esc(n.health.error)}</div>`)}</div>
         ${n.health?.ok ? `<div class="faint small" style="margin-top:6px">Libres: ${n.health.free} de ${n.health.slots}${n.health.trainer ? "" : " · ⚠ falta ai-toolkit (corre node_setup.sh)"}${(n.health.running || []).length ? " · entrenando: " + n.health.running.map((r) => esc(r.name) + (r.total ? ` (${r.step}/${r.total})` : "")).join(", ") : ""}</div>` : ""}</div>`).join("")}
     </div>
     <details class="card" style="margin-top:16px"><summary style="cursor:pointer"><b>Cómo conectar una tarjeta alquilada (RunPod / Vast)</b></summary><div class="small" style="line-height:1.8;margin-top:8px">

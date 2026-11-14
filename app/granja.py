@@ -52,7 +52,7 @@ def remote_nodes() -> list[dict]:
                     "profile": "pro" if str(cfg.get("profile", "pro")).lower().startswith("pro") else "estandar",
                     "cost_hour": cost, "comfy_url": (cfg.get("comfy_url") or "").rstrip("/"),
                     "runpod": bool(cfg.get("runpod_api_key") and cfg.get("runpod_pod_id")),
-                    "resuming": resuming(c.id)})
+                    "resuming": resuming(c.id), "starting": starting(c.id)})
     return out
 
 
@@ -395,6 +395,8 @@ async def rtx_status(cid: str):
 RESUME_EVERY = 60        # segundos entre intentos cuando RunPod no tiene la tarjeta libre
 RESUME_TRIES = 45        # ~45 minutos intentando solo
 _resuming: dict[str, dict] = {}     # cid → {"try": n, "since": t, "error": ""}
+_started: dict[str, float] = {}     # cid → cuándo RunPod la prendió (mientras se conecta, 2-4 min)
+CONNECT_WAIT = 8 * 60
 
 
 def _no_free_gpu(msg: str) -> bool:
@@ -413,6 +415,7 @@ async def _keep_resuming(cid: str) -> None:
             st["try"] += 1
             try:
                 await runpod(cid, q)
+                _started[cid] = time.time()
                 _health.pop(f"node:{cid}", None)
                 log.info("RunPod: tarjeta %s prendida al intento %d", cid, st["try"])
                 return
@@ -424,6 +427,15 @@ async def _keep_resuming(cid: str) -> None:
                 st["error"] = str(e)[:200]
     finally:
         _resuming.pop(cid, None)
+
+
+def starting(cid: str) -> int:
+    """Segundos desde que RunPod la prendió, mientras todavía se está conectando (0 = no)."""
+    t = _started.get(cid)
+    if not t or time.time() - t > CONNECT_WAIT:
+        _started.pop(cid, None)
+        return 0
+    return int(time.time() - t) or 1
 
 
 def resuming(cid: str) -> dict | None:
@@ -456,6 +468,10 @@ async def rtx_power(cid: str, action: str):
             return {"ok": True, "waiting": True, **resuming(cid)}
         raise HTTPException(400, str(e))
     _health.pop(f"node:{cid}", None)
+    if action == "prender":
+        _started[cid] = time.time()
+    else:
+        _started.pop(cid, None)
     p = d.get("podResume") or d.get("podStop") or {}
     return {"ok": True, "status": p.get("desiredStatus", ""), "cost_hour": p.get("costPerHr")}
 
