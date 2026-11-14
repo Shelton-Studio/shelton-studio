@@ -997,7 +997,7 @@ def new_edit(parent_id: str, instruction: str, rewrite_caption: bool = False, co
     return pid
 
 
-def new_swap(parent_id: str, subject_id: str, conversation_id=None) -> str:
+def new_swap(parent_id: str, subject_id: str, conversation_id=None, body: bool = False) -> str:
     """🔁 Foto de referencia (TikTok, Instagram…) → la misma foto, tal cual, con la cara de la modelo entrenada."""
     with session() as s:
         parent = s.get(Post, parent_id)
@@ -1006,18 +1006,20 @@ def new_swap(parent_id: str, subject_id: str, conversation_id=None) -> str:
         sub = s.get(Subject, subject_id)
         if not sub:
             raise ValueError("Ese modelo no existe")
-        p = Post(idea=f"Misma foto con la cara de {sub.name}", platform=parent.platform, brand_id=parent.brand_id,
+        p = Post(idea=f"Misma foto con {'el cuerpo y ' if body else ''}la cara de {sub.name}", platform=parent.platform,
+                 brand_id=parent.brand_id,
                  parent_id=parent.id, conversation_id=conversation_id or parent.conversation_id,
                  subject_ids=[subject_id], status="queued")
         s.add(p)
         s.flush()
         pid, data = p.id, post_dict(p)
     events.publish({"type": "post", "post": data})
-    enqueue("swap", pid, {"subject_id": subject_id})
+    enqueue("swap", pid, {"subject_id": subject_id, "body": bool(body)})
     return pid
 
 
 SWAP_DENOISE = 0.62      # cuánto se redibuja la cara: lo justo para que sea ella, con el mismo gesto y la misma luz
+BODY_DENOISE = 0.55      # cuánto se redibuja la foto entera para que sea SU cuerpo: misma pose, ropa, fondo y encuadre
 
 SWAP_CHECK = ("You check a reference photo before a face replacement. Answer with JSON. people: true if there is at "
               "least one clearly visible human face. minor: true if ANY person could be under 18 (when in doubt, true). "
@@ -1065,12 +1067,24 @@ async def _swap_face(post_id: str, payload: dict) -> None:
     _mark(post_id, "image", "Cambio de cara · Z-Image + LoRA " + name)
     if step_used:
         _mark(post_id, "lora", f"{name} · {lora_mod.fmt_steps(step_used)} pasos")
-    events.publish({"type": "progress", "id": post_id, "text": f"Poniéndole la cara de {name}"})
     from app import working
+    src = Path(src_path).read_bytes()
+    seed = random.randint(1, 2**31 - 1)
+    if payload.get("body"):
+        # 1) toda la foto redibujada con SU LoRA (su cuerpo), misma pose, ropa, fondo y luz
+        events.publish({"type": "progress", "id": post_id, "text": f"Redibujando la foto con el cuerpo de {name}"})
+        if not hasattr(engine, "img2img"):
+            raise ValueError("Para poner su cuerpo hace falta el motor local (ComfyUI de la placa)")
+        with working.track("motor_imagen", f"Cuerpo de {name}", "Z-Image + LoRA", post_id, log=True):
+            src = await engine.img2img(src, [(lora_name, strength)],
+                                       f"{trigger}, same pose, same outfit, same place and light as the photo, "
+                                       "realistic photo, natural skin texture", seed, BODY_DENOISE)
+    # 2) su cara, siempre desde su LoRA (nunca inventada)
+    events.publish({"type": "progress", "id": post_id, "text": f"Poniéndole la cara de {name}"})
     with working.track("motor_imagen", f"Cambio de cara: {name}", "Z-Image + LoRA", post_id, log=True):
-        out = await engine.face_pass(Path(src_path).read_bytes(), [(lora_name, strength)],
+        out = await engine.face_pass(src, [(lora_name, strength)],
                                      f"{trigger}, photo of a person, natural skin texture, detailed face",
-                                     random.randint(1, 2**31 - 1), SWAP_DENOISE)
+                                     seed, SWAP_DENOISE)
     raw = save_bytes(out, f"{post_id}_raw.png")
     from app.media import resize_to, size_of
     final = resize_to(raw, size_of(parent.image_path), f"{post_id}.jpg")

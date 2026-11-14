@@ -260,3 +260,58 @@ def test_swap_face_copies_the_photo_and_only_changes_the_face(monkeypatch):
         assert "no se puede usar" in str(e)
     else:
         raise AssertionError("con un posible menor no debía hacerlo")
+
+
+def test_putting_a_bank_models_face_or_body_always_uses_her_lora(monkeypatch):
+    """«Ponle la cara y el cuerpo de Valentina» nunca va a la edición normal (que inventa caras): va con su LoRA.
+    Con cuerpo, primero se redibuja toda la foto con su LoRA y después se le pone su cara."""
+    import io
+    from PIL import Image
+    from app import llm, privado
+    from app.agents import shelton
+    from app.comfyui.client import load_workflow
+    from app.db import Subject
+    from app.engines.comfy import img2img_workflow
+    from app.media import save_bytes
+    init_db()
+    wf = load_workflow("z_image_turbo.json")
+    assert img2img_workflow(wf, "ref.png", 0.55)
+    ks = next(v for v in wf.values() if isinstance(v, dict) and v.get("class_type") == "KSampler")
+    assert ks["inputs"]["latent_image"] == ["shl_enc", 0] and ks["inputs"]["denoise"] == 0.55
+    assert not any(isinstance(v, dict) and v.get("class_type") == "EmptySD3LatentImage" for v in wf.values())
+    with session() as s:
+        sub = Subject(name="Valeria Lora", kind="person", lora_status="ready", lora_name="val.safetensors",
+                      lora_trigger="val_tk")
+        s.add(sub)
+        s.flush()
+        sid = sub.id
+    hit = shelton._edit_is_a_swap("quiero que le pongas la cara y el cuerpo de Valeria Lora")
+    assert hit == (sid, "Valeria Lora", True)
+    assert shelton._edit_is_a_swap("ponle la cara de Valeria Lora")[2] is False
+    assert shelton._edit_is_a_swap("cambia el fondo a una playa") is None
+    b = io.BytesIO()
+    Image.new("RGB", (64, 80), "blue").save(b, "PNG")
+    ref = save_bytes(b.getvalue(), "ref_body.png")
+    with session() as s:
+        parent = Post(idea="selfie", platform="original", image_path=str(ref), raw_path=str(ref), status="ready")
+        s.add(parent)
+        s.flush()
+        pid = parent.id
+    calls = []
+
+    class FakeEngine:
+        async def img2img(self, image, loras, prompt, seed, denoise=0.5):
+            calls.append(("cuerpo", loras[0][0], denoise))
+            return image
+
+        async def face_pass(self, image, loras, prompt, seed, denoise=0.45):
+            calls.append(("cara", loras[0][0], denoise))
+            return image
+    monkeypatch.setattr(privado, "_engine", lambda p, c: ({}, FakeEngine()))
+
+    async def ok_check(system, content, schema, **k):
+        return {"people": True, "minor": False, "nudity": False}
+    monkeypatch.setattr(llm, "json_call", ok_check)
+    new = pipeline.new_swap(pid, sid, body=True)
+    asyncio.run(pipeline._swap_face(new, {"subject_id": sid, "body": True}))
+    assert [c[0] for c in calls] == ["cuerpo", "cara"] and all(c[1] == "val.safetensors" for c in calls)
