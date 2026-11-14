@@ -193,8 +193,10 @@ def auto_learn(sid: str) -> str:
 
 def train_adult(sid: str) -> dict:
     """🎓 Entrenar la 🔞 LoRA adulta de una modelo: con sus fotos del Banco + sus fotos privadas. Mismo entrenamiento
-    de siempre, pero queda solo en Shelton Hot. Su LoRA normal no se toca."""
-    from app import lora
+    de siempre, pero queda solo en Shelton Hot. Su LoRA normal no se toca.
+    Como en el Shelton normal: si la RTX está prendida va ahí (la más rápida); si no, a la placa. En la RTX las fotos
+    se borran apenas termina (la LoRA vuelve a la placa)."""
+    from app import granja, lora
     with session() as s:
         sub = s.get(Subject, sid)
         if not sub:
@@ -203,14 +205,10 @@ def train_adult(sid: str) -> dict:
         if not ok:
             raise ValueError(why)
         name = sub.name
-    from app.lora import available
-    ok, why = available()
-    if not ok:
-        raise ValueError(f"La placa no puede entrenar ahora: {why}")
     twin_id = adult_twin_id(sid)
-    # se entrena SOLO en la placa: sus fotos privadas no salen de aquí (ni a la nube ni a tarjetas alquiladas)
-    r = lora.start(twin_id)
-    return {**r, "twin": twin_id, "name": f"{name} · {ADULT_MARK}", "where": "la placa"}
+    node = next((n for n in granja.remote_nodes() if (granja._health.get(n["id"]) or (0, {}))[1].get("ok")), None)
+    r = lora.start_on(twin_id, node["id"]) if node else lora.start(twin_id)
+    return {**r, "twin": twin_id, "name": f"{name} · {ADULT_MARK}", "where": node["label"] if node else "la placa"}
 
 
 def confirm(subject_id: str, by: str, inventada: bool, mayor: bool) -> dict:
@@ -285,7 +283,7 @@ async def generate(by: str, prompt: str, subject_id: str = "", preset: str = "sd
         if why:
             log.warning("Estudio privado: pedido bloqueado (%s)", why)
             raise ValueError(f"Bloqueado: el pedido {why}. Shelton Hot es solo para adultos.")
-    loras, trigger = [], ""
+    loras, trigger, face = [], "", None
     if subject_id:
         with session() as s:
             sub = s.get(Subject, subject_id)
@@ -298,6 +296,7 @@ async def generate(by: str, prompt: str, subject_id: str = "", preset: str = "sd
                 loras = [(sub.lora_name, float(strength) if strength else lora.strength_of(sub))]
                 trigger = sub.lora_trigger or ""
             name = sub.name
+            face = _face_lora(sub) if preset != "zimage" else None
     st = _style_lora(preset)                  # 🎓 la LoRA propia de Shelton Hot (aprende de las aprobadas)
     if st:
         loras = [*loras, (st[0], STYLE_STRENGTH)]
@@ -328,8 +327,9 @@ async def generate(by: str, prompt: str, subject_id: str = "", preset: str = "sd
                  "ckpt": ckpt, "prompt": prompt, "prompt_en": prompt_en if how else "", "translated": how,
                  "negative": negative, "lora": bool(loras), "status": "queued", "file": "",
                  # todo lo necesario para rehacerla sola si Shelton se reinicia o se corta la conexión
-                 "job": {"full": full, "neg": neg, "w": w, "h": h, "loras": [list(x) for x in loras]}})
-    asyncio.get_event_loop().create_task(_run(batch, count, engine, cfg, full, neg, w, h, loras))
+                 "face": bool(face),
+                 "job": {"full": full, "neg": neg, "w": w, "h": h, "loras": [list(x) for x in loras], "face": face}})
+    asyncio.get_event_loop().create_task(_run(batch, count, engine, cfg, full, neg, w, h, loras, face))
     return {"batch": batch, "count": count, "with_lora": bool(loras), "translated": how, "prompt_en": prompt_en,
             "note": "" if loras or not subject_id else
             f"{name} todavía no tiene LoRA para {ENGINES[preset]}: sale sin su cara. "
@@ -347,11 +347,36 @@ def _gpu_reason(url: str) -> str:
             if tr else "Esperando la GPU: está terminando otro trabajo. Empieza sola enseguida.")
 
 
-async def _run(batch: str, count: int, engine, cfg: dict, prompt: str, negative: str, w: int, h: int, loras) -> None:
-    await _run_ids([f"{batch}-{i}" for i in range(count)], engine, cfg, prompt, negative, w, h, loras)
+async def _run(batch: str, count: int, engine, cfg: dict, prompt: str, negative: str, w: int, h: int, loras,
+               face: dict | None = None) -> None:
+    await _run_ids([f"{batch}-{i}" for i in range(count)], engine, cfg, prompt, negative, w, h, loras, face)
 
 
-async def _run_ids(ids: list[str], engine, cfg: dict, prompt: str, negative: str, w: int, h: int, loras) -> None:
+def _face_lora(sub: Subject) -> dict | None:
+    """Su cara de siempre: la LoRA de Z-Image de la modelo original (la del Banco), para la pasada de rostro.
+    Así una foto de su 🔞 LoRA adulta (SDXL) termina con su rostro tal cual."""
+    from app import lora
+    info = sub.lora_info or {}
+    orig_id = info.get("variant_of") or sub.id          # «Valentina · 🔞» o «Valentina · SDXL» → Valentina
+    with session() as s:
+        orig = s.get(Subject, orig_id)
+        if not orig or not _has_lora(orig) or lora.base_of(orig.id) != "zimage":
+            return None
+        return {"lora": orig.lora_name, "strength": lora.strength_of(orig), "trigger": orig.lora_trigger or ""}
+
+
+FACE_DENOISE = 0.45     # cuánto re-dibuja la cara: lo justo para que sea ella sin cambiar gesto ni luz
+
+
+async def _put_face(raw: bytes, face: dict, prompt: str, seed: int) -> bytes:
+    """Segunda pasada: su cara con Z-Image + su LoRA. Si algo falla, queda la foto como salió (no se pierde)."""
+    _cfg, zeng = _engine("zimage", "")
+    p = ", ".join(x for x in [face.get("trigger"), prompt] if x)
+    return await zeng.face_pass(raw, [(face["lora"], float(face.get("strength") or 1.0))], p, seed, FACE_DENOISE)
+
+
+async def _run_ids(ids: list[str], engine, cfg: dict, prompt: str, negative: str, w: int, h: int, loras,
+                   face: dict | None = None) -> None:
     import random
     try:
         engine.values["generate"]["negative"] = negative      # motor nuevo para este lote: no afecta a otros
@@ -376,9 +401,17 @@ async def _run_ids(ids: list[str], engine, cfg: dict, prompt: str, negative: str
                     raw = await engine.generate(prompt, w, h, seed)
                 if eid in _cancelled:
                     break
+                note = ""
+                if face:
+                    _append({"id": eid, "status": "running", "note": "Poniéndole su cara (Z-Image)…"})
+                    try:
+                        raw = await _put_face(raw, face, prompt, seed)
+                    except Exception as fe:  # noqa: BLE001
+                        log.warning("Shelton Hot: no pude poner la cara en %s: %s", eid, fe)
+                        note = f"Sin pasada de rostro: {fe}"[:200]
                 f = _dir() / f"{eid}.png"
                 f.write_bytes(raw)
-                _append({"id": eid, "status": "done", "file": f.name, "seed": seed, "note": ""})
+                _append({"id": eid, "status": "done", "file": f.name, "seed": seed, "note": note})
                 break
             except Exception as e:  # noqa: BLE001
                 log.warning("Shelton Hot: falló %s (intento %d/%d): %s", eid, attempt, ATTEMPTS, e)
@@ -433,7 +466,7 @@ async def _resume(ids: list[str], preset: str, ckpt: str, job: dict) -> None:
             _append({"id": eid, "status": "failed", "error": f"No pude preparar el motor: {e}"[:300], "note": ""})
         return
     loras = [tuple(x) for x in job.get("loras") or []]
-    await _run_ids(ids, engine, cfg, job["full"], job["neg"], int(job["w"]), int(job["h"]), loras)
+    await _run_ids(ids, engine, cfg, job["full"], job["neg"], int(job["w"]), int(job["h"]), loras, job.get("face"))
 
 
 def review(entry_id: str, ok: bool | None, by: str = "") -> dict:

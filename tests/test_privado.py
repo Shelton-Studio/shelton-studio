@@ -316,8 +316,7 @@ def test_adult_lora_stays_only_in_the_adult_zone(monkeypatch):
     started = []
     monkeypatch.setattr(lora, "available", lambda: (True, ""))
     monkeypatch.setattr(lora, "start", lambda i, *a, **k: started.append(i) or {"ok": True})
-    monkeypatch.setattr(lora, "start_on", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no sale de la placa")))
-    r = privado.train_adult(sid)
+    r = privado.train_adult(sid)                                  # sin RTX prendida: en la placa
     assert started == [tw] and r["where"] == "la placa"
     m = next(x for x in privado.models() if x["id"] == sid)
     assert m["adult"]["id"] == tw and not m["adult"]["ready"]
@@ -375,8 +374,7 @@ def test_own_photos_for_the_adult_zone_lora_need_confirmation():
 
 
 def test_adult_lora_keeps_learning_with_new_photos(monkeypatch):
-    """Cada 5 fotos nuevas, su 🔞 LoRA adulta sigue aprendiendo sola, y siempre en la placa (nunca en la RTX)."""
-    import asyncio
+    """Cada 5 fotos nuevas, su 🔞 LoRA adulta sigue aprendiendo sola (en la RTX si está prendida, si no la placa)."""
     from app import granja, lora
     init_db()
     sid = _subject("Nube")
@@ -393,8 +391,50 @@ def test_adult_lora_keeps_learning_with_new_photos(monkeypatch):
     privado.add_ref_upload(sid, _png("black"))
     assert next(m for m in privado.models() if m["id"] == sid)["new_photos"] == 5
     assert privado.auto_learn(sid) and started == [tw]
-    # la fila nunca la manda a una tarjeta alquilada
-    assert lora._private_only(tw) and not lora._private_only(sid)
-    monkeypatch.setattr(granja, "remote_nodes", lambda: [{"id": "rtx", "slots": 1}])
-    assert asyncio.run(granja.free_slot({}, local_only=True)) is None or \
-        asyncio.run(granja.free_slot({}, local_only=True))["id"] != "rtx"
+    # con la RTX prendida va ahí, como en el Shelton normal
+    lora._update(tw, lora_status="ready")
+    on = []
+    monkeypatch.setattr(granja, "remote_nodes", lambda: [{"id": "rtx", "label": "RTX", "slots": 1}])
+    monkeypatch.setitem(granja._health, "rtx", (9e18, {"ok": True}))
+    monkeypatch.setattr(lora, "start_on", lambda i, n, **k: on.append((i, n)) or {"ok": True})
+    assert privado.train_adult(sid)["where"] == "RTX" and on == [(tw, "rtx")]
+
+
+def test_adult_photos_get_her_zimage_face(monkeypatch):
+    """Foto con su 🔞 LoRA adulta (SDXL) → segunda pasada automática con Z-Image + su LoRA de siempre: su cara tal cual."""
+    import asyncio
+    from app import lora
+    from app.comfyui.client import load_workflow
+    from app.engines.comfy import face_workflow
+    init_db()
+    # el workflow de Z-Image se convierte en «re-dibujar solo la cara de esta imagen»
+    wf = load_workflow("z_image_turbo.json")
+    assert face_workflow(wf, "foto.png", 0.45)
+    save = next(v for v in wf.values() if isinstance(v, dict) and v.get("class_type") == "SaveImage")
+    assert save["inputs"]["images"] == ["shl_face", 0] and wf["shl_src"]["inputs"]["image"] == "foto.png"
+    # la modelo: LoRA normal de Z-Image (su cara) + su 🔞 LoRA adulta (SDXL)
+    sid = _subject("Rocío")
+    lora._update(sid, lora_status="ready", lora_name="rocio.safetensors", lora_trigger="rocio_tk")
+    privado.confirm(sid, "admin", True, True)
+    tw = privado.adult_twin_id(sid)
+    lora._update(tw, lora_status="ready", lora_name="rocio_adulta.safetensors")
+    with privado.session() as s:
+        face = privado._face_lora(s.get(privado.Subject, tw))
+    assert face["lora"] == "rocio.safetensors" and face["trigger"] == "rocio_tk"
+
+    class Fake:
+        url = "http://x"
+        values = {"generate": {}}
+
+        async def generate_with_loras(self, loras, prompt, w, h, seed):
+            return b"sdxl"
+
+    calls = []
+
+    async def fake_face(raw, f, prompt, seed):
+        calls.append((raw, f["lora"]))
+        return b"con-su-cara"
+    monkeypatch.setattr(privado, "_put_face", fake_face)
+    asyncio.run(privado._run_ids(["fc-0"], Fake(), {}, "p", "n", 64, 64, [("rocio_adulta.safetensors", 1.0)], face))
+    assert calls == [(b"sdxl", "rocio.safetensors")]
+    assert (privado._dir() / "fc-0.png").read_bytes() == b"con-su-cara"
