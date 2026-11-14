@@ -292,9 +292,17 @@ async def generate(by: str, prompt: str, subject_id: str = "", preset: str = "sd
             ok, why = subject_ok(sub)
             if not ok:
                 raise ValueError(why)
-            if _has_lora(sub) and lora.base_of(sub.id) == preset:
-                loras = [(sub.lora_name, float(strength) if strength else lora.strength_of(sub))]
-                trigger = sub.lora_trigger or ""
+            body = sub
+            if preset == "sdxl" and not (_has_lora(sub) and lora.base_of(sub.id) == preset):
+                # elegida en «Modelo»: si tiene su 🔞 LoRA adulta lista, el cuerpo sale con esa
+                for x in s.query(Subject).filter(Subject.kind == "person"):
+                    xi = x.lora_info or {}
+                    if xi.get("adult_twin") and xi.get("variant_of") == sub.id and _has_lora(x):
+                        body = x
+                        break
+            if _has_lora(body) and lora.base_of(body.id) == preset:
+                loras = [(body.lora_name, float(strength) if strength else lora.strength_of(body))]
+                trigger = body.lora_trigger or ""
             name = sub.name
             face = _face_lora(sub) if preset != "zimage" else None
     st = _style_lora(preset)                  # 🎓 la LoRA propia de Shelton Hot (aprende de las aprobadas)

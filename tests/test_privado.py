@@ -438,3 +438,29 @@ def test_adult_photos_get_her_zimage_face(monkeypatch):
     asyncio.run(privado._run_ids(["fc-0"], Fake(), {}, "p", "n", 64, 64, [("rocio_adulta.safetensors", 1.0)], face))
     assert calls == [(b"sdxl", "rocio.safetensors")]
     assert (privado._dir() / "fc-0.png").read_bytes() == b"con-su-cara"
+
+
+def test_choosing_the_model_in_the_form_uses_her_adult_lora_and_her_face(monkeypatch):
+    """Elegirla en «Modelo» con motor SDXL: cuerpo con su 🔞 LoRA adulta + cara con su LoRA de Z-Image."""
+    import asyncio
+    from app import lora
+    init_db()
+    sid = _subject("Abril")
+    lora._update(sid, lora_status="ready", lora_name="abril.safetensors")
+    privado.confirm(sid, "admin", True, True)
+    tw = privado.adult_twin_id(sid)
+    lora._update(tw, lora_status="ready", lora_name="abril_adulta.safetensors")
+    got = {}
+
+    async def fake_run(batch, count, engine, cfg, full, neg, w, h, loras, face=None):
+        got.update(loras=loras, face=face)
+    monkeypatch.setattr(privado, "_run", fake_run)
+    monkeypatch.setattr(privado, "_engine", lambda p, c: ({}, object()))
+    monkeypatch.setattr(privado, "_style_lora", lambda p: None)
+
+    async def go():
+        r = await privado.generate("admin", "en la playa", subject_id=sid, preset="sdxl", ckpt="x.safetensors")
+        await asyncio.sleep(0)
+        return r
+    asyncio.run(go())
+    assert got["loras"][0][0] == "abril_adulta.safetensors" and got["face"]["lora"] == "abril.safetensors"
