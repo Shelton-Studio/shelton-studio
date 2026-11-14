@@ -98,3 +98,54 @@ const _openCloudModelsT2 = openCloudModels;
 openCloudModels = async (...a) => { const r = await _openCloudModelsT2(...a); paintActiveModel(); return r; };
 const _loadConvT2 = typeof loadConv === "function" ? loadConv : null;
 if (_loadConvT2) loadConv = async (...a) => { const r = await _loadConvT2(...a); orderEngineSelect($("#engine-sel")); paintActiveModel(); return r; };
+
+
+// ------------------------------------------------------------------ ⚙️ Ajustes de foto (antes de generar; queda guardado)
+async function openPhotoSettings() {
+  let q;
+  try { q = await api("/api/calidad"); } catch (e) { return toast(esc(e.message), "bad"); }
+  const num = (id, label, val, help, step = 1, min = 0, max = 100) => `<label class="f">${label}<input id="${id}" type="number" step="${step}" min="${min}" max="${max}" value="${val || ""}" placeholder="Automático"><span class="faint small">${help}</span></label>`;
+  const box = modal("⚙️ Ajustes de foto", `
+    <div class="hint">Se aplican a las fotos que se hacen en la <b>placa</b> y en la <b>RTX</b> (no a la nube). Vacío = <b>automático</b>, lo que mejor rinde cada modelo. Queda guardado para todos los pedidos hasta que lo cambies.</div>
+    <div class="ps-grid">
+      ${num("ps-steps", "Pasos (steps)", q.steps, "Más pasos = más detalle y más lento. Z-Image rinde con 8-12; SDXL con 25-40.", 1, 0, 80)}
+      ${num("ps-cfg", "CFG (SDXL)", q.cfg, "Qué tan al pie de la letra sigue el pedido. 4-7 es lo normal.", 0.5, 0, 20)}
+      ${num("ps-guidance", "Guidance (Flux)", q.guidance, "Lo mismo que CFG pero para Flux. 3-4 es lo normal.", 0.5, 0, 10)}
+      ${num("ps-lora", "Fuerza de la LoRA", q.lora_strength, "Cuánto se parece a la modelo. 0.8-1.0 es lo normal; más alto puede deformar.", 0.05, 0, 1.5)}
+      ${num("ps-seed", "Semilla fija", q.seed, "Vacío = una distinta cada vez. Con un número fijo, el mismo pedido sale igual (sirve para comparar ajustes).", 1, 0, 2147483647)}
+      <label class="f">Evitar siempre<input id="ps-neg" value="${esc(q.negative_extra || "")}" placeholder="Ej: tatuajes, texto, marca de agua"><span class="faint small">Se suma a lo que ya evita cada motor (SDXL).</span></label>
+    </div>
+    <h4 style="margin:14px 0 6px">✨ Calidad máxima</h4>
+    <label class="q-row"><input type="checkbox" id="ps-max" ${q.max_quality ? "checked" : ""}><div><b>Activada</b><div class="faint small">Segunda pasada, retoque de cara y la mejor de varias. Más lento, más nítido.</div></div></label>
+    <div class="ps-grid">
+      ${num("ps-rscale", "Agrandar en la 2.ª pasada (×)", q.refine_scale, "1.5 = 50% más grande antes de retocar.", 0.1, 1, 2)}
+      ${num("ps-rden", "Cuánto cambia la 2.ª pasada", q.refine_denoise, "0.3-0.4: mejora sin cambiar la foto. Más alto cambia más.", 0.05, 0.1, 0.6)}
+      ${num("ps-cand", "Fotos para elegir la mejor", q.candidates, "Hace varias y el juez elige. 1 = más rápido.", 1, 1, 6)}
+      <label class="q-row"><input type="checkbox" id="ps-face" ${q.face ? "checked" : ""}><div><b>Retoque de cara</b><div class="faint small">Corrige ojos y rasgos.</div></div></label>
+    </div>`,
+    `<button class="btn ghost" id="ps-reset">Volver a automático</button><button class="btn primary" id="ps-save">Guardar</button>`, true);
+  const v = (id) => { const x = $(id, box).value; return x === "" ? 0 : +x; };
+  $("#ps-save", box).onclick = async () => {
+    try {
+      await api("/api/calidad", { method: "POST", body: { steps: v("#ps-steps"), cfg: v("#ps-cfg"), guidance: v("#ps-guidance"), lora_strength: v("#ps-lora"),
+        seed: v("#ps-seed"), negative_extra: $("#ps-neg", box).value.trim(), max_quality: $("#ps-max", box).checked,
+        refine_scale: v("#ps-rscale") || 1.5, refine_denoise: v("#ps-rden") || 0.35, candidates: v("#ps-cand") || 1, face: $("#ps-face", box).checked } });
+      closeModal(); toast("Ajustes de foto guardados: se usan desde la próxima foto", "good", "⚙️");
+    } catch (e) { toast(esc(e.message), "bad"); }
+  };
+  $("#ps-reset", box).onclick = async () => {
+    await api("/api/calidad", { method: "POST", body: { steps: 0, cfg: 0, guidance: 0, lora_strength: 0, seed: 0, negative_extra: "" } });
+    closeModal(); toast("Volvió a automático", "good", "⚙️");
+  };
+}
+const _chatPS = VIEWS.chat;
+VIEWS.chat = async (el, convId) => {
+  await _chatPS(el, convId);
+  const after = $("#cloud-models", el) || $("#video-models", el);
+  if (!after || $("#photo-settings", el)) return;
+  const b = document.createElement("button");
+  b.className = "btn sm"; b.id = "photo-settings"; b.textContent = "⚙️ Ajustes";
+  b.title = "Pasos, CFG, semilla, fuerza de la LoRA, calidad máxima… (queda guardado)";
+  b.onclick = openPhotoSettings;
+  after.after(b);
+};

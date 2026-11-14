@@ -420,3 +420,22 @@ def test_power_the_rented_card_from_shelton(monkeypatch):
     assert any(n["runpod"] for n in granja.remote_nodes() if n["conn_id"] == cid)
     with session() as s:
         s.delete(s.get(Connection, cid))
+
+
+
+def test_photo_settings_override_the_workflow(monkeypatch, tmp_path):
+    """⚙️ Ajustes de foto: pasos, semilla y fuerza de la LoRA fijados a mano llegan al workflow; vacío = automático."""
+    from app import calidad
+    from app.config import settings as st
+    from app.engines.comfy import ComfyEngine
+    monkeypatch.setattr(st, "DATA_DIR", tmp_path)
+    eng = ComfyEngine({"url": "http://127.0.0.1:1", "preset": "fast"})
+    wf_auto = eng._wf("generate", {"prompt": "x", "width": 512, "height": 512, "seed": 7})
+    steps_auto = [n["inputs"]["steps"] for n in wf_auto.values() if isinstance(n, dict) and "steps" in n.get("inputs", {})]
+    calidad.save(steps=17, seed=1234, lora_strength=0.6)
+    assert calidad.overrides() == {"steps": 17, "seed": 1234, "lora_strength": 0.6}
+    wf = eng._wf("generate", {"prompt": "x", "width": 512, "height": 512, "seed": 7})
+    ks = [n["inputs"] for n in wf.values() if isinstance(n, dict) and "steps" in n.get("inputs", {})]
+    assert ks and all(k["steps"] == 17 and k["seed"] == 1234 for k in ks) and steps_auto != [17]
+    calidad.save(steps=0, seed=0, lora_strength=0)
+    assert calidad.overrides() == {}

@@ -17,7 +17,9 @@ from pathlib import Path
 from app.config import settings
 
 DEFAULTS = {"max_quality": False, "refine": True, "refine_scale": 1.5, "refine_denoise": 0.35,
-            "face": True, "candidates": 3, "detailed_captions": False}
+            "face": True, "candidates": 3, "detailed_captions": False,
+            # ⚙️ Ajustes de foto (0 / vacío = automático, lo que mejor rinde cada modelo)
+            "steps": 0, "cfg": 0.0, "guidance": 0.0, "seed": 0, "lora_strength": 0.0, "negative_extra": ""}
 FACE_NODES = ("FaceDetailer", "UltralyticsDetectorProvider")
 FACE_MODEL = "bbox/face_yolov8m.pt"
 
@@ -36,6 +38,12 @@ def get() -> dict:
     return data
 
 
+def overrides() -> dict:
+    """Los ajustes de foto que la persona fijó a mano (solo los que no están en automático)."""
+    q = get()
+    return {k: q[k] for k in ("steps", "cfg", "guidance", "seed", "lora_strength", "negative_extra") if q.get(k)}
+
+
 def save(**changes) -> dict:
     data = get()
     for k, v in changes.items():
@@ -44,6 +52,12 @@ def save(**changes) -> dict:
     data["candidates"] = max(1, min(int(data["candidates"]), 6))
     data["refine_scale"] = max(1.0, min(float(data["refine_scale"]), 2.0))
     data["refine_denoise"] = max(0.1, min(float(data["refine_denoise"]), 0.6))
+    data["steps"] = max(0, min(int(data["steps"]), 80))
+    data["cfg"] = max(0.0, min(float(data["cfg"]), 20.0))
+    data["guidance"] = max(0.0, min(float(data["guidance"]), 10.0))
+    data["seed"] = max(0, min(int(data["seed"]), 2**31 - 1))
+    data["lora_strength"] = max(0.0, min(float(data["lora_strength"]), 1.5))
+    data["negative_extra"] = str(data["negative_extra"])[:500]
     _file().parent.mkdir(parents=True, exist_ok=True)
     _file().write_text(json.dumps(data, indent=1), encoding="utf-8")
     return data
@@ -175,6 +189,12 @@ class CalidadIn(BaseModel):
     face: bool | None = None
     candidates: int | None = None
     detailed_captions: bool | None = None
+    steps: int | None = None
+    cfg: float | None = None
+    guidance: float | None = None
+    seed: int | None = None
+    lora_strength: float | None = None
+    negative_extra: str | None = None
 
 
 @router.get("/calidad")
