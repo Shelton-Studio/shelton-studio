@@ -828,6 +828,20 @@ async def api_style_remove(body: StyleRemoveIn, request: Request):
     return style_remove(body.file)
 
 
+@router.post("/modelo/{sid}/lora-adulta/preparar")
+async def api_prepare_adult(sid: str, request: Request):
+    """Antes de entrenar su 🔞 LoRA adulta: la crea si no existe (para cargarle las 🎯 indicaciones)."""
+    _admin(request)
+    with session() as s:
+        sub = s.get(Subject, sid)
+        if not sub:
+            raise HTTPException(404, "Esa modelo no existe")
+        ok, why = subject_ok(sub)
+    if not ok:
+        raise HTTPException(400, why)
+    return {"twin": adult_twin_id(sid)}
+
+
 @router.post("/modelo/{sid}/lora-adulta")
 async def api_train_adult(sid: str, request: Request):
     _admin(request)
