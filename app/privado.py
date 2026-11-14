@@ -126,7 +126,8 @@ def models() -> list[dict]:
             out.append({"id": sub.id, "name": sub.name, "confirmed": bool((sub.lora_info or {}).get("adult_ok")),
                         "usable": ok, "why": why, "base": base_of(sub.id),
                         "lora_ready": _has_lora(sub), "variant_of": (sub.lora_info or {}).get("variant_of", ""),
-                        "status": sub.lora_status or "", "progress": round(sub.lora_progress or 0)})
+                        "status": sub.lora_status or "", "progress": round(sub.lora_progress or 0),
+                        "private_photos": len((sub.lora_info or {}).get("private_refs") or [])})
             out[-1]["adult_twin"] = bool((sub.lora_info or {}).get("adult_twin"))
     # cada modelo muestra el estado de su 🔞 LoRA adulta (privada, solo de Shelton Hot)
     for m in out:
