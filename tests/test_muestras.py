@@ -174,3 +174,14 @@ def test_archive_and_delete_samples_keep_numbers():
         pass
     else:
         raise AssertionError("una eliminada no se puede usar")
+
+
+def test_people_always_get_photo_descriptions_so_the_lora_learns_the_face_not_the_clothes():
+    from app.agents import registry
+    sid = _subject("Sin Ropa Fija")
+    assert lora._learns_identity(sid)
+    registry.save("subject_analyst", enabled=False)
+    try:
+        assert not lora._learns_identity(sid)               # sin el Analista, se entrena como siempre
+    finally:
+        registry.save("subject_analyst", enabled=True)

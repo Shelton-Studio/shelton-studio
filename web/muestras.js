@@ -97,6 +97,8 @@ async function briefPanel(sid) {
     <div class="faint small" style="margin:4px 0 8px">Cuéntale a Shelton cómo la quieres. Con esto describe cada foto al entrenar (qué tiene que aprender y qué no) y arma las fotos de muestra.</div>
     <label class="f">¿Qué quieres que aprenda?<textarea id="lb-brief" rows="4" placeholder="Ej: que aprenda su cara tal cual: lunar en la mejilla izquierda, ojos verdes, pecas suaves. Que NO aprenda la ropa ni los fondos de las fotos. La voy a usar para fotos de Instagram estilo lifestyle.">${esc(d.brief || "")}</textarea></label>
     <label class="f">📸 ¿Cómo quieres ver las fotos de muestra? (una cada 100 pasos)<input id="lb-sample" placeholder="Ej: retrato de frente, luz natural de ventana, fondo neutro, sonriendo" value="${esc(d.sample_prompt || "")}"></label>
+    <div class="row" style="gap:8px;margin-top:4px"><label class="btn sm">📎 Agregar fotos de referencia (opcional)<input type="file" id="lb-photos" accept="image/*" multiple hidden></label>
+      <span class="faint small" id="lb-photos-state">Se suman a sus fotos para aprender (por ejemplo, primeros planos de su cara o del rasgo que quieres que aprenda).</span></div>
     <div class="faint small" id="lb-state"></div>`;
   let t = null;
   const save = async () => {
@@ -104,6 +106,17 @@ async function briefPanel(sid) {
     $("#lb-state", panel).textContent = "Guardando…";
     try { await api(`/api/subjects/${sid}/lora/indicaciones`, { method: "PUT", body: { brief: $("#lb-brief", panel).value, sample_prompt: $("#lb-sample", panel).value } }); $("#lb-state", panel).textContent = "✓ Guardado: se usa al entrenar"; }
     catch (e) { $("#lb-state", panel).textContent = "⚠ " + e.message; throw e; }
+  };
+  $("#lb-photos", panel).onchange = async (ev) => {
+    const files = [...ev.target.files]; if (!files.length) return;
+    const st = $("#lb-photos-state", panel); let ok = 0;
+    for (const f of files) {
+      st.textContent = `Subiendo ${ok + 1} de ${files.length}…`;
+      const fd = new FormData(); fd.append("file", f); fd.append("describe", "false");
+      try { await api(`/api/subjects/${sid}/photos`, { method: "POST", body: fd }); ok++; } catch (e) { toast(esc(e.message), "bad"); }
+    }
+    st.textContent = `✓ ${ok} foto(s) agregada(s): entran en este entrenamiento.`;
+    ev.target.value = "";
   };
   ["#lb-brief", "#lb-sample"].forEach((q) => { $(q, panel).oninput = () => { clearTimeout(t); t = setTimeout(() => save().catch(() => {}), 500); }; $(q, panel).onblur = () => save().catch(() => {}); });
   return { el: panel, save };
