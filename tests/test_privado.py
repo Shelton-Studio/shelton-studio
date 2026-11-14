@@ -179,15 +179,15 @@ def test_private_photos_in_the_bank_train_locally_and_never_go_to_the_cloud(monk
     assert r["count"] == 1
     f = settings.DATA_DIR / "privado" / r["file"]
     assert f.exists() and not (settings.media_dir / r["file"]).exists()
-    # desde lo generado en la Adult Zone
+    # desde lo generado en Shelton Hot
     privado._append({"id": "g-0", "batch": "g", "at": "2099", "status": "done", "file": "g-0.png", "subject_id": sid})
     (settings.DATA_DIR / "privado" / "g-0.png").write_bytes(_png("green"))
     privado.add_ref_from_entry(sid, "g-0")
     assert len(privado.model_private(sid)["refs"]) == 2
-    # al entrenar: solo si eligieron usarlas
-    assert not any(privado.is_private_path(p) for p in lora.dataset_images(sid))
+    # al entrenar: su LoRA normal NUNCA las ve; solo su 🔞 LoRA adulta (Shelton Hot)
     lora._update(sid, info={"train_private": True})
-    priv = [p for p in lora.dataset_images(sid) if privado.is_private_path(p)]
+    assert not any(privado.is_private_path(p) for p in lora.dataset_images(sid))
+    priv = [p for p in lora.dataset_images(privado.adult_twin_id(sid)) if privado.is_private_path(p)]
     assert len(priv) == 2
     # describir fotos para la LoRA usa la nube: lo privado se salta siempre
     sent = []
@@ -204,7 +204,7 @@ def test_private_photos_in_the_bank_train_locally_and_never_go_to_the_cloud(monk
 
 
 def test_pending_images_resume_by_themselves_after_restart_and_retry_on_cuts(monkeypatch):
-    """Si Shelton se reinicia o se corta la conexión, las fotos de la Adult Zone no se pierden: se retoman solas."""
+    """Si Shelton se reinicia o se corta la conexión, las fotos de Shelton Hot no se pierden: se retoman solas."""
     init_db()
     sid = _subject("Aura")
     privado.confirm(sid, "admin", True, True)
@@ -284,7 +284,7 @@ def test_valentina_con_sdxl_uses_her_sdxl_version():
 
 
 def test_review_adult_images_privately():
-    """Aprobar / rechazar en la Adult Zone: queda marcado, no publica nada."""
+    """Aprobar / rechazar en Shelton Hot: queda marcado, no publica nada."""
     privado._append({"id": "rev-0", "batch": "rev", "at": "2099", "status": "done", "file": "rev-0.png"})
     assert privado.review("rev-0", True, "admin")["review"] == "approved"
     assert next(x for x in privado.entries() if x["id"] == "rev-0")["review"] == "approved"
@@ -294,25 +294,38 @@ def test_review_adult_images_privately():
     assert next(x for x in privado.entries() if x["id"] == "rev-0")["review"] == ""
 
 
-def test_sdxl_version_trains_with_her_private_photos():
-    """«Valentina · SDXL» aprende también de las fotos privadas de Valentina (si ahí eligieron usarlas)."""
-    from app import lora
+def test_adult_lora_stays_only_in_the_adult_zone(monkeypatch):
+    """La 🔞 LoRA adulta: aprende de sus fotos privadas, no aparece en el Banco ni en el Shelton normal,
+    y sus LoRAs normales (incluida «· SDXL») nunca ven lo privado. Nombrarla usa la 🔞 sola."""
+    import asyncio
+    from app import lora, main
     init_db()
     sid = _subject("Brisa")
     privado.confirm(sid, "admin", True, True)
     privado._append({"id": "br-0", "batch": "br", "at": "2099", "status": "done", "file": "br-0.png", "subject_id": sid})
     (settings.DATA_DIR / "privado" / "br-0.png").write_bytes(_png("green"))
     privado.add_ref_from_entry(sid, "br-0")
-    var = lora.make_variant(sid, "sdxl")
-    assert privado.private_paths(var["id"]) == []                 # todavía no eligieron usarlas
     lora._update(sid, info={"train_private": True})
-    assert len(privado.private_paths(var["id"])) == 1
-    assert any(privado.is_private_path(p) for p in lora.dataset_images(var["id"]))
-
-
+    var = lora.make_variant(sid, "sdxl")
+    assert privado.private_paths(var["id"]) == [] and privado.private_paths(sid) == []
+    tw = privado.adult_twin_id(sid)
+    assert tw == privado.adult_twin_id(sid)                       # una sola
+    assert len(privado.private_paths(tw)) == 1
+    names = [x["name"] for x in asyncio.run(main.subjects())]
+    assert "Brisa" in names and not any("🔞" in n for n in names)
+    started = []
+    monkeypatch.setattr(lora, "start", lambda i, *a, **k: started.append(i) or {"ok": True})
+    monkeypatch.setattr(lora, "start_on", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no sale de la placa")))
+    r = privado.train_adult(sid)
+    assert started == [tw] and r["where"] == "la placa"
+    m = next(x for x in privado.models() if x["id"] == sid)
+    assert m["adult"]["id"] == tw and not m["adult"]["ready"]
+    lora._update(tw, lora_status="ready", lora_name="brisa_adulta.safetensors")
+    p = privado.parse_request("hazme una foto de Brisa en la playa")
+    assert p["subject"]["id"] == tw and p["preset"] == "sdxl" and "Brisa" not in p["prompt"]
 
 def test_adult_zone_style_lora_learns_from_approved(monkeypatch):
-    """🎓 La LoRA propia de la Adult Zone aprende de las fotos aprobadas, no aparece en el Banco y se suma en SDXL."""
+    """🎓 La LoRA propia de Shelton Hot aprende de las fotos aprobadas, no aparece en el Banco y se suma en SDXL."""
     import asyncio as _a
     from app import lora, main
     init_db()
@@ -342,7 +355,7 @@ def test_adult_zone_style_lora_learns_from_approved(monkeypatch):
 
 
 def test_own_photos_for_the_adult_zone_lora_need_confirmation():
-    """Subir fotos propias para la LoRA de la Adult Zone: solo con la confirmación (IA, inventadas, +18)."""
+    """Subir fotos propias para la LoRA de Shelton Hot: solo con la confirmación (IA, inventadas, +18)."""
     import io
     from PIL import Image
     b = io.BytesIO()

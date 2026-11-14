@@ -15,6 +15,7 @@ from app.llm import create, text_of
 from app.media import image_block
 from app.platforms import PLATFORMS
 from app.serialize import post_dict, subject_dict
+from app.zona import adult_only
 
 log = logging.getLogger("shelton.chief")
 
@@ -279,7 +280,7 @@ TOOLS = [
 def studio_context(engine: str) -> str:
     with session() as s:
         b = get_or_create_brand(s)
-        subs = s.query(Subject).order_by(Subject.created_at).all()
+        subs = [x for x in s.query(Subject).order_by(Subject.created_at).all() if not adult_only(x)]
         brand = (f"Marca: {b.name} | {b.description or 'sin descripción'} | público: {b.audience or '-'} | "
                  f"tono: {b.tone} | estilo visual: {b.visual_style} | plataformas: {', '.join(b.platforms or [])} | "
                  f"piloto automático: {b.autopilot_daily}/día")
@@ -524,7 +525,7 @@ async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
     if name == "list_subjects":
         with session() as s:
             rows = [{k: d[k] for k in ("id", "name", "kind", "description", "notes")} | {"photos": len(d["references"])}
-                    for d in (subject_dict(x) for x in s.query(Subject).order_by(Subject.name))]
+                    for d in (subject_dict(x) for x in s.query(Subject).order_by(Subject.name) if not adult_only(x))]
         return json.dumps(rows, ensure_ascii=False) if rows else "El banco de modelos está vacío."
 
     if name == "create_subject_from_photos":

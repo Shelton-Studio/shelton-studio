@@ -21,6 +21,7 @@ from app.engines import get_engine
 from app.media import fit_to_platform, save_bytes
 from app.platforms import generation_size, get_platform
 from app.serialize import post_dict, subject_dict
+from app.zona import adult_only
 
 log = logging.getLogger("shelton.pipeline")
 
@@ -1002,7 +1003,7 @@ def find_subjects(names: list[str]) -> tuple[list[str], list[str]]:
     """Busca por nombre (sin distinguir mayúsculas). Devuelve (ids encontrados, nombres no encontrados)."""
     found, missing = [], []
     with session() as s:
-        all_subs = s.query(Subject).all()
+        all_subs = [x for x in s.query(Subject).all() if not adult_only(x)]   # lo de Shelton Hot no entra aquí
         for n in names or []:
             match = next((x for x in all_subs if x.name.lower() == n.strip().lower()), None) or \
                     next((x for x in all_subs if n.strip().lower() in x.name.lower()), None)

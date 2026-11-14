@@ -1,4 +1,4 @@
-"""Traductor español → inglés en la placa (sin nube) para SDXL/Flux en la Adult Zone."""
+"""Traductor español → inglés en la placa (sin nube) para SDXL/Flux en Shelton Hot."""
 import asyncio
 import json
 import os
