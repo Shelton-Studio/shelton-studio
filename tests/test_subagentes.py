@@ -335,7 +335,7 @@ def test_swap_turns_on_body_when_the_user_asked_for_her_body(monkeypatch):
         s.flush()
         pid = parent.id
     got = {}
-    monkeypatch.setattr(pipeline, "new_swap", lambda p, sid, conv, body=False: got.update(body=body) or "np")
+    monkeypatch.setattr(pipeline, "new_swap", lambda p, sid, conv, body=False, body_level="suave": got.update(body=body, level=body_level) or "np")
 
     async def fake_wait(ids, emit, text):
         return "OK"
@@ -346,3 +346,33 @@ def test_swap_turns_on_body_when_the_user_asked_for_her_body(monkeypatch):
     ctx = {"conv_id": None, "engine": None, "user_text": "ponele la cara y el cuerpo de Cuerpo Lora"}
     asyncio.run(shelton._run_tool("swap_face", {"post_id": pid, "subject": "Cuerpo Lora"}, ctx, emit))
     assert got["body"] is True
+
+
+def test_body_swap_is_soft_by_default_and_respects_an_explicit_face_only(monkeypatch):
+    """Cuerpo «suave» por defecto (misma foto, ropa y reloj) y con la descripción de la foto original. Si Shelton
+    eligió explícitamente «solo cara», no se fuerza el cuerpo."""
+    from app.agents import shelton
+    from app.db import Subject
+    init_db()
+    with session() as s:
+        sub = Subject(name="Suave Lora", kind="person", lora_status="ready", lora_name="s.safetensors")
+        parent = Post(idea="x", platform="original", image_path="/tmp/x.png", status="ready")
+        s.add_all([sub, parent])
+        s.flush()
+        pid = parent.id
+    got = {}
+    monkeypatch.setattr(pipeline, "new_swap", lambda p, sid, conv, body=False, body_level="suave":
+                        got.update(body=body, level=body_level) or "np")
+
+    async def fake_wait(ids, emit, text):
+        return "OK"
+    monkeypatch.setattr(shelton, "_wait_and_report", fake_wait)
+
+    async def emit(ev):
+        pass
+    ctx = {"conv_id": None, "engine": None, "user_text": "misma foto exacta, solo cambia el cuerpo y la cara de Suave Lora"}
+    asyncio.run(shelton._run_tool("swap_face", {"post_id": pid, "subject": "Suave Lora"}, ctx, emit))
+    assert got == {"body": True, "level": "suave"}
+    asyncio.run(shelton._run_tool("swap_face", {"post_id": pid, "subject": "Suave Lora", "body": False}, ctx, emit))
+    assert got["body"] is False
+    assert pipeline.BODY_LEVELS["suave"] < 0.45

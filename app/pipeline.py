@@ -997,7 +997,7 @@ def new_edit(parent_id: str, instruction: str, rewrite_caption: bool = False, co
     return pid
 
 
-def new_swap(parent_id: str, subject_id: str, conversation_id=None, body: bool = False) -> str:
+def new_swap(parent_id: str, subject_id: str, conversation_id=None, body: bool = False, body_level: str = "suave") -> str:
     """🔁 Foto de referencia (TikTok, Instagram…) → la misma foto, tal cual, con la cara de la modelo entrenada."""
     with session() as s:
         parent = s.get(Post, parent_id)
@@ -1014,12 +1014,33 @@ def new_swap(parent_id: str, subject_id: str, conversation_id=None, body: bool =
         s.flush()
         pid, data = p.id, post_dict(p)
     events.publish({"type": "post", "post": data})
-    enqueue("swap", pid, {"subject_id": subject_id, "body": bool(body)})
+    enqueue("swap", pid, {"subject_id": subject_id, "body": bool(body),
+                          "body_level": body_level if body_level in BODY_LEVELS else "suave"})
     return pid
 
 
 SWAP_DENOISE = 0.70      # cuánto se redibuja la cara: que sea claramente ella, con el mismo gesto y la misma luz
-BODY_DENOISE = 0.68      # cuánto se redibuja la foto entera para que sea SU cuerpo: misma pose, ropa, fondo y encuadre
+# Cuánto se redibuja la foto entera para que sea SU cuerpo. «suave» = misma foto (ropa, reloj, fondo, pose) y solo se
+# ajusta su figura; «fuerte» = más ella pero puede cambiar detalles de la escena.
+BODY_LEVELS = {"suave": 0.38, "medio": 0.5, "fuerte": 0.62}
+BODY_DENOISE = BODY_LEVELS["suave"]
+
+DESCRIBE_SRC = ("Describe this photo in ONE English paragraph (max 70 words) so an image model can redraw it IDENTICALLY: "
+                "pose and framing, every garment with colors and patterns, accessories (watch, jewelry, phone and its "
+                "color), hair style, background objects and colors, lighting. Do NOT describe the person's face, body "
+                "shape, age or ethnicity. Return JSON {\"description\": ...}.")
+
+
+async def _describe_source(path: str) -> str:
+    """Lo que hay en la foto original (ropa, reloj, fondo, luz) para que al redibujar no invente nada."""
+    from app import llm
+    from app.media import image_block
+    try:
+        r = await llm.json_call(DESCRIBE_SRC, [image_block(path, 768), {"type": "text", "text": "Describe it."}],
+                                llm.obj({"description": {"type": "string"}}), agent="subject_analyst", max_tokens=400)
+        return str(r.get("description") or "").strip()[:700]
+    except Exception:  # noqa: BLE001
+        return ""
 
 SWAP_CHECK = ("You check a reference photo before a face replacement. Answer with JSON. people: true if there is at "
               "least one clearly visible human face. minor: true if ANY person could be under 18 (when in doubt, true). "
@@ -1075,10 +1096,13 @@ async def _swap_face(post_id: str, payload: dict) -> None:
         events.publish({"type": "progress", "id": post_id, "text": f"Redibujando la foto con el cuerpo de {name}"})
         if not hasattr(engine, "img2img"):
             raise ValueError("Para poner su cuerpo hace falta el motor local (ComfyUI de la placa)")
+        desc = await _describe_source(src_path)
+        level = payload.get("body_level") or "suave"
         with working.track("motor_imagen", f"Cuerpo de {name}", "Z-Image + LoRA", post_id, log=True):
             src = await engine.img2img(src, [(lora_name, strength)],
-                                       f"{trigger}, same pose, same outfit, same place and light as the photo, "
-                                       "realistic photo, natural skin texture", seed, BODY_DENOISE)
+                                       f"{trigger}, {desc or 'same pose, same outfit, same place and light as the photo'}, "
+                                       "realistic photo, natural skin texture", seed,
+                                       BODY_LEVELS.get(level, BODY_DENOISE))
     # 2) su cara, siempre desde su LoRA (nunca inventada)
     events.publish({"type": "progress", "id": post_id, "text": f"Poniéndole la cara de {name}"})
     with working.track("motor_imagen", f"Cambio de cara: {name}", "Z-Image + LoRA", post_id, log=True):

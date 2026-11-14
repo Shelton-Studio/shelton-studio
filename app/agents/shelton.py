@@ -280,7 +280,11 @@ TOOLS = [
           {"post_id": {"type": "string", "description": "La foto de referencia (subida o de la galería)"},
            "subject": {"type": "string", "description": "Modelo del banco cuya cara se pone"},
            "body": {"type": "boolean", "description": "true si pide también SU cuerpo («la cara y el cuerpo de X», "
-                    "«que sea X»): redibuja la foto entera con su LoRA y después le pone su cara"}},
+                    "«que sea X»): redibuja la foto entera con su LoRA y después le pone su cara"},
+           "body_level": {"type": "string", "enum": ["suave", "medio", "fuerte"],
+                          "description": "Cuánto cambia la foto al poner su cuerpo. suave (por defecto) = la MISMA foto "
+                          "(ropa, reloj, fondo, pose) y solo se ajusta su figura; fuerte = más ella pero puede cambiar "
+                          "detalles. Si pide «todo igual / exacta», suave."}},
           ["post_id", "subject"]),
     _tool("best_times", "Mejor hora para publicar por red y por modelo del banco (mezcla tu historial con investigación "
           "web; se actualiza cada 2 h). refresh=true la recalcula ahora.",
@@ -533,9 +537,10 @@ async def _run_tool(name: str, args: dict, ctx: dict, emit) -> list | str:
         if not sids:
             return f"No encontré a «{args['subject']}» en el banco."
         import re as _re
-        if not args.get("body") and _re.search(r"\b(cuerpo|body|que sea [a-záéíóúñ]+)", (ctx.get("user_text") or "").lower()):
+        if "body" not in args and _re.search(r"\b(cuerpo|body|que sea [a-záéíóúñ]+)", (ctx.get("user_text") or "").lower()):
             args["body"] = True        # pidió su cuerpo: se hace aunque Shelton se haya olvidado de marcarlo
-        pid = pipeline.new_swap(args["post_id"], sids[0], conv_id, bool(args.get("body")))
+        pid = pipeline.new_swap(args["post_id"], sids[0], conv_id, bool(args.get("body")),
+                                args.get("body_level") or "suave")
         return await _wait_and_report([pid], emit, f"Poniéndole {'el cuerpo y ' if args.get('body') else ''}la cara de "
                                                    f"{args['subject']}…")
 
