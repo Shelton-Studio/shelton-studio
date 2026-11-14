@@ -675,6 +675,132 @@ async def api_style(request: Request):
     return style_status()
 
 
+# ------------------------------------------------------------------ 🔁 Rehacer una imagen con una modelo
+REMAKE_LEVELS = {"suave": 0.38, "medio": 0.5, "fuerte": 0.62}
+REMAKE_FACE = 0.70
+AI_ONLY = "Confirma que la imagen está hecha con IA, que es una persona inventada (no real) y mayor de 18"
+
+
+def upload_ai_image(data: bytes, by: str, confirmed: bool) -> dict:
+    """⬆ Subir una imagen hecha con IA (de otra herramienta) para rehacerla con una modelo. Solo con la confirmación
+    de quien la sube: IA, persona inventada, mayor de 18. Queda privada (nunca a la nube ni a /media)."""
+    if not confirmed:
+        raise ValueError(AI_ONLY)
+    from io import BytesIO
+    from PIL import Image, ImageOps
+    try:
+        img = ImageOps.exif_transpose(Image.open(BytesIO(data))).convert("RGB")
+    except Exception:  # noqa: BLE001
+        raise ValueError("Ese archivo no es una imagen")
+    eid = f"sub-{uuid.uuid4().hex[:10]}"
+    name = f"{eid}.png"
+    img.save(_dir() / name, "PNG")
+    _append({"id": eid, "batch": "subidas", "at": datetime.now().isoformat(timespec="seconds"), "by": by,
+             "status": "done", "file": name, "preset": "subida", "subject": "", "subject_id": "",
+             "source": "upload", "confirmed": "IA · inventada · +18", "prompt": "Imagen subida (IA)"})
+    return {"ok": True, "id": eid}
+
+
+def remake(entry_id: str, subject_id: str, mode: str = "cara", level: str = "suave", by: str = "") -> dict:
+    """🔁 La misma imagen con la cara (o la cara y el cuerpo) de una modelo confirmada, desde sus LoRAs."""
+    e = next((x for x in entries() if x["id"] == entry_id and x.get("status") == "done" and x.get("file")), None)
+    if not e:
+        raise ValueError("Esa imagen no existe")
+    with session() as s:
+        sub = s.get(Subject, subject_id)
+        if not sub:
+            raise ValueError("Esa modelo no existe")
+        ok, why = subject_ok(sub)
+        if not ok:
+            raise ValueError(why)
+        name = sub.name
+        face = _face_lora(sub)
+    if not face:
+        raise ValueError(f"{name} necesita su LoRA de Z-Image (la de su cara) lista: entrénala en el Banco")
+    body = mode == "cuerpo"
+    eid = f"rh-{uuid.uuid4().hex[:10]}"
+    _append({"id": eid, "batch": "rehacer", "at": datetime.now().isoformat(timespec="seconds"), "by": by,
+             "status": "queued", "file": "", "preset": "rehacer", "subject": name, "subject_id": subject_id,
+             "prompt": f"{'Cara y cuerpo' if body else 'Solo cara'} de {name} sobre otra imagen",
+             "source_id": entry_id, "note": "En fila…"})
+    asyncio.get_event_loop().create_task(_remake_run(eid, e["file"], subject_id, face, body,
+                                                     REMAKE_LEVELS.get(level, REMAKE_LEVELS["suave"])))
+    return {"ok": True, "id": eid}
+
+
+def _body_lora(subject_id: str):
+    """Para el cuerpo: su 🔞 LoRA adulta (SDXL) si está lista; si no, su LoRA de Z-Image."""
+    from app import lora
+    with session() as s:
+        for x in s.query(Subject).filter(Subject.kind == "person"):
+            info = x.lora_info or {}
+            if info.get("adult_twin") and info.get("variant_of") == subject_id and _has_lora(x):
+                return "sdxl", x.lora_name, lora.strength_of(x), x.lora_trigger or ""
+    return None
+
+
+async def _remake_run(eid: str, file: str, subject_id: str, face: dict, body: bool, denoise: float) -> None:
+    import random
+    try:
+        raw = (_dir() / Path(file).name).read_bytes()
+        seed = random.randint(1, 2**31 - 1)
+        if body:
+            _append({"id": eid, "status": "running", "note": "Redibujando con su cuerpo…"})
+            adult = _body_lora(subject_id)
+            if adult:
+                ckpt = best_checkpoint(await checkpoints())
+                _cfg, eng = _engine("sdxl", ckpt)
+                loras = [(adult[1], adult[2])]
+                st = _style_lora("sdxl")
+                if st:
+                    loras.append((st[0], STYLE_STRENGTH))
+                prompt = ", ".join(x for x in [adult[3], "same pose, same scene, same framing and light", "adult"] if x)
+            else:
+                _cfg, eng = _engine("zimage", "")
+                loras = [(face["lora"], float(face.get("strength") or 1.0))]
+                prompt = ", ".join(x for x in [face.get("trigger"), "same pose, same scene, same framing and light"] if x)
+            raw = await eng.img2img(raw, loras, prompt, seed, denoise)
+        _append({"id": eid, "status": "running", "note": "Poniéndole su cara…"})
+        _cfg, zeng = _engine("zimage", "")
+        p = ", ".join(x for x in [face.get("trigger"), "photo of a woman, natural skin texture, detailed face"] if x)
+        raw = await zeng.face_pass(raw, [(face["lora"], float(face.get("strength") or 1.0))], p, seed, REMAKE_FACE)
+        f = _dir() / f"{eid}.png"
+        f.write_bytes(raw)
+        _append({"id": eid, "status": "done", "file": f.name, "seed": seed, "note": ""})
+    except Exception as e:  # noqa: BLE001
+        log.warning("Shelton Hot: no pude rehacer %s: %s", eid, e)
+        _append({"id": eid, "status": "failed", "error": str(e)[:300], "note": ""})
+
+
+class RemakeIn(BaseModel):
+    subject_id: str
+    mode: str = "cara"
+    level: str = "suave"
+
+
+@router.post("/rehacer/subir")
+async def api_upload_ai(request: Request):
+    u = _admin(request)
+    form = await request.form()
+    confirmed = str(form.get("confirm") or "") == "1"
+    out = []
+    try:
+        for f in form.getlist("files"):
+            out.append(upload_ai_image(await f.read(), (u or {}).get("username", ""), confirmed))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "ids": [x["id"] for x in out]}
+
+
+@router.post("/imagen/{entry_id}/rehacer")
+async def api_remake(entry_id: str, body: RemakeIn, request: Request):
+    u = _admin(request)
+    try:
+        return remake(entry_id, body.subject_id, body.mode, body.level, (u or {}).get("username", ""))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @router.post("/estilo/subir")
 async def api_style_upload(request: Request):
     u = _admin(request)
