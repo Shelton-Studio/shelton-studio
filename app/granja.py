@@ -17,6 +17,7 @@ from pathlib import Path
 import httpx
 from fastapi import APIRouter, HTTPException
 
+from app import events
 from app.config import settings
 from app.db import Subject, session
 
@@ -319,6 +320,83 @@ async def _upload(c: httpx.AsyncClient, node: dict, jid: str, path: str, data: b
     r = await c.post(f"{node['url']}/jobs/{jid}/file", params={"path": path}, content=data, headers=_headers(node))
     if r.status_code != 200:
         raise RuntimeError(f"No pude subir {path} a {node['label']}: {r.text[:150]}")
+
+
+_orphan_seen: dict[str, int] = {}     # jid → cuántas revisiones seguidas lo vimos sin dueño
+
+
+def _subject_for_job(name: str):
+    from app import lora
+    with session() as s:
+        for x in s.query(Subject):
+            if lora.job_for(x.id, x.name) == name:
+                return x.id, x.lora_status, dict(x.lora_info or {}), x.name, x.lora_trigger or ""
+    return None
+
+
+async def reconcile_orphans() -> list[dict]:
+    """Entrenamientos que siguen corriendo en una tarjeta alquilada pero Shelton no sigue (pasa si Shelton se reinició
+    o se canceló algo mientras esperaba). Si esa modelo está en la fila o entrenando, Shelton se reconecta a ese mismo
+    trabajo (no se pierde lo avanzado). Si se canceló o ya no corresponde, lo detiene: libera el lugar y deja de gastar."""
+    from app import lora
+    done = []
+    tracked = {jid for _, jid in _remote_jobs.values()}
+    for node in remote_nodes():
+        h = await health(node, fresh=True)
+        if not h.get("ok"):
+            continue
+        for job in h.get("running") or []:
+            jid = job.get("id")
+            if not jid or jid in tracked:
+                _orphan_seen.pop(jid, None)
+                continue
+            _orphan_seen[jid] = _orphan_seen.get(jid, 0) + 1
+            if _orphan_seen[jid] < 2:            # se confirma en la revisión siguiente (evita cruces al arrancar)
+                continue
+            _orphan_seen.pop(jid, None)
+            hit = _subject_for_job(job.get("name") or "")
+            if hit and hit[1] in ("queued", "training"):
+                sid, _st, info, name, trigger = hit
+                steps = int(job.get("total") or info.get("steps") or 0)
+                _update_rj(sid, node, jid, steps, name, trigger, info)
+                task = asyncio.get_event_loop().create_task(lora._resume(sid, {"kind": "remote", "node": node, "jid": jid}))
+                lora._tasks[sid] = task
+                tracked.add(jid)
+                log.info("Reconectado a %s en %s (seguía entrenando)", name, node["label"])
+                done.append({"action": "reconectado", "name": name, "node": node["label"]})
+            else:
+                try:
+                    async with _client(10) as c:
+                        await c.post(f"{node['url']}/jobs/{jid}/cancel", headers=_headers(node))
+                    log.info("Detuve un entrenamiento sin dueño en %s (%s)", node["label"], job.get("name"))
+                    done.append({"action": "detenido", "name": hit[3] if hit else job.get("name"), "node": node["label"]})
+                except Exception:  # noqa: BLE001
+                    log.warning("No pude detener el trabajo %s en %s", jid, node["label"])
+    if done:
+        _health.clear()
+        events.publish({"type": "granja_fix", "items": done})
+    return done
+
+
+def _update_rj(sid: str, node: dict, jid: str, steps: int, name: str, trigger: str, info: dict) -> None:
+    from app.lora import _update
+    from app import lora
+    _update(sid, lora_status="training",
+            info={"remote_job": {"conn_id": node.get("conn_id"), "jid": jid, "t0": time.time(), "steps": steps,
+                                 "ctx": {"name": name, "trigger": trigger, "job": lora.job_for(sid, name),
+                                         "base": int(info.get("from_step") or 0), "n": int(info.get("images") or 0)}},
+                  "steps": steps, "where": node["label"],
+                  "phase": f"Reconectado: seguía entrenando en {node['label']}"})
+
+
+async def reconcile_loop() -> None:
+    await asyncio.sleep(20)
+    while True:
+        try:
+            await reconcile_orphans()
+        except Exception:  # noqa: BLE001
+            log.exception("revisión de entrenamientos sin dueño")
+        await asyncio.sleep(45)
 
 
 def cancel_remote(subject_id: str) -> None:

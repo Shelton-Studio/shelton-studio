@@ -526,7 +526,7 @@ async def _pre(subject_id: str, mode: str, base: int, profile: str = "estandar")
         await asyncio.to_thread(_archive_old_output, subject_id, job_name)
         base = 0
     captions = None
-    if profile == "pro" or _detailed_captions_on() or brief_for(subject_id):
+    if profile == "pro" or _detailed_captions_on() or brief_for(subject_id) or _learns_identity(subject_id):
         try:
             _update(subject_id, info={"phase": "Describiendo cada foto (pose, ropa, luz, fondo)"})
             captions = await caption_photos(subject_id, trigger)
@@ -849,6 +849,16 @@ def _comfy_urls_for_gpu(gpu: str | None) -> list[str]:
     if str(gpu) == "0" and settings.COMFYUI_URL not in same:
         same.append(settings.COMFYUI_URL)
     return sorted(set(same))
+
+
+def _learns_identity(subject_id: str) -> bool:
+    """Personas, mascotas y criaturas: cada foto se describe (ropa, lugar, luz) para que la LoRA aprenda SU cara y no
+    se quede pegada a la ropa de las fotos. Si el Analista está apagado, se entrena como siempre."""
+    from app.agents import registry
+    with session() as s:
+        sub = s.get(Subject, subject_id)
+        kind = sub.kind if sub else ""
+    return kind in ("person", "pet", "creature") and registry.is_on("subject_analyst")
 
 
 def brief_for(subject_id: str) -> str:

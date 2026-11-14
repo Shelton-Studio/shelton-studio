@@ -109,6 +109,18 @@ def _busy_slots() -> set:
     return {j["slot"] for j in _jobs.values() if j.get("status") in ("running",) and j.get("slot") is not None}
 
 
+def _stop(pid: int) -> None:
+    """Detiene el entrenamiento entero (el proceso y todo lo que lanzó), para que la GPU quede libre de verdad."""
+    import signal
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGTERM)
+    except OSError:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+
+
 def _run_job(jid: str) -> None:
     job = _jobs[jid]
     d = JOBS / jid
@@ -118,7 +130,7 @@ def _run_job(jid: str) -> None:
     job["phase"] = "Cargando el modelo"
     with open(d / "train.log", "a", encoding="utf-8") as log:
         proc = subprocess.Popen([_python(), "-u", "run.py", str(d / "config.json")], cwd=str(AITK), env=env,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
         job["pid"] = proc.pid
         buf = b""
         while True:
@@ -267,7 +279,7 @@ class Handler(BaseHTTPRequestHandler):
                 j["status"] = "canceled"
                 if j.get("pid"):
                     try:
-                        os.kill(j["pid"], 15)
+                        _stop(j["pid"])
                     except OSError:
                         pass
                 return self._send(200, {"ok": True})
@@ -295,7 +307,7 @@ class Handler(BaseHTTPRequestHandler):
             j = _jobs.pop(parts[1], None)
             if j and j.get("pid") and j.get("status") == "running":
                 try:
-                    os.kill(j["pid"], 15)
+                    _stop(j["pid"])
                 except OSError:
                     pass
             shutil.rmtree(JOBS / parts[1], ignore_errors=True)     # las fotos no quedan en esta máquina

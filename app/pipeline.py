@@ -337,7 +337,10 @@ async def _create_post(post_id: str, payload: dict) -> None:
                 loras, refs = found, []
                 lora_note = ("The recurring subject(s) below are LEARNED by the image model (custom LoRA). Write each "
                              "one's trigger word EXACTLY where that subject appears in the prompt, then describe the new "
-                             "scene, pose, outfit, light and camera. Do not mention reference images.\n" +
+                             "scene, pose, outfit, light and camera. Do not mention reference images. ALWAYS invent a NEW "
+                             "outfit (garments, colors, fabrics, accessories) and a NEW place for this post: never reuse "
+                             "the clothes or settings of the subject's own photos or description, unless the user asked "
+                             "for that exact outfit. No two posts should look like duplicates.\n" +
                              "\n".join(f"- {s.name} ({s.kind}): trigger `{t}` — {s.description[:400]}"
                                         + (f" Lessons: {_tr.subject_knowledge(s.id)}" if _tr.subject_knowledge(s.id) else "")
                                         for s, (_, t) in zip(subjects, found)))

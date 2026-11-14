@@ -43,6 +43,8 @@ async def lifespan(_: FastAPI):
     gpu_meter = asyncio.create_task(consumo.sample_loop())
     from app import inactividad
     idle_trainer = asyncio.create_task(inactividad.loop())     # 🌙 entrena sola cuando no hay nadie
+    from app import granja as _granja
+    orphans = asyncio.create_task(_granja.reconcile_loop())    # nada queda entrenando a escondidas en la RTX
 
     async def _engine_check():
         # en segundo plano: si la placa está ocupada (entrenando) o ComfyUI tarda, Shelton abre igual al instante
@@ -64,6 +66,7 @@ async def lifespan(_: FastAPI):
     network.cancel()
     gpu_meter.cancel()
     idle_trainer.cancel()
+    orphans.cancel()
     translator_setup.cancel()
     engine_check.cancel()
     await pipeline.stop_workers()
