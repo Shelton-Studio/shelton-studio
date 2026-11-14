@@ -530,3 +530,60 @@ def test_rtx_with_network_volume_play_builds_a_machine_and_pause_releases_it(mon
         raise AssertionError("no debía soltar una máquina sin Network Volume")
     with session() as s:
         s.delete(s.get(Connection, cid))
+
+
+def test_ghost_trainings_on_the_rtx_are_reconnected_or_stopped(monkeypatch):
+    """Entrenamientos que siguen corriendo en la RTX sin que Shelton los siga: si la modelo está en la fila, se
+    reconecta a ese mismo trabajo; si se canceló, se detiene (libera el lugar y deja de gastar)."""
+    import asyncio
+    from app import granja, lora
+    from app.db import Subject, init_db, session
+    init_db()
+    with session() as s:
+        a = Subject(name="Fantasma Uno", kind="person", lora_status="queued", lora_info={"steps": 3000, "images": 20})
+        b = Subject(name="Fantasma Dos", kind="person", lora_status="canceled")
+        s.add_all([a, b])
+        s.flush()
+        ida, idb = a.id, b.id
+    node = {"id": "node:g1", "conn_id": "g1", "label": "RTX", "url": "http://x", "token": "t", "slots": 3}
+    monkeypatch.setattr(granja, "remote_nodes", lambda: [node])
+    running = [{"id": "jobA", "name": lora.job_for(ida), "step": 900, "total": 3000},
+               {"id": "jobB", "name": lora.job_for(idb), "step": 50, "total": 1000}]
+
+    async def fake_health(n, fresh=False):
+        return {"ok": True, "running": running}
+    monkeypatch.setattr(granja, "health", fake_health)
+    resumed, canceled = [], []
+
+    async def fake_resume(sid, item):
+        resumed.append((sid, item["jid"]))
+    monkeypatch.setattr(lora, "_resume", fake_resume)
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, **k):
+            canceled.append(url)
+    monkeypatch.setattr(granja, "_client", lambda t=30: FakeClient())
+    granja._remote_jobs.clear()
+
+    async def go():
+        assert await granja.reconcile_orphans() == []           # la primera vez solo lo anota
+        out = await granja.reconcile_orphans()
+        await asyncio.sleep(0)
+        return out
+    out = asyncio.run(go())
+    assert {x["action"] for x in out} == {"reconectado", "detenido"}
+    assert resumed == [(ida, "jobA")] and canceled == ["http://x/jobs/jobB/cancel"]
+    with session() as s:
+        sa = s.get(Subject, ida)
+        assert sa.lora_status == "training" and sa.lora_info["remote_job"]["jid"] == "jobA"
+        s.delete(sa)
+        s.delete(s.get(Subject, idb))
