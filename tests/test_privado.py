@@ -606,3 +606,16 @@ def test_adult_lora_can_choose_where_to_train_and_be_canceled(monkeypatch):
     with TestClient(app) as c:
         assert c.post(f"/api/privado/modelo/{sid}/lora-adulta/cancelar").json()["ok"]
     assert canceled == [tw]
+
+
+def test_hot_shows_where_the_adult_lora_is_training(monkeypatch):
+    from app import granja, lora
+    sid = _subject("Dondeves")
+    privado.confirm(sid, "admin", True, True)
+    tw = privado.adult_twin_id(sid)
+    monkeypatch.setattr(granja, "remote_nodes", lambda: [{"id": "node:rtx", "label": "RTX PRO 6000 250G"}])
+    lora._update(tw, lora_status="queued", info={"prefer_slot": "node:rtx"})
+    m = next(x for x in privado.models() if x["id"] == sid)
+    assert m["adult"]["where"] == "RTX PRO 6000 250G"
+    lora._update(tw, lora_status="training", info={"where": "RTX PRO 6000 250G"})
+    assert next(x for x in privado.models() if x["id"] == sid)["adult"]["where"] == "RTX PRO 6000 250G"

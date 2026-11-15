@@ -127,14 +127,25 @@ def models() -> list[dict]:
                         "usable": ok, "why": why, "base": base_of(sub.id),
                         "lora_ready": _has_lora(sub), "variant_of": (sub.lora_info or {}).get("variant_of", ""),
                         "status": sub.lora_status or "", "progress": round(sub.lora_progress or 0),
+                        "where": (sub.lora_info or {}).get("where", "") or (sub.lora_info or {}).get("prefer_slot", ""),
                         "private_photos": len((sub.lora_info or {}).get("private_refs") or [])})
             if out[-1]["private_photos"] and not (sub.lora_info or {}).get("adult_twin"):
                 out[-1]["_check_new"] = True
             out[-1]["adult_twin"] = bool((sub.lora_info or {}).get("adult_twin"))
+    # dónde entrena (si eligieron una tarjeta y todavía espera en la fila, se muestra su nombre)
+    try:
+        from app import granja
+        labels = {n["id"]: n["label"] for n in granja.remote_nodes()}
+    except Exception:  # noqa: BLE001
+        labels = {}
+    for m in out:
+        if m.get("where", "").startswith("node:"):
+            m["where"] = labels.get(m["where"], "RTX")
     # cada modelo muestra el estado de su 🔞 LoRA adulta (privada, solo de Shelton Hot)
     for m in out:
         twin = next((x for x in out if x["variant_of"] == m["id"] and x["adult_twin"]), None)
-        m["adult"] = ({"id": twin["id"], "ready": twin["lora_ready"], "status": twin["status"], "progress": twin["progress"]}
+        m["adult"] = ({"id": twin["id"], "ready": twin["lora_ready"], "status": twin["status"], "progress": twin["progress"],
+                       "where": twin.get("where", "")}
                       if twin else None)
         m["new_photos"] = 0
         if m.pop("_check_new", False) and twin and twin["lora_ready"]:
