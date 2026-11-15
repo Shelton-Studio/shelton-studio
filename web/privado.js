@@ -184,7 +184,10 @@ VIEWS.privado = async (el) => {
   };
   paintStyle();
   $$("[data-pvphotos]", el).forEach((b) => b.onclick = () => privateDialog(b.dataset.pvphotos, b.dataset.pvname));
-  $$("[data-pvsamples]", el).forEach((b) => b.onclick = () => { localStorage.setItem("mu-model", b.dataset.pvsamples); localStorage.setItem("mu-arch", "0"); go("muestras"); });
+  $$("[data-pvsamples]", el).forEach((b) => b.onclick = () => {
+    const m = models.find((x) => x.adult && x.adult.id === b.dataset.pvsamples);
+    hotSamples(b.dataset.pvsamples, m ? m.name : "");
+  });
   $$("[data-pvadultx]", el).forEach((b) => b.onclick = async () => {
     if (!confirm("¿Cancelar el entrenamiento de su LoRA adulta? Lo que ya aprendió queda guardado.")) return;
     try { await api(`/api/privado/modelo/${b.dataset.pvadultx}/lora-adulta/cancelar`, { method: "POST" }); toast("Entrenamiento cancelado", "good", "✕"); route(); }
@@ -402,4 +405,33 @@ function adultLiveMore(a) {
       📸 última muestra <b>#${String(a.sample.n).padStart(4, "0")}</b> · ${Number(a.sample.step).toLocaleString("es")} pasos</span>`
     : (a.status === "training" ? `<span class="faint small" style="margin-left:8px">📸 la primera muestra sale al paso ${Math.max(100, Math.ceil(((a.step || 0) + 1) / 100) * 100).toLocaleString("es")}</span>` : "");
   return phase + smp;
+}
+
+
+// 📸 Panel de muestras de la LoRA adulta, dentro de Shelton Hot (se actualiza solo mientras está abierto)
+async function hotSamples(twin, name) {
+  const box = modal(`📸 Muestras de la 🔞 LoRA adulta · ${esc(name)}`, `<div class="hint">Una foto cada 100 pasos mientras entrena, con su número y sus pasos.
+      <b>⭐ Usar esta</b> deja esa versión exacta; <b>📦</b> la archiva y <b>🗑</b> la borra.</div><div id="hs-grid"></div>`,
+    `<button class="btn ghost" onclick="closeModal()">Cerrar</button>`, true);
+  const paint = async () => {
+    const g = $("#hs-grid", box); if (!g || !document.body.contains(box)) return false;
+    let d;
+    try { d = await api(`/api/subjects/${twin}/lora/muestras`); } catch (e) { g.innerHTML = `<div class="faint small">${esc(e.message)}</div>`; return true; }
+    g.innerHTML = d.samples.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-top:10px">${d.samples.map((x) => `
+      <div class="card" style="padding:6px"><div style="position:relative">
+        <img src="${esc(x.url)}" loading="lazy" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;cursor:zoom-in;display:block" data-hszoom="${esc(x.url)}">
+        <span style="position:absolute;left:6px;bottom:6px;padding:3px 8px;border-radius:99px;background:rgba(0,0,0,.65);color:#fff;font-size:12px;font-weight:700">#${String(x.n).padStart(4, "0")} · ${Number(x.step).toLocaleString("es")} pasos</span>
+        <span style="position:absolute;right:6px;top:6px;display:flex;gap:6px">
+          <button class="icon-btn" data-hsarc="${x.n}" title="Archivar" style="width:32px;height:32px;background:rgba(0,0,0,.65);color:#fff">📦</button>
+          <button class="icon-btn" data-hsdel="${x.n}" title="Eliminar" style="width:32px;height:32px;background:rgba(0,0,0,.65);color:#fff">🗑</button></span></div>
+        ${d.pinned === x.n ? '<span class="chip good" style="margin-top:6px">⭐ En uso</span>' : `<button class="btn sm" data-hsuse="${x.n}" style="width:100%;margin-top:6px">⭐ Usar esta</button>`}</div>`).join("")}</div>`
+      : `<div class="faint small" style="margin-top:10px">Todavía no hay muestras. Salen solas mientras entrena (una cada ${d.every || 100} pasos); esta ventana se actualiza sola.</div>`;
+    $$("[data-hszoom]", g).forEach((im) => im.onclick = () => window.open(im.dataset.hszoom, "_blank"));
+    $$("[data-hsuse]", g).forEach((b) => b.onclick = async () => { try { const r = await api(`/api/subjects/${twin}/lora/muestras/${b.dataset.hsuse}/usar`, { method: "POST" }); toast(`Listo: ${esc(r.label)} es la versión activa`, "good", "⭐"); paint(); } catch (e) { toast(esc(e.message), "bad"); } });
+    $$("[data-hsarc]", g).forEach((b) => b.onclick = async () => { try { await api(`/api/subjects/${twin}/lora/muestras/${b.dataset.hsarc}/archivar?on=1`, { method: "POST" }); paint(); } catch (e) { toast(esc(e.message), "bad"); } });
+    $$("[data-hsdel]", g).forEach((b) => b.onclick = async () => { if (!confirm("¿Eliminar esta foto?")) return; try { await api(`/api/subjects/${twin}/lora/muestras/${b.dataset.hsdel}`, { method: "DELETE" }); paint(); } catch (e) { toast(esc(e.message), "bad"); } });
+    return true;
+  };
+  await paint();
+  const t = setInterval(async () => { if (!(await paint())) clearInterval(t); }, 15000);
 }
