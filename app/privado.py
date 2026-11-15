@@ -135,6 +135,7 @@ def models() -> list[dict]:
                         "eta_min": (sub.lora_info or {}).get("eta_min"),
                         "phase": (sub.lora_info or {}).get("phase", ""),
                         "error": (sub.lora_info or {}).get("error", ""),
+                        "trigger": sub.lora_trigger or "",
                         "private_photos": len((sub.lora_info or {}).get("private_refs") or [])})
             if out[-1]["private_photos"] and not (sub.lora_info or {}).get("adult_twin"):
                 out[-1]["_check_new"] = True
@@ -154,7 +155,8 @@ def models() -> list[dict]:
         m["adult"] = ({"id": twin["id"], "ready": twin["lora_ready"], "status": twin["status"], "progress": twin["progress"],
                        "where": twin.get("where", ""), "step": twin["step"], "steps": twin["steps"],
                        "trained_steps": twin["trained_steps"], "finished": twin["finished"], "eta_min": twin["eta_min"],
-                       "phase": twin["phase"], "error": twin["error"], "sample": _last_sample(twin["id"])}
+                       "phase": twin["phase"], "error": twin["error"], "trigger": twin["trigger"],
+                       "sample": _last_sample(twin["id"])}
                       if twin else None)
         m["new_photos"] = 0
         if m.pop("_check_new", False) and twin and twin["lora_ready"]:

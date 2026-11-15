@@ -63,6 +63,7 @@ VIEWS.privado = async (el) => {
         <div class="pv-tr">
           <label class="f">Pedido <span class="faint small">(en español)</span><textarea id="pv-prompt" rows="5" placeholder="Describe la escena: pose, lugar, luz, cámara…"></textarea></label>
           <label class="f" id="pv-en-box">En inglés <span class="faint small" id="pv-en-how">(lo que recibe SDXL · puedes corregirlo)</span><textarea id="pv-en" rows="5" placeholder="Aquí aparece la traducción mientras escribes"></textarea></label>
+          <div class="faint small" id="pv-who" style="margin-top:4px"></div>
         </div>
         <label class="f">Evitar (opcional)<input id="pv-neg" placeholder="Ej: tatuajes, ropa roja…"><span class="faint small" id="pv-neg-en"></span></label>
         <div class="row" style="gap:8px">
@@ -248,6 +249,15 @@ VIEWS.privado = async (el) => {
   $("#pv-en", el).addEventListener("input", () => { enEdited = true; });
   $("#pv-pre", el).addEventListener("change", () => { paintEnBox(); translateLive("#pv-prompt", "#pv-en", false); });
   paintEnBox();
+  // Qué le suma Shelton al inglés por la modelo elegida (el nombre no se traduce: la pone su LoRA)
+  const showWho = () => {
+    const m = models.find((x) => x.id === $("#pv-sub", el).value), box = $("#pv-who", el);
+    if (!box) return;
+    if (!m) { box.innerHTML = ""; return; }
+    const adult = m.adult && m.adult.ready ? ` + su 🔞 LoRA adulta${m.adult.trigger ? ` (<code>${esc(m.adult.trigger)}</code>)` : ""} para el cuerpo` : "";
+    box.innerHTML = `➕ <b>${esc(m.name)}</b> la pone su LoRA, no el texto: Shelton le suma su palabra clave${m.trigger ? ` <code>${esc(m.trigger)}</code>` : ""}${adult} y después su cara. Por eso su nombre no aparece en el inglés.`;
+  };
+  if ($("#pv-sub", el)) { $("#pv-sub", el).addEventListener("change", showWho); showWho(); }
   let baseId = "";
   const showBase = () => {
     $("#pv-base-x", el).style.display = baseId ? "" : "none";
