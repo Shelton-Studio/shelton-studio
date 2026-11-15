@@ -191,7 +191,7 @@ def auto_learn(sid: str) -> str:
         return ""
 
 
-def train_adult(sid: str) -> dict:
+def train_adult(sid: str, where: str = "auto") -> dict:
     """🎓 Entrenar la 🔞 LoRA adulta de una modelo: con sus fotos del Banco + sus fotos privadas. Mismo entrenamiento
     de siempre, pero queda solo en Shelton Hot. Su LoRA normal no se toca.
     Como en el Shelton normal: si la RTX está prendida va ahí (la más rápida); si no, a la placa. En la RTX las fotos
@@ -206,7 +206,15 @@ def train_adult(sid: str) -> dict:
             raise ValueError(why)
         name = sub.name
     twin_id = adult_twin_id(sid)
-    node = next((n for n in granja.remote_nodes() if (granja._health.get(n["id"]) or (0, {}))[1].get("ok")), None)
+    online = [n for n in granja.remote_nodes() if (granja._health.get(n["id"]) or (0, {}))[1].get("ok")]
+    if where == "placa":
+        node = None
+    elif where and where != "auto":                     # una tarjeta elegida (la RTX 6000)
+        node = next((n for n in granja.remote_nodes() if n["id"] == where), None)
+        if not node:
+            raise ValueError("Esa tarjeta no está conectada: préndela en Granja")
+    else:
+        node = online[0] if online else None
     r = lora.start_on(twin_id, node["id"]) if node else lora.start(twin_id)
     return {**r, "twin": twin_id, "name": f"{name} · {ADULT_MARK}", "where": node["label"] if node else "la placa"}
 
@@ -333,7 +341,7 @@ async def generate(by: str, prompt: str, subject_id: str = "", preset: str = "sd
     prompt_en, how = prompt, ""
     if preset in ("sdxl", "flux"):
         from app import traductor
-        prompt_en, how = await traductor.to_english(prompt)
+        prompt_en, how = await traductor.to_english(clean_for_translation(prompt) or prompt)
         neg_en, _ = await traductor.to_english(negative or "")
         if negative and neg_en:
             neg = ", ".join(x for x in [neg_en, SDXL_NEGATIVE, SAFE_NEGATIVE] if x)
@@ -354,8 +362,11 @@ async def generate(by: str, prompt: str, subject_id: str = "", preset: str = "sd
     asyncio.get_event_loop().create_task(_run(batch, count, engine, cfg, full, neg, w, h, loras, face))
     return {"batch": batch, "count": count, "with_lora": bool(loras), "translated": how, "prompt_en": prompt_en,
             "note": "" if loras or not subject_id else
-            f"{name} todavía no tiene LoRA para {ENGINES[preset]}: sale sin su cara. "
-            f"Pídela sin elegir motor (uso el de su LoRA) o créale la versión {ENGINES[preset]} en el Banco."}
+            (f"{name}: su cara se la pongo después con su LoRA de siempre, pero el cuerpo sale genérico del "
+             f"checkpoint. Para que también sea SU cuerpo, entrena su 🔞 LoRA adulta (Opciones avanzadas → "
+             f"🎓 Entrenar LoRA adulta)." if face else
+             f"{name} todavía no tiene LoRA para {ENGINES[preset]}: sale sin su cara. "
+             f"Pídela sin elegir motor (uso el de su LoRA) o créale la versión {ENGINES[preset]} en el Banco.")}
 
 
 def _gpu_reason(url: str) -> str:
@@ -655,12 +666,25 @@ class TranslateIn(BaseModel):
     text: str = ""
 
 
+def clean_for_translation(text: str) -> str:
+    """Antes de traducir: fuera los nombres de las modelos (su LoRA ya la pone; «Valentina» se traducía «valentine»)
+    y el «hazme / quiero que hagas» del principio (el motor no lo entiende)."""
+    t = text or ""
+    with session() as s:
+        names = sorted({x.name.split(" · ")[0] for x in s.query(Subject) if x.name}, key=len, reverse=True)
+    for n in names:
+        t = re.sub(rf"\b(a\s+)?{re.escape(n)}\b", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"^\s*(hazme|haz|genera(me)?|cr[eé]ame|crea|quiero( que (hagas|generes))?|dame)\b", "", t,
+               flags=re.IGNORECASE)
+    return re.sub(r"\s{2,}", " ", t).strip(" ,.;:")
+
+
 @router.post("/traducir")
 async def api_translate(body: TranslateIn, request: Request):
     """Traducción en vivo mientras se escribe (en la placa, sin nube), para ver qué recibe SDXL/Flux."""
     _admin(request)
     from app import traductor
-    en, how = await traductor.to_english(body.text[:2000])
+    en, how = await traductor.to_english(clean_for_translation(body.text[:2000]))
     return {"en": en, "how": how, "status": traductor.status()}
 
 
@@ -842,13 +866,42 @@ async def api_prepare_adult(sid: str, request: Request):
     return {"twin": adult_twin_id(sid)}
 
 
+class AdultTrainIn(BaseModel):
+    where: str = "auto"
+
+
 @router.post("/modelo/{sid}/lora-adulta")
-async def api_train_adult(sid: str, request: Request):
+async def api_train_adult(sid: str, request: Request, body: AdultTrainIn | None = None):
     _admin(request)
     try:
-        return train_adult(sid)
+        return train_adult(sid, (body.where if body else "auto") or "auto")
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@router.post("/modelo/{sid}/lora-adulta/cancelar")
+async def api_cancel_adult(sid: str, request: Request):
+    """✕ Cancelar el entrenamiento de su 🔞 LoRA adulta (lo ya aprendido queda guardado)."""
+    _admin(request)
+    from app import lora
+    twin = next((m["adult"] for m in models() if m["id"] == sid and m.get("adult")), None)
+    if not twin:
+        raise HTTPException(404, "No hay LoRA adulta entrenando")
+    lora.cancel(twin["id"])
+    return {"ok": True}
+
+
+@router.get("/tarjetas")
+async def api_cards(request: Request):
+    """Tarjetas conectadas para elegir dónde entrenar (la placa siempre está)."""
+    _admin(request)
+    from app import granja
+    out = []
+    for n in granja.remote_nodes():
+        h = await granja.health(n)
+        if h.get("ok"):
+            out.append({"id": n["id"], "label": n["label"]})
+    return out
 
 
 @router.post("/estilo/entrenar")
@@ -1049,7 +1102,49 @@ def usable_names() -> list[str]:
     return [m["name"] for m in models() if m["usable"]]
 
 
+# ------------------------------------------------------------------ 💬 Conversaciones de Shelton Hot (privadas)
+def _threads_file() -> Path:
+    return _dir() / "conversaciones.json"
+
+
+def threads() -> list[dict]:
+    try:
+        rows = json.loads(_threads_file().read_text(encoding="utf-8")) if _threads_file().exists() else []
+    except ValueError:
+        rows = []
+    return sorted(rows, key=lambda t: t.get("updated", ""), reverse=True)
+
+
+def _save_threads(rows: list[dict]) -> None:
+    _threads_file().write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def new_thread(by: str = "") -> dict:
+    now = datetime.now().isoformat(timespec="seconds")
+    t = {"id": uuid.uuid4().hex[:10], "title": "Nueva conversación", "by": by, "created": now, "updated": now, "messages": []}
+    _save_threads(threads() + [t])
+    return t
+
+
+def add_message(tid: str, who: str, text: str) -> None:
+    rows = threads()
+    t = next((x for x in rows if x["id"] == tid), None)
+    if not t:
+        return
+    t["messages"] = (t.get("messages") or []) + [{"who": who, "text": text[:4000],
+                                                   "at": datetime.now().isoformat(timespec="seconds")}]
+    if who == "me" and t.get("title") == "Nueva conversación":
+        t["title"] = text[:60]
+    t["updated"] = datetime.now().isoformat(timespec="seconds")
+    _save_threads(rows)
+
+
+def delete_thread(tid: str) -> None:
+    _save_threads([x for x in threads() if x["id"] != tid])
+
+
 class ChatIn(BaseModel):
+    thread_id: str = ""
     text: str
     image_id: str = ""
     ckpt: str = ""
@@ -1058,10 +1153,45 @@ class ChatIn(BaseModel):
 @router.post("/chat")
 async def api_chat(body: ChatIn, request: Request):
     u = _admin(request)
+    if body.thread_id:
+        add_message(body.thread_id, "me", body.text)
     try:
-        return await chat(u.get("username", ""), body.text, body.image_id, body.ckpt)
+        out = await chat(u.get("username", ""), body.text, body.image_id, body.ckpt)
     except ValueError as e:
+        if body.thread_id:
+            add_message(body.thread_id, "bot err", f"⚠ {e}")
         raise HTTPException(400, str(e))
+    if body.thread_id:
+        add_message(body.thread_id, "bot", out.get("reply", ""))
+    return out
+
+
+@router.get("/conversaciones")
+async def api_threads(request: Request):
+    _admin(request)
+    return [{k: t[k] for k in ("id", "title", "updated")} for t in threads()]
+
+
+@router.post("/conversaciones")
+async def api_new_thread(request: Request):
+    u = _admin(request)
+    return new_thread((u or {}).get("username", ""))
+
+
+@router.get("/conversaciones/{tid}")
+async def api_thread(tid: str, request: Request):
+    _admin(request)
+    t = next((x for x in threads() if x["id"] == tid), None)
+    if not t:
+        raise HTTPException(404, "Esa conversación no existe")
+    return t
+
+
+@router.delete("/conversaciones/{tid}")
+async def api_delete_thread(tid: str, request: Request):
+    _admin(request)
+    delete_thread(tid)
+    return {"ok": True}
 
 
 

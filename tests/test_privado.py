@@ -561,3 +561,48 @@ def test_choosing_a_checkpoint_in_hot_chat_forces_sdxl_with_her_face(monkeypatch
     assert got == {"preset": "sdxl", "ckpt": "cyberrealistic.safetensors", "subject_id": sid}
     asyncio.run(privado.chat("admin", "una foto de Chkpt en la cama"))
     assert got["preset"] == "zimage"                               # sin checkpoint elegido, como siempre
+
+
+def test_hot_chat_keeps_several_conversations_and_can_delete_them():
+    """💬 Shelton Hot: varias conversaciones guardadas en la placa; se puede empezar de cero y borrar."""
+    a = privado.new_thread("admin")
+    b = privado.new_thread("admin")
+    privado.add_message(a["id"], "me", "3 fotos de Luna en un loft")
+    privado.add_message(a["id"], "bot", "Listo")
+    t = next(x for x in privado.threads() if x["id"] == a["id"])
+    assert t["title"] == "3 fotos de Luna en un loft" and len(t["messages"]) == 2
+    assert privado.threads()[0]["id"] == a["id"]                  # la más reciente primero
+    privado.delete_thread(a["id"])
+    assert all(x["id"] != a["id"] for x in privado.threads()) and any(x["id"] == b["id"] for x in privado.threads())
+    assert (privado._threads_file()).parent == privado._dir()     # privadas, junto a lo de Shelton Hot
+
+
+def test_model_names_are_not_translated():
+    """«hazme a Valentina en la playa» → no se traduce «Valentina» (salía «valentine»): su LoRA ya la pone."""
+    _subject("Valentinax")
+    out = privado.clean_for_translation("hazme a Valentinax en la playa, luz de ventana")
+    assert "valentinax" not in out.lower() and not out.lower().startswith("hazme") and "playa" in out
+
+
+def test_adult_lora_can_choose_where_to_train_and_be_canceled(monkeypatch):
+    """🎓 LoRA adulta: elegir placa o la RTX (como en el otro Shelton) y ✕ cancelar."""
+    from app import granja, lora
+    sid = _subject("Donde")
+    privado.confirm(sid, "admin", True, True)
+    node = {"id": "node:rtx", "label": "RTX PRO 6000", "slots": 3}
+    monkeypatch.setattr(granja, "remote_nodes", lambda: [node])
+    monkeypatch.setitem(granja._health, "node:rtx", (9e18, {"ok": True}))
+    calls, canceled = [], []
+    monkeypatch.setattr(lora, "start", lambda i, *a, **k: calls.append(("placa", i)) or {"ok": True})
+    monkeypatch.setattr(lora, "start_on", lambda i, n, **k: calls.append((n, i)) or {"ok": True})
+    monkeypatch.setattr(lora, "cancel", lambda i: canceled.append(i))
+    assert privado.train_adult(sid, "placa")["where"] == "la placa"
+    assert privado.train_adult(sid, "node:rtx")["where"] == "RTX PRO 6000"
+    assert privado.train_adult(sid)["where"] == "RTX PRO 6000"                 # automático: la RTX si está prendida
+    tw = privado.adult_twin_id(sid)
+    assert [c[0] for c in calls] == ["placa", "node:rtx", "node:rtx"] and all(c[1] == tw for c in calls)
+    from fastapi.testclient import TestClient
+    from app.main import app
+    with TestClient(app) as c:
+        assert c.post(f"/api/privado/modelo/{sid}/lora-adulta/cancelar").json()["ok"]
+    assert canceled == [tw]
