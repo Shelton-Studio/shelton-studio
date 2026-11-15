@@ -359,6 +359,9 @@ async def generate(by: str, prompt: str, subject_id: str = "", preset: str = "sd
     if st:
         loras = [*loras, (st[0], STYLE_STRENGTH)]
         trigger = ", ".join(x for x in [trigger, st[1]] if x)
+    if int(count or 1) == 1 and (re.search(r"\b(varias|muchas|several|many|various)\b", prompt, re.IGNORECASE)
+                                 or _wants_variety(prompt)):
+        count = MAX_COUNT          # pidió varias y la cantidad quedó en 1: hace la tanda completa
     count = max(1, min(int(count or 1), MAX_COUNT))
     w, h = SIZES.get(size, SIZES["vertical"])
     if preset == "sdxl" and not ckpt:
@@ -722,7 +725,14 @@ def clean_for_translation(text: str) -> str:
         t = re.sub(rf"\b(a\s+)?{re.escape(n)}\b", who, t, flags=re.IGNORECASE)
     t = re.sub(r"^\s*(necesito|quiero|me gustar[ií]a)( que (me )?(hagas|generes|crees))?\b", "", t, flags=re.IGNORECASE)
     t = re.sub(r"^\s*(hazme|haz|genera(me)?|cr[eé]ame|crea|dame)\b", "", t, flags=re.IGNORECASE)
+    many = bool(re.search(r"\b(muchas|varias)\s+(im[aá]genes|fotos)", t, re.IGNORECASE))
     t = re.sub(r"^\s*(muchas|varias|unas|\d+)\s+(im[aá]genes|fotos)\s+(de\s+)?", "", t, flags=re.IGNORECASE)
+    # «todas diferentes / distintas / variadas» → «en distintas poses» (se traduce bien y cada foto sale distinta)
+    varied = bool(re.search(r"\b(todas|todos)?\s*(diferentes|distintas|distintos|variadas|variados)\b", t, re.IGNORECASE))
+    t = re.sub(r"\b(todas|todos)\s+(diferentes|distintas|distintos|variadas|variados)\s*(de\s+)?", "", t,
+               flags=re.IGNORECASE)
+    if (varied or many) and not re.search(r"(posiciones|poses)", t, re.IGNORECASE):
+        t = f"{t.strip(' ,.;:')}, en distintas poses"
     t = re.sub(r"(una mujer)(\s*,?\s*una mujer)+", r"\1", t, flags=re.IGNORECASE)
     return re.sub(r"\s{2,}", " ", t).strip(" ,.;:")
 
