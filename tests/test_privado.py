@@ -655,3 +655,24 @@ def test_hot_row_says_why_the_adult_lora_failed():
     lora._update(tw, lora_status="failed", info={"error": "La GPU se quedó sin memoria"})
     a = next(x for x in privado.models() if x["id"] == sid)["adult"]
     assert a["status"] == "failed" and "memoria" in a["error"]
+
+
+
+def test_many_photos_in_different_poses_get_a_different_pose_each(monkeypatch):
+    import asyncio
+    _subject("Poses Hot")
+    out = privado.clean_for_translation("necesito que me hagas muchas imagenes de Poses Hot en distintas posiciones y poses")
+    assert not out.lower().startswith(("necesito", "muchas")) and out.startswith("una mujer")
+    seen = []
+
+    class Eng:
+        values = {"generate": {}}
+        url = ""
+
+        async def generate(self, prompt, w, h, seed):
+            seen.append(prompt)
+            return _png("red")
+    monkeypatch.setattr(privado, "_gpu_reason", lambda u: "")
+    ids = [f"pz-{i}" for i in range(4)]
+    asyncio.run(privado._run_ids(ids, Eng(), {}, "a woman in different positions and poses", "", 64, 64, []))
+    assert len(set(seen)) == 4 and all(p.startswith("a woman") for p in seen)
