@@ -22,6 +22,9 @@ VIEWS.privado = async (el) => {
   el.innerHTML = pageHead("🔞", "Shelton Studio · Shelton Hot", "Contenido adulto con las modelos del banco. Todo se genera en la placa: no pasa por la nube, no se publica y solo lo ven los administradores.") + `
     <div class="card pv-rules"><b>Reglas:</b> solo modelos <b>inventadas</b> (no personas reales) y <b>mayores de 18</b>. Cualquier pedido que mencione menores se bloquea.</div>
     <div class="card pv-chat" style="margin-top:14px">
+      <div class="row" style="gap:8px;margin-bottom:8px"><select id="pv-thread" class="grow" title="Conversaciones de Shelton Hot"></select>
+        <button class="btn sm" id="pv-thread-new" title="Empezar una conversación nueva, de cero">➕ Nueva</button>
+        <button class="btn sm ghost" id="pv-thread-del" title="Borrar esta conversación (las imágenes quedan en la galería)">🗑</button></div>
       <div id="pv-msgs" class="pv-msgs"><div class="pv-msg bot">Hola, soy Shelton en Shelton Hot. Pídeme como siempre, por ejemplo: <i>«3 fotos de ${esc((models.find((m) => m.usable) || {}).name || "Luna")} en un loft, luz de ventana, formato historia»</i>. Si nombras a una modelo confirmada, uso su LoRA.</div></div>
       <form id="pv-form" class="row" style="gap:8px;margin-top:10px"><label class="btn" title="Subir una imagen hecha con IA para ponerle la cara o el cuerpo de una modelo (también Ctrl+V o arrastrar)">📎 Subir imagen<input type="file" id="pv-chatup" accept="image/*" hidden></label><select id="pv-chatsub" style="width:auto;max-width:180px" title="Modelo para este pedido (si no la nombras en el mensaje)"><option value="">Modelo: la que nombre</option>${models.filter((m) => m.usable && !m.variant_of && !m.adult_twin).map((m) => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join("")}</select><select id="pv-chatckpt" style="width:auto;max-width:200px" title="Checkpoint SDXL / Pony para este pedido"><option value="">Checkpoint: el mejor</option>${(st.checkpoints || []).map((c) => `<option>${esc(c)}</option>`).join("")}</select><input id="pv-text" class="grow" placeholder="Escríbele a Shelton… (o sube 📎 una imagen IA y dile «ponle la cara»)" autocomplete="off"><button class="btn primary">Enviar</button></form>
     </div>
@@ -33,7 +36,7 @@ VIEWS.privado = async (el) => {
           <b class="grow">${esc(m.name)}</b>
           ${m.lora_ready ? `<span class="chip" title="Su LoRA de siempre (la cara)">${esc(m.base.toUpperCase())}</span>` : ""}
           ${m.usable ? `<button class="btn sm ghost" data-pvphotos="${esc(m.id)}" data-pvname="${esc(m.name)}" title="Sus fotos privadas: súbelas aquí para que su LoRA adulta aprenda de ellas">📷 Sus fotos (${m.private_photos || 0})${m.new_photos ? ` · ${m.new_photos} nuevas` : ""}</button>` : ""}
-          ${!m.usable ? "" : m.adult && ["training", "queued"].includes(m.adult.status) ? `<span class="chip warn">🔞 LoRA adulta: ${m.adult.status === "queued" ? "en fila" : `aprendiendo ${m.adult.progress}%`}</span>`
+          ${!m.usable ? "" : m.adult && ["training", "queued"].includes(m.adult.status) ? `<span class="chip warn">🔞 LoRA adulta: ${m.adult.status === "queued" ? "en fila" : `aprendiendo ${m.adult.progress}%`}</span><button class="btn sm ghost" data-pvadultx="${esc(m.id)}" title="Cancelar (lo ya aprendido queda guardado)">✕ Cancelar</button>`
             : m.adult && m.adult.ready ? `<span class="chip good" title="Su LoRA adulta: se usa sola al nombrarla. Vive solo aquí">🔞 LoRA adulta lista</span><button class="btn sm ghost" data-pvadult="${esc(m.id)}" title="Seguir entrenando (suma sobre lo aprendido)">🎓 Seguir</button>`
             : `<button class="btn sm" data-pvadult="${esc(m.id)}" title="Entrena su LoRA adulta con sus fotos y sus fotos privadas (en la RTX si está prendida; si no, en la placa). Queda solo en Shelton Hot; su LoRA normal no se toca">🎓 Entrenar LoRA adulta</button>`}
           ${m.usable ? '<span class="chip good">Confirmada</span>' : m.confirmed ? `<span class="chip bad" title="${esc(m.why)}">Bloqueada</span>`
@@ -166,20 +169,28 @@ VIEWS.privado = async (el) => {
   };
   paintStyle();
   $$("[data-pvphotos]", el).forEach((b) => b.onclick = () => privateDialog(b.dataset.pvphotos, b.dataset.pvname));
+  $$("[data-pvadultx]", el).forEach((b) => b.onclick = async () => {
+    if (!confirm("¿Cancelar el entrenamiento de su LoRA adulta? Lo que ya aprendió queda guardado.")) return;
+    try { await api(`/api/privado/modelo/${b.dataset.pvadultx}/lora-adulta/cancelar`, { method: "POST" }); toast("Entrenamiento cancelado", "good", "✕"); route(); }
+    catch (e) { toast(esc(e.message), "bad"); }
+  });
   $$("[data-pvadult]", el).forEach((b) => b.onclick = async () => {
     const sid = b.dataset.pvadult, name = (models.find((m) => m.id === sid) || {}).name || "";
     let twin;
     try { twin = (await api(`/api/privado/modelo/${sid}/lora-adulta/preparar`, { method: "POST" })).twin; }
     catch (e) { return toast(esc(e.message), "bad"); }
     const box = modal(`🎓 Entrenar la 🔞 LoRA adulta de ${esc(name)}`,
-      `<div class="hint">Aprende con sus fotos y sus 🔞 fotos privadas. Queda solo en Shelton Hot; su LoRA normal no se toca.</div><div id="pv-brief"></div>`,
+      `<div class="hint">Aprende con sus fotos y sus 🔞 fotos privadas. Queda solo en Shelton Hot; su LoRA normal no se toca.</div>
+       <label class="f">¿Dónde entrenar?<select id="pv-where"><option value="auto">Automático (la RTX si está prendida; si no, la placa)</option><option value="placa">🦎 La placa (3090)</option></select></label>
+       <div id="pv-brief"></div>`,
       `<button class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn primary" id="pv-train-go">🎓 Empezar</button>`);
+    api("/api/privado/tarjetas").then((cards) => cards.forEach((c) => $("#pv-where", box)?.insertAdjacentHTML("beforeend", `<option value="${esc(c.id)}">⚡ ${esc(c.label)} (cobra por hora)</option>`))).catch(() => {});
     let bp = null;
     if (typeof briefPanel === "function") { bp = await briefPanel(twin, { photos: false }); /* sus fotos privadas van por «📷 Sus fotos» (nunca a /media) */ $("#pv-brief", box).append(bp.el); }
     $("#pv-train-go", box).onclick = async (ev) => {
       ev.target.disabled = true;
       try { if (bp) await bp.save(); } catch { ev.target.disabled = false; return; }
-      try { const r = await api(`/api/privado/modelo/${sid}/lora-adulta`, { method: "POST" }); closeModal(); toast(`Entrenando ${esc(r.name)} en ${esc(r.where)}`, "good", "🎓"); route(); }
+      try { const r = await api(`/api/privado/modelo/${sid}/lora-adulta`, { method: "POST", body: { where: $("#pv-where", box).value } }); closeModal(); toast(`Entrenando ${esc(r.name)} en ${esc(r.where)}`, "good", "🎓"); route(); }
       catch (e) { toast(esc(e.message), "bad"); ev.target.disabled = false; }
     };
   });
@@ -249,6 +260,29 @@ VIEWS.privado = async (el) => {
       refresh();
     } catch (e) { toast(esc(e.message), "bad"); }
   };
+  // 💬 Conversaciones: varias, como en el otro Shelton. Se guardan en la placa (privadas).
+  let threadId = localStorage.getItem("pv-thread") || "";
+  const welcomeHTML = $("#pv-msgs", el).innerHTML;
+  const loadThreads = async (pick) => {
+    let list = [];
+    try { list = await api("/api/privado/conversaciones"); } catch { return; }
+    if (!list.length) { try { const t = await api("/api/privado/conversaciones", { method: "POST" }); list = [t]; } catch { return; } }
+    threadId = pick || (list.some((t) => t.id === threadId) ? threadId : list[0].id);
+    localStorage.setItem("pv-thread", threadId);
+    $("#pv-thread", el).innerHTML = list.map((t) => `<option value="${esc(t.id)}" ${t.id === threadId ? "selected" : ""}>${esc(t.title)} · ${esc((t.updated || "").replace("T", " ").slice(0, 16))}</option>`).join("");
+    let t = { messages: [] };
+    try { t = await api(`/api/privado/conversaciones/${threadId}`); } catch {}
+    $("#pv-msgs", el).innerHTML = welcomeHTML + (t.messages || []).map((m) => `<div class="pv-msg ${esc(m.who)}">${esc(m.text)}</div>`).join("");
+    $("#pv-msgs", el).scrollTop = 1e9;
+  };
+  $("#pv-thread", el).onchange = (ev) => loadThreads(ev.target.value);
+  $("#pv-thread-new", el).onclick = async () => { try { const t = await api("/api/privado/conversaciones", { method: "POST" }); loadThreads(t.id); } catch (e) { toast(esc(e.message), "bad"); } };
+  $("#pv-thread-del", el).onclick = async () => {
+    if (!threadId || !confirm("¿Borrar esta conversación? Las imágenes que salieron de ella quedan en la galería.")) return;
+    try { await api(`/api/privado/conversaciones/${threadId}`, { method: "DELETE" }); threadId = ""; loadThreads(); toast("Conversación borrada", "good", "🗑"); }
+    catch (e) { toast(esc(e.message), "bad"); }
+  };
+  loadThreads();
   const say = (who, html) => { const m = document.createElement("div"); m.className = `pv-msg ${who}`; m.innerHTML = html; $("#pv-msgs", el).append(m); $("#pv-msgs", el).scrollTop = 1e9; };
   let chatImage = "";
   const chatUpload = async (f) => {
@@ -281,7 +315,7 @@ VIEWS.privado = async (el) => {
     if (pick && !t.toLowerCase().includes(pick.toLowerCase())) {   // la modelo elegida arriba, si no la nombró
       send = /\b(cara|rostro|cuerpo)\b/i.test(t) ? `${t} de ${pick}` : `${pick}: ${t}`;
     }
-    try { const r = await api("/api/privado/chat", { method: "POST", body: { text: send, image_id: chatImage, ckpt: $("#pv-chatckpt", el).value } }); say("bot", esc(r.reply)); if (r.batch === "rehacer") chatImage = ""; refresh(); }
+    try { const r = await api("/api/privado/chat", { method: "POST", body: { thread_id: threadId, text: send, image_id: chatImage, ckpt: $("#pv-chatckpt", el).value } }); say("bot", esc(r.reply)); if (r.batch === "rehacer") chatImage = ""; refresh(); }
     catch (e) { say("bot err", "⚠ " + esc(e.message)); }
   };
   if (privTimer) clearInterval(privTimer);
