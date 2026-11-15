@@ -36,7 +36,7 @@ VIEWS.privado = async (el) => {
           <b class="grow">${esc(m.name)}</b>
           ${m.lora_ready ? `<span class="chip" title="Su LoRA de siempre (la cara)">${esc(m.base.toUpperCase())}</span>` : ""}
           ${m.usable ? `<button class="btn sm ghost" data-pvphotos="${esc(m.id)}" data-pvname="${esc(m.name)}" title="Sus fotos privadas: súbelas aquí para que su LoRA adulta aprenda de ellas">📷 Sus fotos (${m.private_photos || 0})${m.new_photos ? ` · ${m.new_photos} nuevas` : ""}</button>` : ""}
-          ${!m.usable ? "" : m.adult && ["training", "queued"].includes(m.adult.status) ? `<span class="chip warn">🔞 LoRA adulta: ${m.adult.status === "queued" ? "en fila" : `aprendiendo ${m.adult.progress}%${m.adult.step ? ` · paso ${Number(m.adult.step).toLocaleString("es")} de ${Number(m.adult.steps).toLocaleString("es")}` : ""}${m.adult.eta_min != null ? ` · faltan ~${m.adult.eta_min} min` : ""}`}${m.adult.where ? (/placa|^local/i.test(m.adult.where) ? " · 🦎 placa" : ` · ⚡ ${esc(m.adult.where)}`) : ""}</span><button class="btn sm ghost" data-pvadultx="${esc(m.id)}" title="Cancelar (lo ya aprendido queda guardado)">✕ Cancelar</button><button class="btn sm ghost" data-pvsamples="${esc(m.adult.id)}" title="Fotos de prueba de su LoRA adulta (una cada 100 pasos)">📸 Muestras</button>`
+          ${!m.usable ? "" : m.adult && ["training", "queued"].includes(m.adult.status) ? `<span class="chip warn" id="pv-al-${esc(m.id)}">${adultLiveText(m.adult)}</span><button class="btn sm ghost" data-pvadultx="${esc(m.id)}" title="Cancelar (lo ya aprendido queda guardado)">✕ Cancelar</button><button class="btn sm ghost" data-pvsamples="${esc(m.adult.id)}" title="Fotos de prueba de su LoRA adulta (una cada 100 pasos)">📸 Muestras</button><div id="pv-alx-${esc(m.id)}" style="flex-basis:100%">${adultLiveMore(m.adult)}</div>`
             : m.adult && m.adult.ready ? `<span class="chip good" title="Su LoRA adulta: se usa sola al nombrarla. Vive solo aquí">🔞 LoRA adulta lista${m.adult.trained_steps ? ` · ${Number(m.adult.trained_steps).toLocaleString("es")} pasos` : ""}${m.adult.finished ? ` · ${esc(m.adult.finished.replace("T", " ").slice(5, 16))}` : ""}</span><button class="btn sm ghost" data-pvadult="${esc(m.id)}" title="Seguir entrenando (suma sobre lo aprendido)">🎓 Seguir</button><button class="btn sm ghost" data-pvsamples="${esc(m.adult.id)}" title="Fotos de prueba de su LoRA adulta (una cada 100 pasos)">📸 Muestras</button>`
             : `<button class="btn sm" data-pvadult="${esc(m.id)}" title="Entrena su LoRA adulta con sus fotos y sus fotos privadas (en la RTX si está prendida; si no, en la placa). Queda solo en Shelton Hot; su LoRA normal no se toca">🎓 Entrenar LoRA adulta</button>`}
           ${m.usable ? '<span class="chip good">Confirmada</span>' : m.confirmed ? `<span class="chip bad" title="${esc(m.why)}">Bloqueada</span>`
@@ -139,7 +139,22 @@ VIEWS.privado = async (el) => {
     try { const r = await api("/api/privado/rehacer/subir", { method: "POST", body: fd }); toast(`Subidas ${r.ids.length}: toca 🔁 en una para rehacerla con una modelo`, "good", "⬆"); refresh(); }
     catch (e) { toast(esc(e.message), "bad"); }
   };
-  const refresh = async () => { try { paintGrid((await api("/api/privado/estado")).entries || []); } catch {} };
+  const refresh = async () => {
+    let st2;
+    try { st2 = await api("/api/privado/estado"); } catch { return; }
+    paintGrid(st2.entries || []);
+    // 🎓 la LoRA adulta en vivo: qué hace, paso X de Y, minutos y la última muestra (sin redibujar la página)
+    let changed = false;
+    (st2.models || []).forEach((m) => {
+      const before = models.find((x) => x.id === m.id);
+      const was = before && before.adult ? before.adult.status : "", now = m.adult ? m.adult.status : "";
+      if (was !== now && ["training", "queued"].includes(was) !== ["training", "queued"].includes(now)) changed = true;
+      const chip = document.getElementById(`pv-al-${m.id}`), more = document.getElementById(`pv-alx-${m.id}`);
+      if (m.adult && chip) chip.innerHTML = adultLiveText(m.adult);
+      if (m.adult && more) more.innerHTML = adultLiveMore(m.adult);
+    });
+    if (changed && !document.querySelector("#modal:not(.hidden)")) route();      // empezó o terminó: se redibuja una vez
+  };
   paintGrid(st.entries || []);
   $("#pv-filter", el).onchange = () => paintGrid(lastList);
   const paintStyle = async () => {        // 🎓 LoRA propia de Shelton Hot
@@ -370,4 +385,21 @@ async function privateDialog(sid, name) {
   };
   $$("[data-pvadd]", box).forEach((b) => b.onclick = async () => { try { await api(`/api/privado/modelo/${sid}/fotos`, { method: "POST", body: { entry_id: b.dataset.pvadd } }); privateDialog(sid, name); } catch (e) { toast(esc(e.message), "bad"); } });
   $$("[data-pvrm]", box).forEach((b) => b.onclick = async () => { await api(`/api/privado/modelo/${sid}/quitar`, { method: "POST", body: { file: b.dataset.pvrm } }); privateDialog(sid, name); });
+}
+
+
+// 🎓 LoRA adulta en vivo (fila de cada modelo en Shelton Hot)
+function adultLiveText(a) {
+  if (a.status === "queued") return `🔞 LoRA adulta: en fila${a.where ? ` · ⚡ ${esc(a.where)}` : ""}`;
+  const where = a.where ? (/placa|^local/i.test(a.where) ? " · 🦎 placa" : ` · ⚡ ${esc(a.where)}`) : "";
+  if (!a.step) return `🔞 LoRA adulta: preparando…${where}`;
+  return `🔞 LoRA adulta: ${a.progress}% · paso ${Number(a.step).toLocaleString("es")} de ${Number(a.steps).toLocaleString("es")}${a.eta_min != null ? ` · faltan ~${a.eta_min} min` : ""}${where}`;
+}
+function adultLiveMore(a) {
+  const phase = a.phase && !/paso \d/.test(a.phase) ? `<span class="faint small">⏳ ${esc(a.phase)}</span>` : "";
+  const smp = a.sample ? `<span class="row small" style="gap:6px;display:inline-flex;align-items:center;margin-left:8px">
+      <img src="${esc(a.sample.url)}" style="width:44px;height:44px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="window.open('${esc(a.sample.url)}','_blank')">
+      📸 última muestra <b>#${String(a.sample.n).padStart(4, "0")}</b> · ${Number(a.sample.step).toLocaleString("es")} pasos</span>`
+    : (a.status === "training" ? `<span class="faint small" style="margin-left:8px">📸 la primera muestra sale al paso ${Math.max(100, Math.ceil(((a.step || 0) + 1) / 100) * 100).toLocaleString("es")}</span>` : "");
+  return phase + smp;
 }
