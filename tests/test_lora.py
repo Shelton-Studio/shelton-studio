@@ -470,3 +470,12 @@ def test_uses_last_lora_while_retraining(monkeypatch, tmp_path):
     assert lora.loras_for([sub]) == []                       # todavía no hay archivo: primera vez
     (tmp_path / "pam.safetensors").write_bytes(b"x")
     assert lora.loras_for([sub]) == [("pam.safetensors", "pmx")]
+
+
+
+def test_sdxl_on_a_rented_card_uses_the_hugging_face_name_not_the_placa_path():
+    """En la RTX la ruta de la placa (/root/ComfyUI/...) no existe: el modelo base de SDXL va por su nombre en HF."""
+    remote = lora.config_dict("job", "__JOB__", "tok", 1000, "pro", "sdxl")["config"]["process"][0]["model"]
+    local = lora.config_dict("job", "/w", "tok", 1000, "estandar", "sdxl")["config"]["process"][0]["model"]
+    assert remote["name_or_path"] == lora.SDXL_TRAIN_REMOTE and remote["is_xl"]
+    assert local["name_or_path"].endswith(".safetensors")
