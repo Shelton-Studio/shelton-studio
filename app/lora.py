@@ -199,11 +199,19 @@ def base_of(subject_id: str) -> str:
     return b if b in BASES else "zimage"
 
 
-def _arch_parts(base: str, pf: dict, trigger: str) -> tuple[dict, dict, dict]:
+SDXL_TRAIN_REMOTE = "SG161222/RealVisXL_V5.0"     # el mismo RealVisXL V5.0, por su nombre en Hugging Face
+
+
+def _arch_parts(base: str, pf: dict, trigger: str, remote: bool = False) -> tuple[dict, dict, dict]:
     """(modelo, ajustes de entrenamiento, muestras) de ai-toolkit para cada modelo base."""
     if base == "sdxl":
-        ckpt = os.getenv("SDXL_TRAIN_MODEL") or str(Path(settings.COMFY_LORA_DIR).expanduser().parent / "checkpoints"
-                                                     / os.getenv("SDXL_CKPT", "RealVisXL_V5.0_fp16.safetensors"))
+        if remote:
+            # En una tarjeta alquilada la ruta de la placa (/root/ComfyUI/...) no existe: se pide el modelo base por su
+            # nombre en Hugging Face y la tarjeta lo baja la primera vez (queda guardado en su disco).
+            ckpt = os.getenv("SDXL_TRAIN_MODEL_REMOTE", SDXL_TRAIN_REMOTE)
+        else:
+            ckpt = os.getenv("SDXL_TRAIN_MODEL") or str(Path(settings.COMFY_LORA_DIR).expanduser().parent / "checkpoints"
+                                                         / os.getenv("SDXL_CKPT", "RealVisXL_V5.0_fp16.safetensors"))
         return ({"name_or_path": ckpt, "is_xl": True, "quantize": False},
                 {"noise_scheduler": "ddpm", "lr": 1e-4},
                 {"sampler": "ddpm", "sample_every": 100000, "width": 1024, "height": 1024,
@@ -239,7 +247,7 @@ def config_dict(name: str, root: str, trigger: str, steps: int, profile: str = "
     """Configuración de ai-toolkit. root = carpeta de trabajo (local o la del nodo remoto).
     base: zimage (por defecto, la de siempre), sdxl o flux (las «versiones» de un modelo para esos motores)."""
     pf = PROFILES.get(profile, PROFILES["estandar"])
-    model, train_extra, sample = _arch_parts(base, pf, trigger)
+    model, train_extra, sample = _arch_parts(base, pf, trigger, remote=(root == "__JOB__"))
     cfg = {"job": "extension", "config": {"name": name, "process": [{
         "type": "sd_trainer", "training_folder": f"{root}/output", "device": "cuda:0", "trigger_word": trigger,
         "network": {"type": "lora", "linear": pf["rank"], "linear_alpha": pf["rank"]},
