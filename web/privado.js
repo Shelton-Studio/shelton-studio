@@ -36,7 +36,7 @@ VIEWS.privado = async (el) => {
           <b class="grow">${esc(m.name)}</b>
           ${m.lora_ready ? `<span class="chip" title="Su LoRA de siempre (la cara)">${esc(m.base.toUpperCase())}</span>` : ""}
           ${m.usable ? `<button class="btn sm ghost" data-pvphotos="${esc(m.id)}" data-pvname="${esc(m.name)}" title="Sus fotos privadas: súbelas aquí para que su LoRA adulta aprenda de ellas">📷 Sus fotos (${m.private_photos || 0})${m.new_photos ? ` · ${m.new_photos} nuevas` : ""}</button>` : ""}
-          ${!m.usable ? "" : m.adult && ["training", "queued"].includes(m.adult.status) ? `<span class="chip warn">🔞 LoRA adulta: ${m.adult.status === "queued" ? "en fila" : `aprendiendo ${m.adult.progress}%${m.adult.step ? ` · paso ${Number(m.adult.step).toLocaleString("es")} de ${Number(m.adult.steps).toLocaleString("es")}` : ""}${m.adult.eta_min != null ? ` · faltan ~${m.adult.eta_min} min` : ""}`}${m.adult.where ? (/placa|^local/i.test(m.adult.where) ? " · 🦎 placa" : ` · ⚡ ${esc(m.adult.where)}`) : ""}</span><button class="btn sm ghost" data-pvadultx="${esc(m.id)}" title="Cancelar (lo ya aprendido queda guardado)">✕ Cancelar</button><button class="btn sm ghost" data-pvsamples="${esc(m.adult.id)}" title="Fotos de prueba de su LoRA adulta (una cada 100 pasos)">📸 Muestras</button>`
+          ${!m.usable ? "" : m.adult && ["training", "queued"].includes(m.adult.status) ? `<span class="chip warn" id="pv-al-${esc(m.id)}">${adultLiveText(m.adult)}</span><button class="btn sm ghost" data-pvadultx="${esc(m.id)}" title="Cancelar (lo ya aprendido queda guardado)">✕ Cancelar</button><button class="btn sm ghost" data-pvsamples="${esc(m.adult.id)}" title="Fotos de prueba de su LoRA adulta (una cada 100 pasos)">📸 Muestras</button><div id="pv-alx-${esc(m.id)}" style="flex-basis:100%">${adultLiveMore(m.adult)}</div>`
             : m.adult && m.adult.ready ? `<span class="chip good" title="Su LoRA adulta: se usa sola al nombrarla. Vive solo aquí">🔞 LoRA adulta lista${m.adult.trained_steps ? ` · ${Number(m.adult.trained_steps).toLocaleString("es")} pasos` : ""}${m.adult.finished ? ` · ${esc(m.adult.finished.replace("T", " ").slice(5, 16))}` : ""}</span><button class="btn sm ghost" data-pvadult="${esc(m.id)}" title="Seguir entrenando (suma sobre lo aprendido)">🎓 Seguir</button><button class="btn sm ghost" data-pvsamples="${esc(m.adult.id)}" title="Fotos de prueba de su LoRA adulta (una cada 100 pasos)">📸 Muestras</button>`
             : `<button class="btn sm" data-pvadult="${esc(m.id)}" title="Entrena su LoRA adulta con sus fotos y sus fotos privadas (en la RTX si está prendida; si no, en la placa). Queda solo en Shelton Hot; su LoRA normal no se toca">🎓 Entrenar LoRA adulta</button>`}
           ${m.usable ? '<span class="chip good">Confirmada</span>' : m.confirmed ? `<span class="chip bad" title="${esc(m.why)}">Bloqueada</span>`
@@ -139,7 +139,22 @@ VIEWS.privado = async (el) => {
     try { const r = await api("/api/privado/rehacer/subir", { method: "POST", body: fd }); toast(`Subidas ${r.ids.length}: toca 🔁 en una para rehacerla con una modelo`, "good", "⬆"); refresh(); }
     catch (e) { toast(esc(e.message), "bad"); }
   };
-  const refresh = async () => { try { paintGrid((await api("/api/privado/estado")).entries || []); } catch {} };
+  const refresh = async () => {
+    let st2;
+    try { st2 = await api("/api/privado/estado"); } catch { return; }
+    paintGrid(st2.entries || []);
+    // 🎓 la LoRA adulta en vivo: qué hace, paso X de Y, minutos y la última muestra (sin redibujar la página)
+    let changed = false;
+    (st2.models || []).forEach((m) => {
+      const before = models.find((x) => x.id === m.id);
+      const was = before && before.adult ? before.adult.status : "", now = m.adult ? m.adult.status : "";
+      if (was !== now && ["training", "queued"].includes(was) !== ["training", "queued"].includes(now)) changed = true;
+      const chip = document.getElementById(`pv-al-${m.id}`), more = document.getElementById(`pv-alx-${m.id}`);
+      if (m.adult && chip) chip.innerHTML = adultLiveText(m.adult);
+      if (m.adult && more) more.innerHTML = adultLiveMore(m.adult);
+    });
+    if (changed && !document.querySelector("#modal:not(.hidden)")) route();      // empezó o terminó: se redibuja una vez
+  };
   paintGrid(st.entries || []);
   $("#pv-filter", el).onchange = () => paintGrid(lastList);
   const paintStyle = async () => {        // 🎓 LoRA propia de Shelton Hot
@@ -169,7 +184,10 @@ VIEWS.privado = async (el) => {
   };
   paintStyle();
   $$("[data-pvphotos]", el).forEach((b) => b.onclick = () => privateDialog(b.dataset.pvphotos, b.dataset.pvname));
-  $$("[data-pvsamples]", el).forEach((b) => b.onclick = () => { localStorage.setItem("mu-model", b.dataset.pvsamples); localStorage.setItem("mu-arch", "0"); go("muestras"); });
+  $$("[data-pvsamples]", el).forEach((b) => b.onclick = () => {
+    const m = models.find((x) => x.adult && x.adult.id === b.dataset.pvsamples);
+    hotSamples(b.dataset.pvsamples, m ? m.name : "");
+  });
   $$("[data-pvadultx]", el).forEach((b) => b.onclick = async () => {
     if (!confirm("¿Cancelar el entrenamiento de su LoRA adulta? Lo que ya aprendió queda guardado.")) return;
     try { await api(`/api/privado/modelo/${b.dataset.pvadultx}/lora-adulta/cancelar`, { method: "POST" }); toast("Entrenamiento cancelado", "good", "✕"); route(); }
@@ -370,4 +388,50 @@ async function privateDialog(sid, name) {
   };
   $$("[data-pvadd]", box).forEach((b) => b.onclick = async () => { try { await api(`/api/privado/modelo/${sid}/fotos`, { method: "POST", body: { entry_id: b.dataset.pvadd } }); privateDialog(sid, name); } catch (e) { toast(esc(e.message), "bad"); } });
   $$("[data-pvrm]", box).forEach((b) => b.onclick = async () => { await api(`/api/privado/modelo/${sid}/quitar`, { method: "POST", body: { file: b.dataset.pvrm } }); privateDialog(sid, name); });
+}
+
+
+// 🎓 LoRA adulta en vivo (fila de cada modelo en Shelton Hot)
+function adultLiveText(a) {
+  if (a.status === "queued") return `🔞 LoRA adulta: en fila${a.where ? ` · ⚡ ${esc(a.where)}` : ""}`;
+  const where = a.where ? (/placa|^local/i.test(a.where) ? " · 🦎 placa" : ` · ⚡ ${esc(a.where)}`) : "";
+  if (!a.step) return `🔞 LoRA adulta: preparando…${where}`;
+  return `🔞 LoRA adulta: ${a.progress}% · paso ${Number(a.step).toLocaleString("es")} de ${Number(a.steps).toLocaleString("es")}${a.eta_min != null ? ` · faltan ~${a.eta_min} min` : ""}${where}`;
+}
+function adultLiveMore(a) {
+  const phase = a.phase && !/paso \d/.test(a.phase) ? `<span class="faint small">⏳ ${esc(a.phase)}</span>` : "";
+  const smp = a.sample ? `<span class="row small" style="gap:6px;display:inline-flex;align-items:center;margin-left:8px">
+      <img src="${esc(a.sample.url)}" style="width:44px;height:44px;object-fit:cover;border-radius:8px;cursor:zoom-in" onclick="window.open('${esc(a.sample.url)}','_blank')">
+      📸 última muestra <b>#${String(a.sample.n).padStart(4, "0")}</b> · ${Number(a.sample.step).toLocaleString("es")} pasos</span>`
+    : (a.status === "training" ? `<span class="faint small" style="margin-left:8px">📸 la primera muestra sale al paso ${Math.max(100, Math.ceil(((a.step || 0) + 1) / 100) * 100).toLocaleString("es")}</span>` : "");
+  return phase + smp;
+}
+
+
+// 📸 Panel de muestras de la LoRA adulta, dentro de Shelton Hot (se actualiza solo mientras está abierto)
+async function hotSamples(twin, name) {
+  const box = modal(`📸 Muestras de la 🔞 LoRA adulta · ${esc(name)}`, `<div class="hint">Una foto cada 100 pasos mientras entrena, con su número y sus pasos.
+      <b>⭐ Usar esta</b> deja esa versión exacta; <b>📦</b> la archiva y <b>🗑</b> la borra.</div><div id="hs-grid"></div>`,
+    `<button class="btn ghost" onclick="closeModal()">Cerrar</button>`, true);
+  const paint = async () => {
+    const g = $("#hs-grid", box); if (!g || !document.body.contains(box)) return false;
+    let d;
+    try { d = await api(`/api/subjects/${twin}/lora/muestras`); } catch (e) { g.innerHTML = `<div class="faint small">${esc(e.message)}</div>`; return true; }
+    g.innerHTML = d.samples.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-top:10px">${d.samples.map((x) => `
+      <div class="card" style="padding:6px"><div style="position:relative">
+        <img src="${esc(x.url)}" loading="lazy" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;cursor:zoom-in;display:block" data-hszoom="${esc(x.url)}">
+        <span style="position:absolute;left:6px;bottom:6px;padding:3px 8px;border-radius:99px;background:rgba(0,0,0,.65);color:#fff;font-size:12px;font-weight:700">#${String(x.n).padStart(4, "0")} · ${Number(x.step).toLocaleString("es")} pasos</span>
+        <span style="position:absolute;right:6px;top:6px;display:flex;gap:6px">
+          <button class="icon-btn" data-hsarc="${x.n}" title="Archivar" style="width:32px;height:32px;background:rgba(0,0,0,.65);color:#fff">📦</button>
+          <button class="icon-btn" data-hsdel="${x.n}" title="Eliminar" style="width:32px;height:32px;background:rgba(0,0,0,.65);color:#fff">🗑</button></span></div>
+        ${d.pinned === x.n ? '<span class="chip good" style="margin-top:6px">⭐ En uso</span>' : `<button class="btn sm" data-hsuse="${x.n}" style="width:100%;margin-top:6px">⭐ Usar esta</button>`}</div>`).join("")}</div>`
+      : `<div class="faint small" style="margin-top:10px">Todavía no hay muestras. Salen solas mientras entrena (una cada ${d.every || 100} pasos); esta ventana se actualiza sola.</div>`;
+    $$("[data-hszoom]", g).forEach((im) => im.onclick = () => window.open(im.dataset.hszoom, "_blank"));
+    $$("[data-hsuse]", g).forEach((b) => b.onclick = async () => { try { const r = await api(`/api/subjects/${twin}/lora/muestras/${b.dataset.hsuse}/usar`, { method: "POST" }); toast(`Listo: ${esc(r.label)} es la versión activa`, "good", "⭐"); paint(); } catch (e) { toast(esc(e.message), "bad"); } });
+    $$("[data-hsarc]", g).forEach((b) => b.onclick = async () => { try { await api(`/api/subjects/${twin}/lora/muestras/${b.dataset.hsarc}/archivar?on=1`, { method: "POST" }); paint(); } catch (e) { toast(esc(e.message), "bad"); } });
+    $$("[data-hsdel]", g).forEach((b) => b.onclick = async () => { if (!confirm("¿Eliminar esta foto?")) return; try { await api(`/api/subjects/${twin}/lora/muestras/${b.dataset.hsdel}`, { method: "DELETE" }); paint(); } catch (e) { toast(esc(e.message), "bad"); } });
+    return true;
+  };
+  await paint();
+  const t = setInterval(async () => { if (!(await paint())) clearInterval(t); }, 15000);
 }

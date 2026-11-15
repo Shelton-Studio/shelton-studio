@@ -1256,7 +1256,7 @@ async def run_scout(kinds: tuple[str, ...] = ("trend", "tool")) -> int:
     from app.db import Finding
     with session() as s:
         brand = get_or_create_brand(s)
-        subjects = s.query(Subject).all()
+        subjects = [x for x in s.query(Subject).all() if not adult_only(x)]
         known = [f.title for f in s.query(Finding).order_by(Finding.created_at.desc()).limit(80)]
     total = 0
     for kind in kinds:

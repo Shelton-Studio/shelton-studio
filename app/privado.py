@@ -133,6 +133,7 @@ def models() -> list[dict]:
                         "trained_steps": int((sub.lora_info or {}).get("trained_steps") or 0),
                         "finished": (sub.lora_info or {}).get("finished", ""),
                         "eta_min": (sub.lora_info or {}).get("eta_min"),
+                        "phase": (sub.lora_info or {}).get("phase", ""),
                         "private_photos": len((sub.lora_info or {}).get("private_refs") or [])})
             if out[-1]["private_photos"] and not (sub.lora_info or {}).get("adult_twin"):
                 out[-1]["_check_new"] = True
@@ -151,7 +152,8 @@ def models() -> list[dict]:
         twin = next((x for x in out if x["variant_of"] == m["id"] and x["adult_twin"]), None)
         m["adult"] = ({"id": twin["id"], "ready": twin["lora_ready"], "status": twin["status"], "progress": twin["progress"],
                        "where": twin.get("where", ""), "step": twin["step"], "steps": twin["steps"],
-                       "trained_steps": twin["trained_steps"], "finished": twin["finished"], "eta_min": twin["eta_min"]}
+                       "trained_steps": twin["trained_steps"], "finished": twin["finished"], "eta_min": twin["eta_min"],
+                       "phase": twin["phase"], "sample": _last_sample(twin["id"])}
                       if twin else None)
         m["new_photos"] = 0
         if m.pop("_check_new", False) and twin and twin["lora_ready"]:
@@ -206,6 +208,14 @@ def auto_learn(sid: str) -> str:
         return "Aprendiendo sus fotos nuevas"
     except ValueError:
         return ""
+
+
+def _last_sample(sid: str) -> dict | None:
+    try:
+        from app import lora_muestras
+        return lora_muestras.last(sid)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def train_adult(sid: str, where: str = "auto") -> dict:

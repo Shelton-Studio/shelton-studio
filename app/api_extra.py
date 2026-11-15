@@ -21,6 +21,7 @@ from starlette.background import BackgroundTask
 from app import audio_lib, events, pipeline, reference
 from app.config import settings
 from app.db import Post, Subject, session
+from app.zona import adult_only
 
 router = APIRouter(prefix="/api")
 
@@ -313,7 +314,7 @@ async def buddy():
     from app import working
     cap = pipeline.capacity()
     with session() as s:
-        subs = s.query(Subject).order_by(Subject.created_at.desc()).all()
+        subs = [x for x in s.query(Subject).order_by(Subject.created_at.desc()).all() if not adult_only(x)]   # lo de Shelton Hot no aparece
         busy_posts = (s.query(Post).filter(Post.status.in_(["queued", "generating"]))
                       .order_by(Post.created_at.desc()).limit(20).all())
         to_review = s.query(Post).filter(Post.status == "ready").count()

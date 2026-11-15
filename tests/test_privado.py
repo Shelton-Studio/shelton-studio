@@ -632,3 +632,15 @@ def test_hot_row_shows_adult_lora_steps():
     lora._update(tw, lora_status="ready", lora_name="p.safetensors", info={"trained_steps": 3000, "finished": "2026-11-15T14:20:00"})
     a = next(x for x in privado.models() if x["id"] == sid)["adult"]
     assert a["ready"] and a["trained_steps"] == 3000 and a["finished"].startswith("2026-11-15")
+
+
+def test_adult_loras_never_show_up_in_shelton_mini_suggestions():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    sid = _subject("Oculta Mini")
+    privado.confirm(sid, "admin", True, True)
+    privado.adult_twin_id(sid)
+    with TestClient(app) as c:
+        d = c.get("/api/buddy").json()
+    text = str(d)
+    assert "🔞" not in text and "Oculta Mini · " not in text
