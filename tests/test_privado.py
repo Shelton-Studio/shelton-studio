@@ -676,3 +676,27 @@ def test_many_photos_in_different_poses_get_a_different_pose_each(monkeypatch):
     ids = [f"pz-{i}" for i in range(4)]
     asyncio.run(privado._run_ids(ids, Eng(), {}, "a woman in different positions and poses", "", 64, 64, []))
     assert len(set(seen)) == 4 and all(p.startswith("a woman") for p in seen)
+
+
+
+def test_several_all_different_photos_translate_and_count_right(monkeypatch):
+    import asyncio
+    _subject("Varias Hot")
+    out = privado.clean_for_translation("quiero varias fotos todas diferentes de Varias Hot desnuda")
+    assert out == "una mujer desnuda, en distintas poses"
+    got = {}
+
+    def fake_run(batch, count, *a, **k):
+        got["count"] = count
+
+        async def nada():
+            return None
+        return nada()
+    monkeypatch.setattr(privado, "_run", fake_run)
+    monkeypatch.setattr(privado, "_engine", lambda p, c: ({}, object()))
+    monkeypatch.setattr(privado, "_style_lora", lambda p: None)
+
+    async def go():
+        return await privado.generate("admin", "a naked woman, in different poses", preset="zimage", count=1)
+    asyncio.run(go())
+    assert got["count"] == privado.MAX_COUNT
