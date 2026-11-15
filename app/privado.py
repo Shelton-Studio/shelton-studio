@@ -128,6 +128,11 @@ def models() -> list[dict]:
                         "lora_ready": _has_lora(sub), "variant_of": (sub.lora_info or {}).get("variant_of", ""),
                         "status": sub.lora_status or "", "progress": round(sub.lora_progress or 0),
                         "where": (sub.lora_info or {}).get("where", "") or (sub.lora_info or {}).get("prefer_slot", ""),
+                        "step": int((sub.lora_info or {}).get("step") or 0),
+                        "steps": int((sub.lora_info or {}).get("steps") or 0),
+                        "trained_steps": int((sub.lora_info or {}).get("trained_steps") or 0),
+                        "finished": (sub.lora_info or {}).get("finished", ""),
+                        "eta_min": (sub.lora_info or {}).get("eta_min"),
                         "private_photos": len((sub.lora_info or {}).get("private_refs") or [])})
             if out[-1]["private_photos"] and not (sub.lora_info or {}).get("adult_twin"):
                 out[-1]["_check_new"] = True
@@ -145,7 +150,8 @@ def models() -> list[dict]:
     for m in out:
         twin = next((x for x in out if x["variant_of"] == m["id"] and x["adult_twin"]), None)
         m["adult"] = ({"id": twin["id"], "ready": twin["lora_ready"], "status": twin["status"], "progress": twin["progress"],
-                       "where": twin.get("where", "")}
+                       "where": twin.get("where", ""), "step": twin["step"], "steps": twin["steps"],
+                       "trained_steps": twin["trained_steps"], "finished": twin["finished"], "eta_min": twin["eta_min"]}
                       if twin else None)
         m["new_photos"] = 0
         if m.pop("_check_new", False) and twin and twin["lora_ready"]:

@@ -619,3 +619,16 @@ def test_hot_shows_where_the_adult_lora_is_training(monkeypatch):
     assert m["adult"]["where"] == "RTX PRO 6000 250G"
     lora._update(tw, lora_status="training", info={"where": "RTX PRO 6000 250G"})
     assert next(x for x in privado.models() if x["id"] == sid)["adult"]["where"] == "RTX PRO 6000 250G"
+
+
+def test_hot_row_shows_adult_lora_steps():
+    from app import lora
+    sid = _subject("Pasos Hot")
+    privado.confirm(sid, "admin", True, True)
+    tw = privado.adult_twin_id(sid)
+    lora._update(tw, lora_status="training", info={"step": 1250, "steps": 3000, "eta_min": 40})
+    a = next(x for x in privado.models() if x["id"] == sid)["adult"]
+    assert (a["step"], a["steps"], a["eta_min"]) == (1250, 3000, 40)
+    lora._update(tw, lora_status="ready", lora_name="p.safetensors", info={"trained_steps": 3000, "finished": "2026-11-15T14:20:00"})
+    a = next(x for x in privado.models() if x["id"] == sid)["adult"]
+    assert a["ready"] and a["trained_steps"] == 3000 and a["finished"].startswith("2026-11-15")
