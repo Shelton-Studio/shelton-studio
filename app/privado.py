@@ -436,9 +436,23 @@ async def _put_face(raw: bytes, face: dict, prompt: str, seed: int) -> bytes:
     return await zeng.face_pass(raw, [(face["lora"], float(face.get("strength") or 1.0))], p, seed, FACE_DENOISE)
 
 
+POSES = ["standing, full body", "sitting on the edge of the bed", "lying on the bed, view from above",
+         "from behind, looking over her shoulder", "side profile", "kneeling on the bed", "close-up portrait",
+         "reclining on a sofa", "leaning against a wall", "lying on her side"]
+
+
+def _wants_variety(prompt: str) -> bool:
+    return bool(re.search(r"different (positions|poses)|various (positions|poses)|varied|posiciones|poses distintas",
+                          prompt or "", re.IGNORECASE))
+
+
 async def _run_ids(ids: list[str], engine, cfg: dict, prompt: str, negative: str, w: int, h: int, loras,
                    face: dict | None = None) -> None:
     import random
+    vary = len(ids) > 1 and _wants_variety(prompt)          # «en distintas posiciones»: cada foto con otra pose
+    poses = random.sample(POSES, k=min(len(POSES), len(ids))) if vary else []
+    base_prompt = re.sub(r",?\s*in (different|various) (positions|poses)( and (positions|poses))?", "", prompt,
+                         flags=re.IGNORECASE)
     try:
         engine.values["generate"]["negative"] = negative      # motor nuevo para este lote: no afecta a otros
         url = getattr(engine, "url", "")
@@ -446,10 +460,11 @@ async def _run_ids(ids: list[str], engine, cfg: dict, prompt: str, negative: str
         for eid in ids:
             _append({"id": eid, "status": "failed", "error": f"No pude preparar el motor: {e}"[:300]})
         return
-    for eid in ids:
+    for i, eid in enumerate(ids):
         if eid in _cancelled:
             continue
         seed = random.randint(1, 2**31 - 1)
+        prompt = f"{base_prompt}, {poses[i % len(poses)]}" if poses else base_prompt
         for attempt in range(1, ATTEMPTS + 1):
             if eid in _cancelled:
                 break
@@ -705,8 +720,9 @@ def clean_for_translation(text: str) -> str:
     for n, kind in names:
         who = "una mujer" if kind == "person" else ""
         t = re.sub(rf"\b(a\s+)?{re.escape(n)}\b", who, t, flags=re.IGNORECASE)
-    t = re.sub(r"^\s*(hazme|haz|genera(me)?|cr[eé]ame|crea|quiero( que (hagas|generes))?|dame)\b", "", t,
-               flags=re.IGNORECASE)
+    t = re.sub(r"^\s*(necesito|quiero|me gustar[ií]a)( que (me )?(hagas|generes|crees))?\b", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"^\s*(hazme|haz|genera(me)?|cr[eé]ame|crea|dame)\b", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"^\s*(muchas|varias|unas|\d+)\s+(im[aá]genes|fotos)\s+(de\s+)?", "", t, flags=re.IGNORECASE)
     t = re.sub(r"(una mujer)(\s*,?\s*una mujer)+", r"\1", t, flags=re.IGNORECASE)
     return re.sub(r"\s{2,}", " ", t).strip(" ,.;:")
 
