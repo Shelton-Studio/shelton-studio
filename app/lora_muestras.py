@@ -41,13 +41,20 @@ def every() -> int:
         return 100
 
 
+SAMPLE_NEG = "blurry, lowres, bad anatomy, bad hands, deformed, watermark, text"
+
+
 def apply_to_config(proc: dict, trigger: str = "", sample_prompt: str = "") -> None:
     """Enciende las muestras de ai-toolkit (cada `every()` pasos) y un punto guardado en cada una.
     sample_prompt: la escena que pidió la persona para las muestras (siempre con la palabra clave de la modelo)."""
     n = every()
     if not n:
         return
-    proc["sample"] = {**proc.get("sample", {}), "sample_every": n, "seed": 42, "walk_seed": False}
+    # «neg» (lo que se evita) siempre como texto: si falta, ai-toolkit pone False y con SDXL (que lo usa) se cae con
+    # «text input must be of type str» al dibujar la primera muestra.
+    proc["sample"] = {**proc.get("sample", {}), "sample_every": n, "seed": 42, "walk_seed": False,
+                      "neg": proc.get("sample", {}).get("neg") or SAMPLE_NEG}
+    proc["sample"]["prompts"] = [str(x) for x in (proc["sample"].get("prompts") or []) if x] or ["a photo"]
     if sample_prompt:
         sp = sample_prompt if (not trigger or trigger in sample_prompt) else f"{trigger}, {sample_prompt}"
         proc["sample"]["prompts"] = [sp]

@@ -185,3 +185,13 @@ def test_people_always_get_photo_descriptions_so_the_lora_learns_the_face_not_th
         assert not lora._learns_identity(sid)               # sin el Analista, se entrena como siempre
     finally:
         registry.save("subject_analyst", enabled=True)
+
+
+
+def test_every_base_gets_a_text_negative_for_samples():
+    """Con SDXL las muestras usan «neg»: si no es texto, ai-toolkit se cae («text input must be of type str»)."""
+    for base in ("zimage", "sdxl", "flux", "qwen"):
+        for root in ("/w", "__JOB__"):
+            smp = lora.config_dict("job", root, "tok", 1000, "pro", base)["config"]["process"][0]["sample"]
+            assert isinstance(smp["neg"], str) and smp["neg"]
+            assert smp["prompts"] and all(isinstance(x, str) and x for x in smp["prompts"])
