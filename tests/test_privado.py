@@ -582,6 +582,7 @@ def test_model_names_are_not_translated():
     _subject("Valentinax")
     out = privado.clean_for_translation("hazme a Valentinax en la playa, luz de ventana")
     assert "valentinax" not in out.lower() and not out.lower().startswith("hazme") and "playa" in out
+    assert out.startswith("una mujer")                    # contexto para el traductor (no queda una palabra suelta)
 
 
 def test_adult_lora_can_choose_where_to_train_and_be_canceled(monkeypatch):
@@ -644,3 +645,13 @@ def test_adult_loras_never_show_up_in_shelton_mini_suggestions():
         d = c.get("/api/buddy").json()
     text = str(d)
     assert "🔞" not in text and "Oculta Mini · " not in text
+
+
+def test_hot_row_says_why_the_adult_lora_failed():
+    from app import lora
+    sid = _subject("Fallo Hot")
+    privado.confirm(sid, "admin", True, True)
+    tw = privado.adult_twin_id(sid)
+    lora._update(tw, lora_status="failed", info={"error": "La GPU se quedó sin memoria"})
+    a = next(x for x in privado.models() if x["id"] == sid)["adult"]
+    assert a["status"] == "failed" and "memoria" in a["error"]

@@ -134,6 +134,7 @@ def models() -> list[dict]:
                         "finished": (sub.lora_info or {}).get("finished", ""),
                         "eta_min": (sub.lora_info or {}).get("eta_min"),
                         "phase": (sub.lora_info or {}).get("phase", ""),
+                        "error": (sub.lora_info or {}).get("error", ""),
                         "private_photos": len((sub.lora_info or {}).get("private_refs") or [])})
             if out[-1]["private_photos"] and not (sub.lora_info or {}).get("adult_twin"):
                 out[-1]["_check_new"] = True
@@ -153,7 +154,7 @@ def models() -> list[dict]:
         m["adult"] = ({"id": twin["id"], "ready": twin["lora_ready"], "status": twin["status"], "progress": twin["progress"],
                        "where": twin.get("where", ""), "step": twin["step"], "steps": twin["steps"],
                        "trained_steps": twin["trained_steps"], "finished": twin["finished"], "eta_min": twin["eta_min"],
-                       "phase": twin["phase"], "sample": _last_sample(twin["id"])}
+                       "phase": twin["phase"], "error": twin["error"], "sample": _last_sample(twin["id"])}
                       if twin else None)
         m["new_photos"] = 0
         if m.pop("_check_new", False) and twin and twin["lora_ready"]:
@@ -694,15 +695,19 @@ class TranslateIn(BaseModel):
 
 
 def clean_for_translation(text: str) -> str:
-    """Antes de traducir: fuera los nombres de las modelos (su LoRA ya la pone; «Valentina» se traducía «valentine»)
-    y el «hazme / quiero que hagas» del principio (el motor no lo entiende)."""
+    """Antes de traducir: el nombre de la modelo pasa a «una mujer» (su LoRA ya pone su cara; «Valentina» se traducía
+    «valentine», y si se borraba sin más, una palabra suelta quedaba sin traducir) y se quita el «hazme / quiero que
+    hagas» del principio (el motor no lo entiende)."""
     t = text or ""
     with session() as s:
-        names = sorted({x.name.split(" · ")[0] for x in s.query(Subject) if x.name}, key=len, reverse=True)
-    for n in names:
-        t = re.sub(rf"\b(a\s+)?{re.escape(n)}\b", "", t, flags=re.IGNORECASE)
+        names = sorted({(x.name.split(" · ")[0], x.kind) for x in s.query(Subject) if x.name},
+                       key=lambda n: len(n[0]), reverse=True)
+    for n, kind in names:
+        who = "una mujer" if kind == "person" else ""
+        t = re.sub(rf"\b(a\s+)?{re.escape(n)}\b", who, t, flags=re.IGNORECASE)
     t = re.sub(r"^\s*(hazme|haz|genera(me)?|cr[eé]ame|crea|quiero( que (hagas|generes))?|dame)\b", "", t,
                flags=re.IGNORECASE)
+    t = re.sub(r"(una mujer)(\s*,?\s*una mujer)+", r"\1", t, flags=re.IGNORECASE)
     return re.sub(r"\s{2,}", " ", t).strip(" ,.;:")
 
 
