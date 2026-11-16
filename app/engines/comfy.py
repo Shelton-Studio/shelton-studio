@@ -356,3 +356,84 @@ def inject_loras(wf: dict, loras: list[tuple[str, float]]) -> dict:
             if isinstance(val, list) and len(val) == 2 and val[0] == base and val[1] == 0:
                 v["inputs"][key] = [prev, 0]
     return wf
+
+
+# ------------------------------------------------------------------ 🪪 Cara por foto (InstantID sobre SDXL)
+IDENTITY_NODES = ("InstantIDModelLoader", "InstantIDFaceAnalysis", "ApplyInstantIDAdvanced", "ControlNetLoader")
+INSTANTID_FILE = os.getenv("INSTANTID_FILE", "ip-adapter.bin")
+INSTANTID_CONTROLNET = os.getenv("INSTANTID_CONTROLNET", "instantid_controlnet.safetensors")
+
+
+def identity_workflow(wf: dict, names: list[str], weight: float = 0.8, pose: float = 0.5) -> bool:
+    """Convierte «generar con SDXL» en «generar con ESA cara» (InstantID): lee la cara de 1 a 3 fotos y la mete
+    en la generación junto con el texto. weight = parecido de la cara; pose = cuánto copia la pose de la foto."""
+    from app.calidad import _find
+    ks, ck = _find(wf, "KSampler"), _find(wf, "CheckpointLoaderSimple")
+    if len(ks) != 1 or not ck or not names:
+        return False
+    k = wf[ks[0]]["inputs"]
+    wf["shl_id_model"] = {"class_type": "InstantIDModelLoader", "inputs": {"instantid_file": INSTANTID_FILE}}
+    wf["shl_id_face"] = {"class_type": "InstantIDFaceAnalysis", "inputs": {"provider": "CUDA"}}
+    wf["shl_id_cn"] = {"class_type": "ControlNetLoader", "inputs": {"control_net_name": INSTANTID_CONTROLNET}}
+    img = None
+    for i, name in enumerate(names[:3], start=1):
+        wf[f"shl_id_ref{i}"] = {"class_type": "LoadImage", "inputs": {"image": name}}
+        if img is None:
+            img = [f"shl_id_ref{i}", 0]
+        else:                                   # varias fotos: se promedian sus caras
+            wf[f"shl_id_batch{i}"] = {"class_type": "ImageBatch", "inputs": {"image1": img, "image2": [f"shl_id_ref{i}", 0]}}
+            img = [f"shl_id_batch{i}", 0]
+    wf["shl_id_apply"] = {"class_type": "ApplyInstantIDAdvanced", "inputs": {
+        "instantid": ["shl_id_model", 0], "insightface": ["shl_id_face", 0], "control_net": ["shl_id_cn", 0],
+        "image": img, "model": k["model"], "positive": k["positive"], "negative": k["negative"],
+        "ip_weight": float(weight), "cn_strength": float(pose), "start_at": 0.0, "end_at": 1.0, "noise": 0.0,
+        "combine_embeds": "average"}}
+    k["model"], k["positive"], k["negative"] = ["shl_id_apply", 0], ["shl_id_apply", 1], ["shl_id_apply", 2]
+    return True
+
+
+def identity_face_fix(wf: dict, denoise: float = 0.35) -> bool:
+    """Retoque final (como pide Love): detecta la cara de la foto recién hecha y la vuelve a dibujar en grande con
+    el mismo modelo YA con la cara puesta (InstantID). Necesita el Impact Pack."""
+    from app.calidad import FACE_MODEL, _find
+    ks, saves, dec = _find(wf, "KSampler"), _find(wf, "SaveImage"), _find(wf, "VAEDecode")
+    ck = _find(wf, "CheckpointLoaderSimple")
+    if len(ks) != 1 or not saves or not dec or not ck or "shl_id_apply" not in wf:
+        return False
+    k = wf[ks[0]]["inputs"]
+    wf["shl_facedet"] = {"class_type": "UltralyticsDetectorProvider", "inputs": {"model_name": FACE_MODEL}}
+    wf["shl_face"] = {"class_type": "FaceDetailer", "inputs": {
+        "image": [dec[0], 0], "model": ["shl_id_apply", 0], "clip": [ck[0], 1], "vae": wf[dec[0]]["inputs"]["vae"],
+        "positive": ["shl_id_apply", 1], "negative": ["shl_id_apply", 2], "bbox_detector": ["shl_facedet", 0],
+        "guide_size": 768, "guide_size_for": True, "max_size": 1536, "seed": k["seed"], "steps": k["steps"],
+        "cfg": k["cfg"], "sampler_name": k["sampler_name"], "scheduler": k["scheduler"], "denoise": float(denoise),
+        "feather": 5, "noise_mask": True, "force_inpaint": True, "bbox_threshold": 0.5, "bbox_dilation": 10,
+        "bbox_crop_factor": 3.0, "sam_detection_hint": "center-1", "sam_dilation": 0, "sam_threshold": 0.93,
+        "sam_bbox_expansion": 0, "sam_mask_hint_threshold": 0.7, "sam_mask_hint_use_negative": "False",
+        "drop_size": 10, "wildcard": "", "cycle": 1, "inpaint_model": False, "noise_mask_feather": 20,
+        "tiled_encode": False, "tiled_decode": False}}
+    for s in saves:
+        wf[s]["inputs"]["images"] = ["shl_face", 0]
+    return True
+
+
+async def _generate_identity(self, refs: list[bytes], prompt: str, width: int, height: int, seed: int,
+                             weight: float = 0.8, pose: float = 0.5) -> bytes:
+    """🪪 Una foto nueva con la cara de las fotos de referencia, sin entrenar nada (InstantID sobre SDXL)."""
+    from app import calidad
+    info = await calidad.node_info(self.client)
+    if info and not all(n in info for n in IDENTITY_NODES):
+        raise RuntimeError("Falta el módulo de cara por foto (InstantID) en el ComfyUI de la placa. "
+                           "En la placa: bash ~/shelton-studio/scripts/identity_nodes.sh")
+    w, h = self._size(width, height)
+    async with gpu_slot(self.url):
+        names = [await self.client.upload_image(r, f"shelton_id_{uuid.uuid4().hex[:10]}.png") for r in refs[:3]]
+        wf = self._wf("generate", {"prompt": prompt, "width": w, "height": h, "seed": seed})
+        if not identity_workflow(wf, names, weight, pose):
+            raise RuntimeError("La cara por foto funciona con el motor SDXL (RealVisXL)")
+        if info and all(n in info for n in calidad.FACE_NODES) and identity_face_fix(wf):
+            calidad.fill_required(wf, info)
+        return (await self.client.run(wf))[0]
+
+
+ComfyEngine.generate_identity = _generate_identity
