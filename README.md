@@ -231,6 +231,19 @@ journalctl -u shelton-studio -n 100 --no-pager
   - En la 3090 tarda entre 1 y 2 horas. El avance se ve en el Banco y en **En vivo**. Mientras tanto, las fotos locales esperan su turno.
 - **Usar:** cuando la LoRA está lista, en modo **Local** las fotos de ese modelo salen con Z-Image Turbo + su LoRA, sin depender de la nube. Se puede apagar desde su ficha.
 
+### 🪪 Cara por foto (sin entrenar)
+
+En el Banco, cada modelo (persona) tiene **🪪 Cara por foto**: se suben 1 a 3 fotos claras de su cara y Shelton genera
+fotos nuevas con esa cara en segundos, sin entrenar (InstantID con el motor SDXL + retoque final de la cara). Se ajusta
+el **parecido** y cuánto copia la **pose** de la foto. No reemplaza a su LoRA (que mantiene cara y cuerpo iguales entre
+fotos) y no está en Shelton Hot. Necesita instalar el módulo una vez en la placa:
+
+```bash
+bash ~/shelton-studio/scripts/identity_nodes.sh && systemctl restart shelton-studio-comfy
+```
+
+Licencia: los modelos de caras de InsightFace (antelopev2) son solo para investigación, no para uso comercial.
+
 ### Archivos de memoria (nada se borra)
 
 - **Pestaña Archivos:** todo lo que aprenden y hacen Shelton y cada subagente, en archivos `.md`. Se ven y se descargan uno por uno, por carpeta o todo en un ZIP. Incluye:
